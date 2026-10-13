@@ -2369,6 +2369,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "opencast-ffi"
+version = "0.1.0"
+dependencies = [
+ "opencast-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
