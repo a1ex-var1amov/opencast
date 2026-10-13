@@ -36,7 +36,7 @@ pub fn emit(value: serde_json::Value) {
         return;
     };
     // Drop the callback mutex before the call so the panel can re-enter.
-    let cb = CALLBACK.lock().unwrap().clone();
+    let cb = *CALLBACK.lock().unwrap();
     if let Some(cb) = cb {
         cb(text.as_ptr());
     }

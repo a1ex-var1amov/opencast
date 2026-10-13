@@ -13,6 +13,7 @@ if [ -z "$APPLE_SIGNING_IDENTITY" ]; then
   [ -n "$ID" ] && export APPLE_SIGNING_IDENTITY="$ID" && echo "== Signing as $ID =="
 fi
 echo "== Building release bundle =="
+export MACOSX_DEPLOYMENT_TARGET=14.0
 cargo build --release -p opencast-ffi 2>&1 | tee build-app.log | tail -15
 BUILD_OK=${pipestatus[1]}
 if [ "$BUILD_OK" != 0 ]; then
@@ -40,6 +41,6 @@ if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
   codesign --force --deep --sign "$APPLE_SIGNING_IDENTITY" "$APP" || exit 1
 fi
 rm -rf "$HOME/Applications/OpenCast.app"
-ditto "$APP" "$HOME/Applications/OpenCast.app"
+ditto "$APP" "$HOME/Applications/OpenCast.app" || exit 1
 echo "== Installed to ~/Applications/OpenCast.app ==" | tee -a build-app.log
 open "$HOME/Applications/OpenCast.app"

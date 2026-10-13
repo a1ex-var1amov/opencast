@@ -1,6 +1,7 @@
-use opencast_core::apps::AppEntry;
 use opencast_core::engine::Engine;
-use opencast_core::Config;
+#[cfg(test)]
+use opencast_core::{apps::AppEntry, Config};
+#[cfg(test)]
 use std::path::PathBuf;
 
 const SEARCH_LIMIT: usize = 60;

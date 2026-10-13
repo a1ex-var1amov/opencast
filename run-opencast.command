@@ -5,6 +5,7 @@ command -v cargo >/dev/null || { [ -f "$HOME/.cargo/env" ] && source "$HOME/.car
 command -v cargo >/dev/null || { echo "Missing cargo — install Rust and re-run."; read -k1; exit 1; }
 command -v swiftc >/dev/null || { echo "Missing swiftc — install the Xcode command-line tools and re-run."; read -k1; exit 1; }
 echo "== Building debug library =="
+export MACOSX_DEPLOYMENT_TARGET=14.0
 cargo build -p opencast-ffi || { echo "Build failed."; read -k1; exit 1; }
 FLAGS=$(cargo rustc -p opencast-ffi -- --print native-static-libs 2>&1 | awk -F'native-static-libs: ' '/native-static-libs:/ { print $2; exit }')
 APP=target/debug/OpenCast.app

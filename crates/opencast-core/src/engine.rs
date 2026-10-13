@@ -465,7 +465,7 @@ impl Engine {
         }
         if let Some(meta) = self.scripts.get(id) {
             for (i, a) in meta.arguments.iter().enumerate() {
-                if !a.optional && args.get(i).map_or(true, |s| s.trim().is_empty()) {
+                if !a.optional && args.get(i).is_none_or(|s| s.trim().is_empty()) {
                     bail!("`{}` needs: {}", meta.title, a.placeholder);
                 }
             }
