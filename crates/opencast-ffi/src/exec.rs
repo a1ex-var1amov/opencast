@@ -30,8 +30,6 @@ pub enum ExecResult {
         message: String,
     },
     /// Open the launcher on this command's argument form.
-    /// Hotkey dispatch (not this shell yet) is what constructs it.
-    #[allow(dead_code)]
     Args {
         command: Command,
     },
@@ -39,6 +37,9 @@ pub enum ExecResult {
 
 pub fn reload() -> String {
     let engine = std::sync::Arc::new(opencast_core::engine::Engine::load(&opencast_core::Config::config_dir()));
+    for p in crate::hotkeys::register(&engine) {
+        eprintln!("opencast: {p}");
+    }
     let n = engine.registry.len();
     let w = engine.warnings.len();
     crate::host::replace_engine(engine);

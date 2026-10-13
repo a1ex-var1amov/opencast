@@ -7,10 +7,11 @@ mod dispatch;
 mod exec;
 #[cfg(target_os = "macos")]
 mod host;
-// ponytail: allow(dead_code) until dispatch calls these modules. Drop the allow then.
 #[cfg(target_os = "macos")]
-#[allow(dead_code, unused_imports)]
+mod hotkeys;
+#[cfg(target_os = "macos")]
 mod hyperkey;
+// ponytail: allow(dead_code) until every helper here is called. Drop the allow then.
 #[cfg(target_os = "macos")]
 #[allow(dead_code)]
 mod platform;
