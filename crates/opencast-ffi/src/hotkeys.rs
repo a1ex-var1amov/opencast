@@ -11,7 +11,44 @@ static MANAGER: Mutex<Option<GlobalHotKeyManager>> = Mutex::new(None);
 static TOGGLE: Mutex<Option<HotKey>> = Mutex::new(None);
 static BINDS: Mutex<Vec<(HotKey, String)>> = Mutex::new(Vec::new());
 
+extern "C" {
+    // `dispatch_get_main_queue()` is a header inline of this symbol.
+    static _dispatch_main_q: u8;
+    fn dispatch_sync_f(queue: *const u8, context: *mut std::ffi::c_void, work: extern "C" fn(*mut std::ffi::c_void));
+    fn pthread_main_np() -> i32;
+}
+
+fn dispatch_get_main_queue() -> *const u8 {
+    std::ptr::addr_of!(_dispatch_main_q)
+}
+
+/// `RegisterEventHotKey` only delivers presses to a manager created on the main
+/// run loop. `dispatch_sync` from that thread deadlocks, so it runs inline.
+fn on_main<F: FnOnce() -> Vec<String>>(work: F) -> Vec<String> {
+    if unsafe { pthread_main_np() } != 0 {
+        return work();
+    }
+    extern "C" fn run<F: FnOnce() -> Vec<String>>(ctx: *mut std::ffi::c_void) {
+        let slot = unsafe { &mut *(ctx as *mut (Option<F>, Option<Vec<String>>)) };
+        let work = slot.0.take().unwrap();
+        slot.1 = Some(work());
+    }
+    let mut slot = (Some(work), None);
+    unsafe {
+        dispatch_sync_f(
+            dispatch_get_main_queue(),
+            &mut slot as *mut _ as *mut std::ffi::c_void,
+            run::<F>,
+        );
+    }
+    slot.1.unwrap()
+}
+
 pub fn register(engine: &opencast_core::engine::Engine) -> Vec<String> {
+    on_main(|| register_here(engine))
+}
+
+fn register_here(engine: &opencast_core::engine::Engine) -> Vec<String> {
     let manager = GlobalHotKeyManager::new();
     let mut problems = Vec::new();
     let Ok(manager) = manager else {
@@ -82,7 +119,10 @@ pub(crate) fn listen() {
                     continue;
                 }
                 let id = event.id;
-                if TOGGLE.lock().unwrap().is_some_and(|t| t.id == id) {
+                // Drop the guard before the callback. A reload from that callback
+                // locks `TOGGLE` again on this thread.
+                let toggle = { TOGGLE.lock().unwrap().is_some_and(|t| t.id == id) };
+                if toggle {
                     host::toggle_panel();
                     continue;
                 }

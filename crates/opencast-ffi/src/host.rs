@@ -234,7 +234,10 @@ pub fn install(cb: Callback) {
     crate::hotkeys::listen();
     if hyperkey {
         crate::hyperkey::remap_caps_lock(true);
-        crate::hyperkey::start(toggle_panel);
+        // The tap callback must return before Swift `hide`. A slow tap is disabled.
+        crate::hyperkey::start(|| {
+            std::thread::spawn(toggle_panel);
+        });
     }
     for p in crate::hotkeys::register(&engine) {
         eprintln!("opencast: {p}");
