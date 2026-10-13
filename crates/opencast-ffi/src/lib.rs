@@ -5,6 +5,16 @@
 mod dispatch;
 #[cfg(target_os = "macos")]
 mod host;
+// ponytail: allow(dead_code) until dispatch calls these modules. Drop the allow then.
+#[cfg(target_os = "macos")]
+#[allow(dead_code, unused_imports)]
+mod hyperkey;
+#[cfg(target_os = "macos")]
+#[allow(dead_code)]
+mod platform;
+#[cfg(target_os = "macos")]
+#[allow(dead_code)]
+mod window_mgmt;
 
 #[cfg(target_os = "macos")]
 pub use dispatch::dispatch;

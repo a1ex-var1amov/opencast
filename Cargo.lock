@@ -2372,6 +2372,11 @@ dependencies = [
 name = "opencast-ffi"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "arboard",
+ "core-foundation",
+ "core-graphics",
+ "global-hotkey",
  "opencast-core",
  "serde",
  "serde_json",
