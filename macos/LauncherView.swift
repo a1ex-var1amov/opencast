@@ -33,7 +33,9 @@ struct LauncherView: View {
         .ignoresSafeArea()
         .overlay { islandShape.stroke(Theme.stroke(scheme), lineWidth: 0.5) }
         .compositingGroup()
-        .shadow(color: Theme.shadow(scheme), radius: 30, y: 22)
+        .shadow(color: Theme.shadow(scheme), radius: Theme.shadowRoom, y: 22)
+        .padding(.horizontal, Theme.shadowRoom)
+        .padding(.bottom, Theme.shadowRoom)
         .onAppear { selectField() }
         .onChange(of: model.focusTick) { _, _ in selectField() }
         .onChange(of: model.ready) { _, ready in

@@ -27,6 +27,10 @@ enum Theme {
         scheme == .dark ? Color.black.opacity(0.55) : Color.black.opacity(0.28)
     }
 
+    /// Blur radius of the island shadow. The panel grows by this on the left,
+    /// right, and bottom so the shadow is not clipped. The top stays flush.
+    static let shadowRoom: CGFloat = 30
+
     static func kbd(_ scheme: ColorScheme) -> Color {
         scheme == .dark ? Color.white.opacity(0.09) : Color.black.opacity(0.06)
     }

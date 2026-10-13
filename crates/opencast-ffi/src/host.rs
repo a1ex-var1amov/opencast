@@ -67,6 +67,12 @@ fn handle(request: &str) -> String {
         };
         let op = v.get("op").and_then(|x| x.as_str()).unwrap_or("");
         match op {
+            // Swift hid on its own (Esc, blur, ExecResult). Do not emit: the
+            // callback would hide again, and emit is what already clears this flag.
+            "hidden" => {
+                VISIBLE.store(false, Ordering::SeqCst);
+                r#"{"ok":true}"#.into()
+            }
             "execute" => {
                 let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
                 let args = v
@@ -261,6 +267,14 @@ pub fn free_raw(p: *mut c_char) {
 #[cfg(test)]
 mod tests {
     use super::StreamArgs;
+
+    #[test]
+    fn hidden_op_clears_visible() {
+        use std::sync::atomic::Ordering;
+        super::VISIBLE.store(true, Ordering::SeqCst);
+        assert_eq!(super::handle(r#"{"op":"hidden"}"#), r#"{"ok":true}"#);
+        assert!(!super::VISIBLE.load(Ordering::SeqCst));
+    }
 
     #[test]
     fn stream_args_omit_optional_fields() {

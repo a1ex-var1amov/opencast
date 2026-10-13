@@ -156,7 +156,8 @@ final class Model {
         case "show":
             show()
         case "hide":
-            hide()
+            // emit already stored VISIBLE = false. Do not call back into Rust.
+            hide(fromRust: true)
         case "result":
             if let result = obj?["result"] as? [String: Any] {
                 apply(ExecOutcome(result))
@@ -202,9 +203,7 @@ final class Model {
         focusTick += 1
     }
 
-    func hide() {
-        // Rust's visibility bit flips only when Rust emits show/hide. Esc, blur,
-        // and an ExecResult hide do not emit, so the next toggle hotkey emits hide again.
+    func hide(fromRust: Bool = false) {
         guard !hiding else { return }
         let up = launcher?.isVisible == true || seek?.isVisible == true || NSApp.isActive
         guard up else { return }
@@ -214,6 +213,9 @@ final class Model {
         seek?.orderOut(nil)
         seekVisible = false
         NSApp.hide(nil)
+        if !fromRust {
+            Task.detached { _ = Engine.call(["op": "hidden"]) }
+        }
     }
 
     func launcherResignedKey() {
@@ -382,7 +384,13 @@ final class Model {
     }
 
     private func frame(on screen: NSScreen, height: CGFloat) -> NSRect {
-        NSRect(x: screen.frame.midX - 380, y: screen.frame.maxY - height, width: 760, height: height)
+        let room = Theme.shadowRoom
+        return NSRect(
+            x: screen.frame.midX - 380 - room,
+            y: screen.frame.maxY - height - room,
+            width: 760 + room * 2,
+            height: height + room
+        )
     }
 }
 
