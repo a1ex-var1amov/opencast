@@ -37,7 +37,64 @@ pub fn replace_engine(engine: std::sync::Arc<Engine>) {
 
 fn handle(request: &str) -> String {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        with_engine(|engine| dispatch::dispatch(engine, request))
+        let v: serde_json::Value = match serde_json::from_str(request) {
+            Ok(v) => v,
+            Err(e) => return serde_json::json!({ "error": format!("bad json: {e}") }).to_string(),
+        };
+        let op = v.get("op").and_then(|x| x.as_str()).unwrap_or("");
+        match op {
+            "execute" => {
+                let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                let args = v
+                    .get("args")
+                    .and_then(|x| x.as_array())
+                    .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                    .unwrap_or_default();
+                let r = runtime().block_on(crate::exec::run_command(id, args));
+                if !matches!(r, crate::exec::ExecResult::Hide) {
+                    emit(serde_json::json!({ "type": "show" }));
+                }
+                serde_json::to_string(&r).unwrap_or_else(|_| r#"{"type":"error","message":"internal error"}"#.into())
+            }
+            "copy" => {
+                let text = v.get("text").and_then(|x| x.as_str()).unwrap_or("");
+                match crate::platform::write_clipboard(text) {
+                    Ok(()) => r#"{"ok":true}"#.into(),
+                    Err(e) => serde_json::json!({ "error": e }).to_string(),
+                }
+            }
+            "paste" => {
+                let text = v.get("text").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                let r = runtime().block_on(async {
+                    crate::platform::write_clipboard(&text)?;
+                    emit(serde_json::json!({ "type": "hide" }));
+                    crate::platform::paste_into_frontmost().await
+                });
+                match r {
+                    Ok(()) => r#"{"ok":true}"#.into(),
+                    Err(e) => serde_json::json!({ "error": e }).to_string(),
+                }
+            }
+            "seekClick" => {
+                let x = v.get("x").and_then(|n| n.as_f64()).unwrap_or(0.0);
+                let y = v.get("y").and_then(|n| n.as_f64()).unwrap_or(0.0);
+                let r = runtime().block_on(async {
+                    emit(serde_json::json!({ "type": "hide" }));
+                    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+                    crate::window_mgmt::click_at(x, y).map_err(|e| format!("{e:#}"))
+                });
+                match r {
+                    Ok(()) => r#"{"ok":true}"#.into(),
+                    Err(e) => serde_json::json!({ "error": e }).to_string(),
+                }
+            }
+            "seekClose" => {
+                emit(serde_json::json!({ "type": "hide" }));
+                r#"{"ok":true}"#.into()
+            }
+            "reload" => serde_json::json!({ "text": crate::exec::reload() }).to_string(),
+            _ => with_engine(|engine| dispatch::dispatch(engine, request)),
+        }
     }));
     match result {
         Ok(s) => s,

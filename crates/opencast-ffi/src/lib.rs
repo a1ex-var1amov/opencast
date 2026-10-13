@@ -4,6 +4,8 @@
 #[cfg(target_os = "macos")]
 mod dispatch;
 #[cfg(target_os = "macos")]
+mod exec;
+#[cfg(target_os = "macos")]
 mod host;
 // ponytail: allow(dead_code) until dispatch calls these modules. Drop the allow then.
 #[cfg(target_os = "macos")]
