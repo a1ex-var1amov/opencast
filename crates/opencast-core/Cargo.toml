@@ -1,0 +1,22 @@
+[package]
+name = "opencast-core"
+description = "Portable core of OpenCast: commands, scripts, apps and AI providers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+dirs = "5"
+futures-util = "0.3"
+fuzzy-matcher = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["process", "time", "sync", "macros", "rt"] }
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["full"] }

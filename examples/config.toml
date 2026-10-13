@@ -1,0 +1,153 @@
+# OpenCast configuration
+# Location: ~/.config/opencast/config.toml  (override with $OPENCAST_CONFIG_DIR)
+# Run "Reload Commands" from the launcher after editing.
+
+[general]
+hotkey = "Alt+Space"            # e.g. "Cmd+Space", "Ctrl+Alt+K"
+hyperkey = false                # Caps Lock = ⌃⌥⌘⇧ while held, opens the launcher when tapped (restart to apply)
+default_provider = "ollama"     # id of a provider below; first one is used if unset
+# scripts_dir = "~/.config/opencast/scripts"
+script_timeout_secs = 30
+
+# ---------------------------------------------------------------------------
+# AI providers. Three wire formats cover everything:
+#   kind = "openai"     any OpenAI-compatible /chat/completions endpoint
+#                       (OpenAI, Ollama, LM Studio, OpenRouter, Groq, vLLM, LiteLLM...)
+#   kind = "anthropic"  Anthropic Messages API
+#   kind = "gemini"     Google Gemini API
+#
+# Keys never live in this file. Use one of:
+#   api_key_env = "OPENAI_API_KEY"    env var (only works if the app inherits it)
+#   api_key_cmd = "security find-generic-password -s opencast-openai -w"
+#                                     any command that prints the key: macOS Keychain,
+#                                     1Password (`op read op://...`), pass, etc.
+# Store a key in the macOS Keychain once with:
+#   security add-generic-password -s opencast-openai -a "$USER" -w 'sk-...'
+#
+# `model` is the default; `models` adds choices to the chat model picker.
+# Model ids change often: use any id your account or server actually serves.
+# ---------------------------------------------------------------------------
+
+[[providers]]
+id = "ollama"
+kind = "openai"
+base_url = "http://localhost:11434/v1"   # no key needed for local servers
+model = "llama3.2"
+
+# [[providers]]
+# id = "openai"
+# kind = "openai"
+# api_key_cmd = "security find-generic-password -s opencast-openai -w"
+# model = "gpt-5-mini"
+
+# [[providers]]
+# id = "claude"
+# kind = "anthropic"
+# api_key_cmd = "security find-generic-password -s opencast-anthropic -w"
+# model = "claude-sonnet-5-5"
+# models = ["claude-opus-5-5", "claude-haiku-5-5"]
+
+# [[providers]]
+# id = "gemini"
+# kind = "gemini"
+# api_key_cmd = "security find-generic-password -s opencast-gemini -w"
+# model = "gemini-2.5-flash"
+
+# [[providers]]
+# id = "openrouter"
+# kind = "openai"
+# base_url = "https://openrouter.ai/api/v1"
+# api_key_env = "OPENROUTER_API_KEY"
+# model = "meta-llama/llama-3.3-70b-instruct"
+
+# [[providers]]
+# id = "lmstudio"
+# kind = "openai"
+# base_url = "http://localhost:1234/v1"
+# model = "local-model"
+
+# ---------------------------------------------------------------------------
+# AI commands. Placeholders:
+#   {selection}  text selected in the frontmost app (needs Accessibility permission)
+#   {input}      text you type after picking the command
+# provider/model are optional and default to the default provider.
+# ---------------------------------------------------------------------------
+
+[[ai_commands]]
+id = "fix-grammar"
+title = "Fix Spelling and Grammar"
+icon = "✍️"
+keywords = ["proofread", "spelling"]
+system = "You are a careful copy editor. Return only the corrected text, no commentary."
+prompt = "Fix spelling and grammar, keep the tone and formatting:\n\n{selection}"
+
+[[ai_commands]]
+id = "explain"
+title = "Explain This"
+icon = "💡"
+prompt = "Explain the following clearly and briefly:\n\n{selection}"
+
+[[ai_commands]]
+id = "summarize"
+title = "Summarize Selection"
+icon = "📝"
+prompt = "Summarize in 3-5 bullet points:\n\n{selection}"
+
+[[ai_commands]]
+id = "shell"
+title = "Shell Command For…"
+icon = "⌨️"
+keywords = ["bash", "zsh", "terminal"]
+system = "Reply with a single shell command for macOS zsh and one short line explaining it."
+prompt = "{input}"
+
+# ---------------------------------------------------------------------------
+# Global hotkeys: bind any command to a key, Superkey-style.
+# `command` is a command title (case-insensitive) or id — an app, a window
+# action, an AI command, a script, a quicklink, a layout.
+# Window actions (Rectangle-style, all searchable in the launcher too):
+#   Left Half, Right Half, Top Half, Bottom Half, Top/Bottom Left/Right
+#   Quarter, First/Center/Last Third, Maximize, Center
+# No window hotkeys ship enabled, so nothing clashes with Rectangle if you
+# still run it. The "Use Caps Lock as Launcher Key" script remaps Caps Lock
+# to F18; after running it you can set hotkey = "F18" in [general].
+# ---------------------------------------------------------------------------
+
+# [[hotkeys]]
+# key = "Ctrl+Alt+Left"
+# command = "Left Half"
+
+# [[hotkeys]]
+# key = "Ctrl+Alt+Right"
+# command = "Right Half"
+
+# [[hotkeys]]
+# key = "Ctrl+Alt+Enter"
+# command = "Maximize"
+
+# [[hotkeys]]
+# key = "Cmd+Alt+S"
+# command = "Slack"              # focuses Slack, launching it if needed
+
+# [[hotkeys]]
+# key = "Cmd+Alt+G"
+# command = "ai:fix-grammar"     # fix the selected text anywhere
+
+# [[hotkeys]]
+# key = "Hyper+C"                # Caps Lock + C when hyperkey = true
+# command = "Click Text"         # type what you see on screen, OpenCast clicks it
+
+# ---------------------------------------------------------------------------
+# Quicklinks. {query} turns the link into one that asks for input.
+# ---------------------------------------------------------------------------
+
+[[quicklinks]]
+title = "Search GitHub"
+url = "https://github.com/search?q={query}"
+icon = "🐙"
+keywords = ["gh", "code"]
+
+[[quicklinks]]
+title = "Search Kagi"
+url = "https://kagi.com/search?q={query}"
+icon = "🔎"
