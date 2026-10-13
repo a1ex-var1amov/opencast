@@ -226,7 +226,7 @@ impl Engine {
             commands.push(Command {
                 id: format!("window:{key}"),
                 title: title.to_string(),
-                subtitle: Some("Move the front window".into()),
+                subtitle: None,
                 icon: Some(icon.to_string()),
                 kind: CommandKind::Window,
                 arguments: vec![],
@@ -361,7 +361,7 @@ impl Engine {
             commands.push(Command {
                 id: id.clone(),
                 title: a.name,
-                subtitle: Some("Application".into()),
+                subtitle: None,
                 icon: None,
                 kind: CommandKind::App,
                 arguments: vec![],
