@@ -30,7 +30,7 @@ final class Model {
         case search
         case args(Command)
         case output(title: String, text: String)
-        case chat(prompt: String?, autoSend: Bool)
+        case chat(prompt: String?, system: String?, provider: String?, model: String?, autoSend: Bool)
     }
 
     enum Row: Identifiable, Equatable {
@@ -58,7 +58,20 @@ final class Model {
     var appIcons: [String: NSImage] = [:]
     /// Raw callback JSON kept for later tasks.
     var stashedSeek: String?
-    var stashedAI: String?
+    var argDrafts: [String] = []
+    var argField = 0
+    var providers: [Provider] = []
+    var providersReady = false
+    var chatProviderId: String?
+    /// Explicit model. Nil until an init payload or the user picks one; the menu shows `defaultModel`.
+    var chatModel: String?
+    var chatTurns: [ChatTurn] = []
+    var chatInput = ""
+    var chatStreaming = false
+
+    private var chatRequestId: String?
+    private var chatSystem: String?
+    private var providerGen = 0
 
     private var launcher: IslandPanel?
     private var seek: IslandPanel?
@@ -87,19 +100,11 @@ final class Model {
     }
 
     var islandHeight: CGFloat {
-        if case .search = mode {
-            return 58 + listHeight + 38
-        }
-        return 480
-    }
-
-    var stubTitle: String {
         switch mode {
-        case .search: ""
-        case .args(let command): command.title
-        case .output(let title, _): title
-        case .chat(let prompt, _):
-            if let prompt, !prompt.isEmpty { prompt } else { "AI Chat" }
+        case .search:
+            58 + listHeight + 38
+        case .args, .output, .chat:
+            480
         }
     }
 
@@ -107,6 +112,21 @@ final class Model {
         guard rows.indices.contains(selected) else { return false }
         if case .ask = rows[selected] { return true }
         return false
+    }
+
+    var activeProvider: Provider? {
+        providers.first { $0.id == chatProviderId }
+    }
+
+    /// Menu label. The stream body still sends `chatModel`, which stays nil until the user picks.
+    var activeChatModel: String? {
+        if let chatModel { return chatModel }
+        let fallback = activeProvider?.defaultModel ?? ""
+        return fallback.isEmpty ? nil : fallback
+    }
+
+    var lastAnswer: String? {
+        chatTurns.reversed().first { $0.role == "assistant" && !$0.content.isEmpty }?.content
     }
 
     var verb: String? {
@@ -163,7 +183,7 @@ final class Model {
                 apply(ExecOutcome(result))
             }
         case "ai":
-            stashedAI = raw
+            applyAI(obj)
         case "seek":
             stashedSeek = raw
         default:
@@ -252,11 +272,10 @@ final class Model {
         guard rows.indices.contains(index) else { return }
         switch rows[index] {
         case .ask:
-            openChat(prompt: trimmedQuery, autoSend: true)
+            openChat(prompt: trimmedQuery, system: nil, provider: nil, model: nil, autoSend: true)
         case .command(let command):
             if !command.arguments.isEmpty {
-                mode = .args(command)
-                noteContentChanged()
+                showArgs(command)
             } else {
                 perform(command.id)
             }
@@ -270,25 +289,16 @@ final class Model {
             escape()
             return true
         }
-        guard case .search = mode else { return false }
-        let chars = event.charactersIgnoringModifiers?.lowercased()
-        if (mods == .control && chars == "n") || (mods.isEmpty && event.keyCode == 125) {
-            move(1)
-            return true
+        switch mode {
+        case .search:
+            return searchKey(event, mods)
+        case .args:
+            return argsKey(event, mods)
+        case .output:
+            return outputKey(event, mods)
+        case .chat:
+            return chatKey(event, mods)
         }
-        if (mods == .control && chars == "p") || (mods.isEmpty && event.keyCode == 126) {
-            move(-1)
-            return true
-        }
-        if mods.isEmpty, event.keyCode == 36 || event.keyCode == 76 {
-            activate(selected)
-            return true
-        }
-        if mods.isEmpty, event.keyCode == 48 {
-            if !trimmedQuery.isEmpty { openChat(prompt: trimmedQuery, autoSend: true) }
-            return true
-        }
-        return false
     }
 
     func showWarnings(_ warnings: [String]) {
@@ -312,10 +322,14 @@ final class Model {
     }
 
     private func perform(_ id: String) {
+        execute(id: id, args: [])
+    }
+
+    private func execute(id: String, args: [String]) {
         guard !busy else { return }
         busy = true
         Task.detached {
-            let outcome = ExecOutcome(Engine.call(["op": "execute", "id": id, "args": []]))
+            let outcome = ExecOutcome(Engine.call(["op": "execute", "id": id, "args": args]))
             await MainActor.run {
                 Model.shared.busy = false
                 Model.shared.apply(outcome)
@@ -339,19 +353,40 @@ final class Model {
         case .output(let title, let text):
             mode = .output(title: title, text: text)
             noteContentChanged()
-        case .chat(let prompt, let autoSend):
-            openChat(prompt: prompt, autoSend: autoSend)
+        case .chat(let prompt, let system, let provider, let model, let autoSend):
+            openChat(prompt: prompt, system: system, provider: provider, model: model, autoSend: autoSend)
         case .args(let command):
-            mode = .args(command)
-            noteContentChanged()
+            showArgs(command)
         case .failure(let message):
             flash(message, error: true, thenHide: false)
         }
     }
 
-    private func openChat(prompt: String?, autoSend: Bool) {
-        mode = .chat(prompt: prompt, autoSend: autoSend)
+    private func openChat(prompt: String?, system: String?, provider: String?, model: String?, autoSend: Bool) {
+        stopStream()
+        providerGen += 1
+        chatTurns = []
+        chatInput = ""
+        chatSystem = system
+        chatProviderId = provider
+        chatModel = model
+        providers = []
+        providersReady = false
+        mode = .chat(prompt: prompt, system: system, provider: provider, model: model, autoSend: autoSend)
         noteContentChanged()
+        focusTick += 1
+        if let prompt, !prompt.isEmpty {
+            if autoSend { sendChat(prompt) } else { chatInput = prompt }
+        }
+        loadProviders()
+    }
+
+    private func showArgs(_ command: Command) {
+        argDrafts = Array(repeating: "", count: command.arguments.count)
+        argField = 0
+        mode = .args(command)
+        noteContentChanged()
+        focusTick += 1
     }
 
     private func move(_ delta: Int) {
@@ -361,13 +396,263 @@ final class Model {
     }
 
     private func escape() {
-        if case .search = mode {
+        switch mode {
+        case .search:
             if query.isEmpty { hide() } else { query = "" }
-        } else {
-            mode = .search
-            noteContentChanged()
-            focusTick += 1
+        case .chat where chatStreaming:
+            // Cancel does not emit `done`. Drop the flag first so a late token is ignored.
+            stopStream()
+        case .chat:
+            backToSearch(clearQuery: true)
+        default:
+            backToSearch(clearQuery: false)
         }
+    }
+
+    func backToSearch(clearQuery: Bool) {
+        if case .chat = mode { stopStream() }
+        if clearQuery { query = "" }
+        mode = .search
+        noteContentChanged()
+        focusTick += 1
+    }
+
+    func pickProvider(_ id: String) {
+        chatProviderId = id
+        chatModel = nil
+    }
+
+    func pickChatModel(_ id: String) {
+        chatModel = id
+    }
+
+    func copyToClipboard(_ text: String, toast: String? = nil) {
+        Task.detached {
+            _ = Engine.call(["op": "copy", "text": text])
+            guard let toast else { return }
+            await MainActor.run { Model.shared.flash(toast, error: false, thenHide: false) }
+        }
+    }
+
+    private func searchKey(_ event: NSEvent, _ mods: NSEvent.ModifierFlags) -> Bool {
+        let chars = event.charactersIgnoringModifiers?.lowercased()
+        if (mods == .control && chars == "n") || (mods.isEmpty && event.keyCode == 125) {
+            move(1)
+            return true
+        }
+        if (mods == .control && chars == "p") || (mods.isEmpty && event.keyCode == 126) {
+            move(-1)
+            return true
+        }
+        if mods.isEmpty, event.keyCode == 36 || event.keyCode == 76 {
+            activate(selected)
+            return true
+        }
+        if mods.isEmpty, event.keyCode == 48 {
+            if !trimmedQuery.isEmpty {
+                openChat(prompt: trimmedQuery, system: nil, provider: nil, model: nil, autoSend: true)
+            }
+            return true
+        }
+        return false
+    }
+
+    private func argsKey(_ event: NSEvent, _ mods: NSEvent.ModifierFlags) -> Bool {
+        if mods.isEmpty, event.keyCode == 36 || event.keyCode == 76 {
+            submitArgs()
+            return true
+        }
+        if mods.isEmpty, event.keyCode == 51, argField == 0, argDrafts.first?.isEmpty != false {
+            backToSearch(clearQuery: false)
+            return true
+        }
+        if mods.isEmpty, event.keyCode == 48, argDrafts.count > 1 {
+            argField = (argField + 1) % argDrafts.count
+            focusTick += 1
+            return true
+        }
+        return false
+    }
+
+    private func outputKey(_ event: NSEvent, _ mods: NSEvent.ModifierFlags) -> Bool {
+        let chars = event.charactersIgnoringModifiers?.lowercased()
+        if mods.isEmpty, event.keyCode == 36 || event.keyCode == 76 {
+            copyOutput()
+            return true
+        }
+        if mods == .command, chars == "c" {
+            if textHasSelection { return false }
+            copyOutput()
+            return true
+        }
+        return false
+    }
+
+    private func chatKey(_ event: NSEvent, _ mods: NSEvent.ModifierFlags) -> Bool {
+        let chars = event.charactersIgnoringModifiers?.lowercased()
+        if mods == .command, event.keyCode == 36 || event.keyCode == 76 {
+            pasteLastAnswer()
+            return true
+        }
+        if mods == [.command, .shift], chars == "c" {
+            copyAnswer()
+            return true
+        }
+        if mods == .command, chars == "n" {
+            newChat()
+            return true
+        }
+        if mods.isEmpty, event.keyCode == 36 || event.keyCode == 76 {
+            if fieldIsComposing { return false }
+            sendChat(chatInput)
+            return true
+        }
+        return false
+    }
+
+    private func submitArgs() {
+        guard case .args(let command) = mode else { return }
+        if let missing = command.arguments.enumerated().first(where: { index, spec in
+            !spec.optional && draft(index).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        })?.offset {
+            argField = missing
+            focusTick += 1
+            return
+        }
+        let args = command.arguments.indices.map { draft($0) }
+        execute(id: command.id, args: args)
+    }
+
+    private func draft(_ index: Int) -> String {
+        argDrafts.indices.contains(index) ? argDrafts[index] : ""
+    }
+
+    private func sendChat(_ text: String) {
+        let content = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !content.isEmpty, !chatStreaming else { return }
+        let history = chatTurns.filter { turn in
+            !(turn.role == "assistant" && (turn.error != nil || turn.content.isEmpty))
+        }
+        let messages = history.map { ["role": $0.role, "content": $0.content] } + [["role": "user", "content": content]]
+        let id = UUID().uuidString
+        chatRequestId = id
+        chatStreaming = true
+        chatTurns = history.map { ChatTurn(role: $0.role, content: $0.content) }
+            + [ChatTurn(role: "user", content: content), ChatTurn(role: "assistant", content: "")]
+        chatInput = ""
+        let provider = chatProviderId
+        let model = chatModel
+        let system = chatSystem
+        Task.detached {
+            var body: [String: Any] = [
+                "op": "stream",
+                "requestId": id,
+                "messages": messages,
+            ]
+            if let provider { body["provider"] = provider }
+            if let model { body["model"] = model }
+            if let system { body["system"] = system }
+            let result = Engine.call(body)
+            if let error = result["error"] as? String {
+                await MainActor.run { Model.shared.failStream(id, error) }
+            }
+        }
+    }
+
+    private func loadProviders() {
+        let gen = providerGen
+        Task.detached {
+            let result = Engine.call(["op": "providers"])
+            let parsed = (result["providers"] as? [[String: Any]])?.compactMap(Provider.init) ?? []
+            await MainActor.run {
+                guard Model.shared.providerGen == gen, case .chat = Model.shared.mode else { return }
+                Model.shared.providers = parsed
+                Model.shared.providersReady = true
+                if Model.shared.chatProviderId == nil {
+                    Model.shared.chatProviderId = parsed.first { $0.isDefault }?.id ?? parsed.first?.id
+                }
+            }
+        }
+    }
+
+    private func applyAI(_ obj: [String: Any]?) {
+        guard let requestId = obj?["requestId"] as? String, requestId == chatRequestId,
+              let event = obj?["event"] as? [String: Any],
+              let kind = event["type"] as? String
+        else { return }
+        switch kind {
+        case "delta":
+            guard !chatTurns.isEmpty else { return }
+            var turns = chatTurns
+            turns[turns.count - 1].content += event["text"] as? String ?? ""
+            chatTurns = turns
+        case "error":
+            if !chatTurns.isEmpty {
+                var turns = chatTurns
+                turns[turns.count - 1].error = event["text"] as? String ?? "Error"
+                chatTurns = turns
+            }
+            endStream()
+        case "done":
+            endStream()
+        default:
+            break
+        }
+    }
+
+    private func failStream(_ id: String, _ message: String) {
+        guard chatRequestId == id else { return }
+        if !chatTurns.isEmpty {
+            var turns = chatTurns
+            turns[turns.count - 1].error = message
+            chatTurns = turns
+        }
+        endStream()
+    }
+
+    private func endStream() {
+        chatRequestId = nil
+        chatStreaming = false
+        focusTick += 1
+    }
+
+    /// Clears the streaming flag, then asks Rust to abort. No `done` follows.
+    private func stopStream() {
+        let id = chatRequestId
+        chatRequestId = nil
+        chatStreaming = false
+        guard let id else { return }
+        Task.detached { _ = Engine.call(["op": "cancel", "requestId": id]) }
+    }
+
+    private func newChat() {
+        stopStream()
+        chatTurns = []
+        focusTick += 1
+    }
+
+    private func copyOutput() {
+        guard case .output(_, let text) = mode else { return }
+        copyToClipboard(text, toast: "Copied output")
+    }
+
+    private func copyAnswer() {
+        guard let text = lastAnswer else { return }
+        copyToClipboard(text, toast: "Copied answer")
+    }
+
+    private func pasteLastAnswer() {
+        guard let text = lastAnswer else { return }
+        Task.detached { _ = Engine.call(["op": "paste", "text": text]) }
+    }
+
+    private var fieldIsComposing: Bool {
+        (NSApp.keyWindow?.firstResponder as? NSTextView)?.hasMarkedText() == true
+    }
+
+    private var textHasSelection: Bool {
+        guard let view = NSApp.keyWindow?.firstResponder as? NSTextView else { return false }
+        return view.selectedRange().length > 0
     }
 
     private func flash(_ text: String, error: Bool, thenHide: Bool) {

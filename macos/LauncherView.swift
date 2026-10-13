@@ -8,12 +8,15 @@ struct LauncherView: View {
 
     var body: some View {
         Group {
-            if case .search = model.mode {
+            switch model.mode {
+            case .search:
                 search
-            } else {
-                Text(model.stubTitle)
-                    .font(.system(size: 15, weight: .semibold))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .args(let command):
+                ArgsForm(model: model, command: command)
+            case .output(let title, let text):
+                OutputPane(title: title, text: text)
+            case .chat:
+                ChatView(model: model)
             }
         }
         .foregroundStyle(Theme.primary(scheme))
@@ -206,6 +209,177 @@ struct LauncherView: View {
         focused = true
         DispatchQueue.main.async {
             NSApp.keyWindow?.fieldEditor(false, for: nil)?.selectAll(nil)
+        }
+    }
+}
+
+struct BackButton: View {
+    var action: () -> Void
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "chevron.left")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.secondary(scheme))
+                .frame(width: 26, height: 26)
+                .background(Theme.kbd(scheme), in: RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Back")
+    }
+}
+
+struct HintBar: View {
+    var left: String
+    var hints: [(String, String)]
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        HStack {
+            Text(left)
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.tertiary(scheme))
+            Spacer()
+            HStack(spacing: 14) {
+                ForEach(Array(hints.enumerated()), id: \.offset) { _, hint in
+                    HStack(spacing: 4) {
+                        Text(hint.0)
+                        Text(hint.1)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Theme.kbd(scheme), in: RoundedRectangle(cornerRadius: 5))
+                    }
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.secondary(scheme))
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 38)
+    }
+}
+
+private struct ArgsForm: View {
+    @Bindable var model: Model
+    var command: Command
+    @FocusState private var focus: Int?
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                BackButton { model.backToSearch(clearQuery: false) }
+                argIcon
+                Text(command.title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                ForEach(command.arguments.indices, id: \.self) { index in
+                    field(index)
+                }
+                if model.busy {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 16, height: 16)
+                }
+            }
+            .padding(.horizontal, 18)
+            .frame(minHeight: 58)
+            .overlay(alignment: .bottom) { hairline }
+            hint
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            HintBar(left: "OpenCast", hints: [("Run", "↵"), ("Next field", "⇥"), ("Back", "esc")])
+        }
+        .onAppear { focus = model.argField }
+        .onChange(of: model.focusTick) { _, _ in focus = model.argField }
+        .onChange(of: focus) { _, value in
+            if let value { model.argField = value }
+        }
+    }
+
+    private var hint: some View {
+        let which = command.arguments.count == 1 ? "the field" : "the fields"
+        return (Text("Fill in \(which) above and press Enter to run ") + Text(command.title).bold() + Text("."))
+            .font(.system(size: 14))
+            .foregroundStyle(Theme.secondary(scheme))
+            .multilineTextAlignment(.center)
+            .padding(24)
+    }
+
+    @ViewBuilder private var argIcon: some View {
+        if let name = Theme.symbol(for: command),
+           NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil {
+            Image(systemName: name)
+                .font(.system(size: 16))
+                .frame(width: 18, height: 18)
+        } else if let icon = command.icon, !icon.isEmpty {
+            Text(icon)
+                .font(.system(size: 17))
+        }
+    }
+
+    @ViewBuilder private func field(_ index: Int) -> some View {
+        let spec = command.arguments[index]
+        let placeholder = spec.placeholder + (spec.optional ? " (optional)" : "")
+        let prompt = Text(placeholder).foregroundStyle(Theme.tertiary(scheme))
+        Group {
+            if spec.secure {
+                SecureField("", text: $model.argDrafts[index], prompt: prompt)
+            } else {
+                TextField("", text: $model.argDrafts[index], prompt: prompt)
+            }
+        }
+        .textFieldStyle(.plain)
+        .font(.system(size: 14))
+        .focused($focus, equals: index)
+        .focusEffectDisabled()
+        .autocorrectionDisabled()
+        .padding(.horizontal, 10)
+        .frame(minWidth: 90, maxWidth: .infinity)
+        .frame(height: 32)
+        .background(scheme == .dark ? Color.white.opacity(0.06) : Color.white, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(focus == index ? Theme.accent : Theme.stroke(scheme).opacity(0.7), lineWidth: 1)
+        )
+    }
+
+    private var hairline: some View {
+        Rectangle().fill(Theme.stroke(scheme).opacity(0.45)).frame(height: 0.5)
+    }
+}
+
+private struct OutputPane: View {
+    var title: String
+    var text: String
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                BackButton { Model.shared.backToSearch(clearQuery: false) }
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .lineLimit(1)
+                Spacer()
+            }
+            .padding(.horizontal, 18)
+            .frame(height: 58)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Theme.stroke(scheme).opacity(0.45)).frame(height: 0.5)
+            }
+            ScrollView {
+                Text(text.isEmpty ? "(no output)" : text)
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(text.isEmpty ? Theme.tertiary(scheme) : Theme.primary(scheme))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 16)
+            }
+            .frame(maxHeight: .infinity)
+            HintBar(left: "OpenCast", hints: [("Copy", "↵"), ("Back", "esc")])
         }
     }
 }

@@ -52,12 +52,33 @@ struct Command: Identifiable, Equatable, Sendable {
     }
 }
 
+struct Provider: Identifiable, Equatable, Sendable {
+    var id: String
+    var models: [String]
+    var defaultModel: String
+    var isDefault: Bool
+
+    init?(_ raw: [String: Any]) {
+        guard let id = raw["id"] as? String else { return nil }
+        self.id = id
+        models = raw["models"] as? [String] ?? []
+        defaultModel = raw["defaultModel"] as? String ?? ""
+        isDefault = raw["isDefault"] as? Bool ?? false
+    }
+}
+
+struct ChatTurn: Equatable, Sendable {
+    var role: String
+    var content: String
+    var error: String?
+}
+
 enum ExecOutcome: Sendable {
     case hide
     case toast(String)
     case error(String)
     case output(title: String, text: String)
-    case chat(prompt: String?, autoSend: Bool)
+    case chat(prompt: String?, system: String?, provider: String?, model: String?, autoSend: Bool)
     case args(Command)
     case failure(String)
 
@@ -72,7 +93,13 @@ enum ExecOutcome: Sendable {
         case "output":
             self = .output(title: raw["title"] as? String ?? "", text: raw["text"] as? String ?? "")
         case "chat":
-            self = .chat(prompt: raw["prompt"] as? String, autoSend: raw["autoSend"] as? Bool ?? false)
+            self = .chat(
+                prompt: raw["prompt"] as? String,
+                system: raw["system"] as? String,
+                provider: raw["provider"] as? String,
+                model: raw["model"] as? String,
+                autoSend: raw["autoSend"] as? Bool ?? false
+            )
         case "args":
             if let command = (raw["command"] as? [String: Any]).flatMap(Command.init) {
                 self = .args(command)
