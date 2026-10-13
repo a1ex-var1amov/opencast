@@ -54,10 +54,11 @@ final class Model {
     var focusTick = 0
     var toastText: String?
     var toastIsError = false
-    var seekVisible = false
+    var seekQuery = ""
+    var seekIndex = 0
+    var seekFocus = 0
+    var seekScan: SeekScan?
     var appIcons: [String: NSImage] = [:]
-    /// Raw callback JSON kept for later tasks.
-    var stashedSeek: String?
     var argDrafts: [String] = []
     var argField = 0
     var providers: [Provider] = []
@@ -143,6 +144,7 @@ final class Model {
     }
 
     func install() {
+        seekSpanCheck()
         let launcher = IslandPanel()
         let host = ClearHost(rootView: LauncherView(model: self))
         host.wantsLayer = true
@@ -151,7 +153,7 @@ final class Model {
         self.launcher = launcher
 
         let seek = IslandPanel()
-        let seekHost = ClearHost(rootView: Text("Seek").frame(maxWidth: .infinity, maxHeight: .infinity))
+        let seekHost = ClearHost(rootView: SeekView(model: self))
         seekHost.wantsLayer = true
         seekHost.layer?.backgroundColor = NSColor.clear.cgColor
         seek.contentView = seekHost
@@ -177,6 +179,13 @@ final class Model {
             show()
         case "hide":
             // emit already stored VISIBLE = false. Do not call back into Rust.
+            // A hide while Seek is up is Esc / seekClose. The hide emitted just
+            // before seek runs first, while seekScan is still nil.
+            if seekScan != nil {
+                seekScan = nil
+                seekQuery = ""
+                seekIndex = 0
+            }
             hide(fromRust: true)
         case "result":
             if let result = obj?["result"] as? [String: Any] {
@@ -185,13 +194,16 @@ final class Model {
         case "ai":
             applyAI(obj)
         case "seek":
-            stashedSeek = raw
+            if let scan = SeekScan(obj?["scan"]) {
+                presentSeek(scan)
+            }
         default:
             break
         }
     }
 
     func show() {
+        if seekScan != nil { return }
         if !readKeep {
             keepOnBlur = ProcessInfo.processInfo.environment["OPENCAST_KEEP_ON_BLUR"] != nil
             readKeep = true
@@ -224,6 +236,8 @@ final class Model {
     }
 
     func hide(fromRust: Bool = false) {
+        // ExecResult hide is applied after the seek event. Leave the overlay up.
+        if seekScan != nil { return }
         guard !hiding else { return }
         let up = launcher?.isVisible == true || seek?.isVisible == true || NSApp.isActive
         guard up else { return }
@@ -231,7 +245,6 @@ final class Model {
         defer { hiding = false }
         launcher?.orderOut(nil)
         seek?.orderOut(nil)
-        seekVisible = false
         NSApp.hide(nil)
         if !fromRust {
             Task.detached { _ = Engine.call(["op": "hidden"]) }
@@ -239,7 +252,7 @@ final class Model {
     }
 
     func launcherResignedKey() {
-        if seekVisible { return }
+        if seekScan != nil { return }
         if keepOnBlur { return }
         hide()
     }
@@ -283,6 +296,7 @@ final class Model {
     }
 
     func handleKey(_ event: NSEvent) -> Bool {
+        if seekScan != nil, seek?.isKeyWindow == true { return seekKey(event) }
         guard launcher?.isKeyWindow == true else { return false }
         let mods = event.modifierFlags.intersection([.command, .shift, .option, .control])
         if event.keyCode == 53, mods.isEmpty {
@@ -666,6 +680,82 @@ final class Model {
             self.toastText = nil
             if thenHide { self.hide() }
         }
+    }
+
+    var seekSpans: [SeekSpan] {
+        guard let seekScan else { return [] }
+        return matchSpans(scan: seekScan, query: seekQuery)
+    }
+
+    var seekCursor: Int {
+        let n = seekSpans.count
+        guard n > 0 else { return 0 }
+        return ((seekIndex % n) + n) % n
+    }
+
+    var seekCount: String {
+        let n = seekSpans.count
+        if n == 0 {
+            return seekQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : "0 of 0"
+        }
+        return "\(seekCursor + 1) of \(n)"
+    }
+
+    private func presentSeek(_ scan: SeekScan) {
+        seekScan = scan
+        seekQuery = ""
+        seekIndex = 0
+        guard let seek else { return }
+        let screen = NSScreen.screens.max(by: { $0.frame.maxY < $1.frame.maxY }) ?? NSScreen.main!
+        let x = scan.monitor.x
+        let y = screen.frame.maxY - scan.monitor.y - scan.monitor.h
+        seek.setFrame(NSRect(x: x, y: y, width: scan.monitor.w, height: scan.monitor.h), display: true)
+        launcher?.orderOut(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        seek.makeKeyAndOrderFront(nil)
+        seekFocus += 1
+    }
+
+    private func seekKey(_ event: NSEvent) -> Bool {
+        let mods = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        if event.keyCode == 53, mods.isEmpty {
+            Task.detached { _ = Engine.call(["op": "seekClose"]) }
+            return true
+        }
+        if event.keyCode == 48, mods.isEmpty || mods == .shift {
+            stepSeek(mods == .shift ? -1 : 1)
+            return true
+        }
+        if mods.isEmpty, event.characters == ";" {
+            stepSeek(1)
+            return true
+        }
+        if mods.isEmpty, event.keyCode == 36 || event.keyCode == 76 {
+            clickSeek()
+            return true
+        }
+        return false
+    }
+
+    private func stepSeek(_ delta: Int) {
+        let n = seekSpans.count
+        guard n > 0 else { return }
+        seekIndex = ((seekIndex + delta) % n + n) % n
+    }
+
+    private func clickSeek() {
+        guard let scan = seekScan else { return }
+        let spans = seekSpans
+        let cursor = seekCursor
+        guard spans.indices.contains(cursor) else { return }
+        let match = spans[cursor]
+        let x = Double(scan.monitor.x + match.x + match.w / 2)
+        let y = Double(scan.monitor.y + match.y + match.h / 2)
+        seekScan = nil
+        seekQuery = ""
+        seekIndex = 0
+        hide(fromRust: true)
+        Task.detached { _ = Engine.call(["op": "seekClick", "x": x, "y": y]) }
     }
 
     private func frame(on screen: NSScreen, height: CGFloat) -> NSRect {
