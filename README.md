@@ -2,7 +2,8 @@
 
 An open-source, keyboard-first launcher in the spirit of Raycast — with AI that
 works with **any provider you choose** and no account, subscription or licence
-key. MIT licensed. Tauri (Rust) + React. macOS first; the core is portable.
+key. MIT licensed. The panel is SwiftUI and the engine is Rust. macOS first;
+the core is portable.
 
 - **⌥Space** opens a panel: fuzzy search over apps, script commands, AI commands
   and quicklinks; type maths for an inline calculator.
@@ -33,24 +34,17 @@ key. MIT licensed. Tauri (Rust) + React. macOS first; the core is portable.
 
 ## Quick start
 
-Requirements: Rust (stable), Node 20+, and on macOS the Xcode command-line
-tools. Linux additionally needs the WebKitGTK dev packages listed in the
-[Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
+Requirements: Rust (stable) and the Xcode command-line tools.
 
 ```bash
-npm install
-npm run tauri dev          # run the app with hot reload
-npm run tauri build        # → src-tauri/target/release/bundle/ (.app / .dmg)
 cargo test                 # core tests: providers, scripts, search, calculator
+./build-app.command        # build and install ~/Applications/OpenCast.app
 ```
 
 On first launch OpenCast writes `~/.config/opencast/config.toml` and a few
 example scripts, then shows the panel. The default config points at a local
 **Ollama** (`http://localhost:11434/v1`), so with `ollama pull llama3.2` AI
 works without any key.
-
-`npm run dev` alone serves the UI in a normal browser against a built-in mock
-backend — handy for UI work without the native shell.
 
 ### macOS permissions
 
@@ -187,15 +181,15 @@ masks input. Scripts run out of process with a 30 s timeout
 ## Layout
 
 ```
-crates/opencast-core/   portable logic, no Tauri: config, registry + fuzzy search,
+crates/opencast-core/   portable logic: config, registry + fuzzy search,
   src/providers/          scripts, app discovery, calculator, AI adapters (+ tests)
-src-tauri/              native shell: window, global hotkey, IPC, clipboard/paste
-src/                    React UI (search, arguments, output, chat)
+crates/opencast-ffi/    macOS C ABI: hotkeys, clipboard, paste, window management
+macos/                  SwiftUI panel
 examples/               default config.toml and example scripts
 ```
 
-The UI never holds keys or talks to the network; it invokes Rust commands and
-receives streamed tokens as `ai://event` events.
+The panel never holds keys or talks to the network; it calls the Rust engine
+and receives streamed tokens from it.
 
 ## Status and roadmap
 

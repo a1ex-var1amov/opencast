@@ -1,8 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/opencast-core", "crates/opencast-ffi", "src-tauri"]
-# `cargo test` at the root runs the portable core only; the Tauri shell
-# needs the platform webview SDK and is built with `npm run tauri dev|build`.
+members = ["crates/opencast-core", "crates/opencast-ffi"]
+# `cargo test` at the root runs the portable core only.
 default-members = ["crates/opencast-core"]
 
 [workspace.package]

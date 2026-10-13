@@ -1,9 +1,9 @@
 //! OpenCast core: everything that does not need a window.
 //!
-//! The Tauri shell (`src-tauri`) owns the window, hotkey and OS glue; this
-//! crate owns configuration, the command registry, script commands, app
-//! discovery, the calculator and the AI provider adapters, so all of it can
-//! be unit-tested on any machine.
+//! The macOS shell (`crates/opencast-ffi` and `macos/`) owns the window, hotkey
+//! and OS glue; this crate owns configuration, the command registry, script
+//! commands, app discovery, the calculator and the AI provider adapters, so
+//! all of it can be unit-tested on any machine.
 
 pub mod apps;
 pub mod calc;

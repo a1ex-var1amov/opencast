@@ -1,20 +1,20 @@
 # OpenCast — project notes for Claude Code
 
-Open-source Raycast-style launcher. Tauri 2 (Rust) + React/TS. MIT.
-macOS first; `crates/opencast-core` must stay portable (no Tauri deps).
+Open-source Raycast-style launcher. SwiftUI plus `crates/opencast-ffi`. MIT.
+macOS first; `crates/opencast-core` must stay portable (no platform UI deps).
 
 ## Layout
 - `crates/opencast-core` — config, command registry + fuzzy search, scripts,
   app discovery, calculator, saved layouts, AI provider adapters (+ all tests)
-- `src-tauri` — shell: window, global hotkeys, IPC, clipboard/paste,
-  `window_mgmt.rs` (window snapping + layouts via JXA/System Events)
-- `src` — React UI; `src/mock.ts` is a browser-only stand-in backend
+- `crates/opencast-ffi` — macOS C ABI: hotkeys, clipboard, paste, window management
+- `macos/` — SwiftUI panel
 - `examples/config.toml` — default config, embedded via include_str!
 
 ## Build / test
+- Requirements: Rust and the Xcode command-line tools
 - `cargo test` — core tests (runs anywhere)
-- `npm run tauri dev` — dev app; `./build-app.command` — release build,
-  installs to ~/Applications/OpenCast.app and relaunches it
+- `./build-app.command` — builds and installs the app to ~/Applications/OpenCast.app
+- `./run-opencast.command` — debug app at target/debug/OpenCast.app
 - User config lives in ~/.config/opencast/config.toml (NOT in this repo);
   reload via the "Reload Commands" command in the launcher
 
