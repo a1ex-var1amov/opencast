@@ -58,6 +58,12 @@ pub struct General {
     /// Caps Lock becomes ⌃⌥⌘⇧ while held and opens the launcher when tapped.
     #[serde(default)]
     pub hyperkey: bool,
+    /// `system`, `light`, or `dark`.
+    #[serde(default = "default_theme")]
+    pub theme: String,
+    /// `island` (top bar) or `spotlight` (centered).
+    #[serde(default = "default_presentation")]
+    pub presentation: String,
 }
 
 impl Default for General {
@@ -68,6 +74,8 @@ impl Default for General {
             scripts_dir: None,
             script_timeout_secs: default_timeout(),
             hyperkey: false,
+            theme: default_theme(),
+            presentation: default_presentation(),
         }
     }
 }
@@ -78,6 +86,55 @@ fn default_hotkey() -> String {
 
 fn default_timeout() -> u64 {
     30
+}
+
+fn default_theme() -> String {
+    "system".into()
+}
+
+fn default_presentation() -> String {
+    "island".into()
+}
+
+/// Replace or insert `key = "value"` under `[general]` in `config.toml`.
+pub fn set_general_key(dir: &Path, key: &str, value: &str) -> Result<()> {
+    anyhow::ensure!(
+        key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+        "bad config key"
+    );
+    anyhow::ensure!(!value.contains('"') && !value.contains('\n'), "bad config value");
+    let path = dir.join("config.toml");
+    let src = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let updated = set_general_key_in(&src, key, value);
+    std::fs::write(&path, updated).with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
+fn set_general_key_in(src: &str, key: &str, value: &str) -> String {
+    let line = format!("{key} = \"{value}\"");
+    let key_eq = format!("{key} =");
+    let general_at = if src.starts_with("[general]") {
+        Some(0)
+    } else {
+        src.find("\n[general]").map(|i| i + 1)
+    };
+    let Some(start) = general_at else {
+        return format!("[general]\n{line}\n\n{src}");
+    };
+    let after_header = start + "[general]".len();
+    let section_end = src[after_header..]
+        .find("\n[")
+        .map(|j| after_header + j)
+        .unwrap_or(src.len());
+    let section = &src[start..section_end];
+    let new_section = if let Some(pos) = section.find(&key_eq) {
+        let abs = start + pos;
+        let line_end = src[abs..].find('\n').map(|j| abs + j).unwrap_or(src.len());
+        format!("{}{}{}", &src[..abs], line, &src[line_end..section_end])
+    } else {
+        format!("{section}\n{line}")
+    };
+    format!("{}{}{}", &src[..start], new_section, &src[section_end..])
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -392,5 +449,23 @@ mod tests {
         assert!(dir.path().join("config.toml").exists());
         assert!(dir.path().join("scripts/uuid.sh").exists());
         assert_eq!(cfg.scripts_dir(dir.path()), dir.path().join("scripts"));
+    }
+
+    #[test]
+    fn set_general_key_inserts_and_replaces() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[general]\nhotkey = \"Alt+Space\"\n\n[[providers]]\nid = \"x\"\n",
+        )
+        .unwrap();
+        set_general_key(dir.path(), "theme", "dark").unwrap();
+        let src = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        assert!(src.contains("theme = \"dark\""));
+        set_general_key(dir.path(), "theme", "light").unwrap();
+        let src = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        assert!(src.contains("theme = \"light\""));
+        assert!(!src.contains("theme = \"dark\""));
+        assert!(src.contains("hotkey = \"Alt+Space\""));
     }
 }

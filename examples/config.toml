@@ -5,6 +5,8 @@
 [general]
 hotkey = "Alt+Space"            # e.g. "Cmd+Space", "Ctrl+Alt+K"
 hyperkey = false                # Caps Lock = ⌃⌥⌘⇧ while held, opens the launcher when tapped (restart to apply)
+theme = "system"                # system | light | dark  (Accent color always follows the Mac)
+presentation = "island"         # island (top bar) | spotlight (centered)
 default_provider = "ollama"     # id of a provider below; first one is used if unset
 # scripts_dir = "~/.config/opencast/scripts"
 script_timeout_secs = 30

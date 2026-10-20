@@ -1,6 +1,7 @@
 //! Carry out an [`opencast_core::Engine`] plan. The panel hides and shows
 //! through [`crate::host::emit`]; there is no `AppHandle`.
 
+use opencast_core::config;
 use opencast_core::engine::{fill_selection, Builtin, LayoutOp, Plan};
 use opencast_core::scripts::{self, OutputMode};
 use opencast_core::{apps, Command};
@@ -33,10 +34,31 @@ pub enum ExecResult {
     Args {
         command: Command,
     },
+    Query {
+        query: String,
+    },
+    Theme {
+        theme: String,
+    },
+    Presentation {
+        presentation: String,
+    },
+    RunSelected,
+    DoEscape,
+    Hint {
+        text: String,
+    },
+    AskAi,
+    /// Seek scan finished (or is about to show). Do not hide the panel.
+    ClickMode,
 }
 
 pub fn reload() -> String {
-    let engine = std::sync::Arc::new(opencast_core::engine::Engine::load(&opencast_core::Config::config_dir()));
+    let apps = crate::apps_mac::discover();
+    let engine = std::sync::Arc::new(opencast_core::engine::Engine::load_with_apps(
+        &opencast_core::Config::config_dir(),
+        apps,
+    ));
     for p in crate::hotkeys::register(&engine) {
         eprintln!("opencast: {p}");
     }
@@ -101,16 +123,14 @@ pub async fn run_command(id: String, args: Vec<String>) -> ExecResult {
                 Err(e) => err(format!("{e:#}")),
             }
         }
-        Plan::Seek => {
-            hide();
-            match crate::window_mgmt::seek_scan().await {
-                Ok(scan) => {
-                    host::emit(serde_json::json!({ "type": "seek", "scan": scan }));
-                    ExecResult::Hide
-                }
-                Err(e) => err(format!("{e:#}")),
+        Plan::Seek => match crate::window_mgmt::seek_scan().await {
+            Ok(scan) => {
+                host::emit(serde_json::json!({ "type": "seek", "scan": scan }));
+                // Not Hide: without `clicking` set, Hide would dismiss the island.
+                ExecResult::ClickMode
             }
-        }
+            Err(e) => err(format!("{e:#}")),
+        },
         Plan::Layout(op) => match op {
             LayoutOp::Remember(name) => {
                 hide();
@@ -221,6 +241,32 @@ pub async fn run_command(id: String, args: Vec<String>) -> ExecResult {
                 }
                 std::process::exit(0);
             }
+            Builtin::ThemeSystem
+            | Builtin::ThemeLight
+            | Builtin::ThemeDark
+            | Builtin::PresentationIsland
+            | Builtin::PresentationSpotlight
+            | Builtin::Settings
+            | Builtin::Shortcuts => err("settings builtins should resolve to Set* or FillQuery"),
         },
+        Plan::SetTheme(theme) => match config::set_general_key(&config_dir, "theme", theme) {
+            Ok(()) => ExecResult::Theme {
+                theme: theme.to_string(),
+            },
+            Err(e) => err(format!("{e:#}")),
+        },
+        Plan::SetPresentation(presentation) => {
+            match config::set_general_key(&config_dir, "presentation", presentation) {
+                Ok(()) => ExecResult::Presentation {
+                    presentation: presentation.to_string(),
+                },
+                Err(e) => err(format!("{e:#}")),
+            }
+        }
+        Plan::FillQuery(query) => ExecResult::Query { query },
+        Plan::RunSelected => ExecResult::RunSelected,
+        Plan::DoEscape => ExecResult::DoEscape,
+        Plan::Hint(text) => ExecResult::Hint { text },
+        Plan::AskAi => ExecResult::AskAi,
     }
 }

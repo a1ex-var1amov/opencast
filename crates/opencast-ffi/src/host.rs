@@ -73,6 +73,10 @@ fn handle(request: &str) -> String {
                 VISIBLE.store(false, Ordering::SeqCst);
                 r#"{"ok":true}"#.into()
             }
+            "shown" => {
+                VISIBLE.store(true, Ordering::SeqCst);
+                r#"{"ok":true}"#.into()
+            }
             "execute" => {
                 let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
                 let args = v
@@ -230,7 +234,8 @@ fn cancel(v: &serde_json::Value) -> String {
 
 pub fn install(cb: Callback) {
     *CALLBACK.lock().unwrap() = Some(cb);
-    let engine = std::sync::Arc::new(Engine::load(&Config::config_dir()));
+    let apps = crate::apps_mac::discover();
+    let engine = std::sync::Arc::new(Engine::load_with_apps(&Config::config_dir(), apps));
     for w in &engine.warnings {
         eprintln!("opencast: {w}");
     }
@@ -274,6 +279,8 @@ mod tests {
         super::VISIBLE.store(true, Ordering::SeqCst);
         assert_eq!(super::handle(r#"{"op":"hidden"}"#), r#"{"ok":true}"#);
         assert!(!super::VISIBLE.load(Ordering::SeqCst));
+        assert_eq!(super::handle(r#"{"op":"shown"}"#), r#"{"ok":true}"#);
+        assert!(super::VISIBLE.load(Ordering::SeqCst));
     }
 
     #[test]

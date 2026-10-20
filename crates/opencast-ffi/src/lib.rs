@@ -2,6 +2,8 @@
 //! `cargo test --workspace` still configures.
 
 #[cfg(target_os = "macos")]
+mod apps_mac;
+#[cfg(target_os = "macos")]
 mod dispatch;
 #[cfg(target_os = "macos")]
 mod exec;

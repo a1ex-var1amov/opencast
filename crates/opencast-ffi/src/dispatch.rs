@@ -1,6 +1,7 @@
 use opencast_core::engine::Engine;
+use opencast_core::Config;
 #[cfg(test)]
-use opencast_core::{apps::AppEntry, Config};
+use opencast_core::apps::AppEntry;
 #[cfg(test)]
 use std::path::PathBuf;
 
@@ -16,6 +17,19 @@ pub fn dispatch(engine: &Engine, request: &str) -> String {
         "search" => {
             let q = v.get("query").and_then(|x| x.as_str()).unwrap_or("");
             serde_json::json!({ "commands": engine.search(q, SEARCH_LIMIT) })
+        }
+        "settings" => {
+            // Prefer the file so Appearance / Presentation commands stick without Reload.
+            let path = engine.config_dir.join("config.toml");
+            let (theme, presentation) = Config::load_from(&path)
+                .map(|c| (c.general.theme, c.general.presentation))
+                .unwrap_or_else(|_| {
+                    (
+                        engine.config.general.theme.clone(),
+                        engine.config.general.presentation.clone(),
+                    )
+                });
+            serde_json::json!({ "theme": theme, "presentation": presentation })
         }
         "warnings" => serde_json::json!({ "warnings": engine.warnings }),
         "providers" => serde_json::json!({ "providers": engine.router.list() }),

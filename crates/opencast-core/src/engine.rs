@@ -21,6 +21,13 @@ pub enum Builtin {
     OpenConfig,
     OpenScripts,
     Quit,
+    ThemeSystem,
+    ThemeLight,
+    ThemeDark,
+    PresentationIsland,
+    PresentationSpotlight,
+    Settings,
+    Shortcuts,
 }
 
 const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
@@ -42,8 +49,8 @@ const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
         Builtin::OpenConfig,
         "config",
         "Open Config Folder",
-        "⚙️",
-        &["settings", "preferences", "providers", "hotkeys"],
+        "📁",
+        &["toml", "providers", "hotkeys", "folder", "file"],
     ),
     (
         Builtin::OpenScripts,
@@ -53,6 +60,64 @@ const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
         &["script commands"],
     ),
     (Builtin::Quit, "quit", "Quit OpenCast", "⏻", &["exit"]),
+    (
+        Builtin::ThemeSystem,
+        "theme-system",
+        "Appearance: System",
+        "🖥️",
+        &["theme", "appearance", "dark", "light", "color", "settings"],
+    ),
+    (
+        Builtin::ThemeLight,
+        "theme-light",
+        "Appearance: Light",
+        "☀️",
+        &["theme", "appearance", "light", "color", "settings"],
+    ),
+    (
+        Builtin::ThemeDark,
+        "theme-dark",
+        "Appearance: Dark",
+        "🌙",
+        &["theme", "appearance", "dark", "color", "settings"],
+    ),
+    (
+        Builtin::PresentationIsland,
+        "presentation-island",
+        "Presentation: Island",
+        "🏝️",
+        &["presentation", "island", "layout", "panel", "settings"],
+    ),
+    (
+        Builtin::PresentationSpotlight,
+        "presentation-spotlight",
+        "Presentation: Spotlight",
+        "🔦",
+        &["presentation", "spotlight", "layout", "panel", "centered", "settings"],
+    ),
+    (
+        Builtin::Settings,
+        "settings",
+        "Settings",
+        "⚙️",
+        &["config", "preferences", "theme", "appearance", "presentation"],
+    ),
+    (
+        Builtin::Shortcuts,
+        "shortcuts",
+        "Shortcuts",
+        "⌨️",
+        &["hotkey", "keys", "keymap", "tab", "click", "shortcut"],
+    ),
+];
+
+/// In-app key rows. Searchable via the Shortcuts command (`query` = `shortcut`).
+const SHORTCUT_ROWS: &[(&str, &str, &str, &[&str])] = &[
+    ("shortcut:return", "Return — Run selected", "↩", &["return", "enter", "shortcut"]),
+    ("shortcut:tab", "Tab — Ask AI", "⇥", &["tab", "ask", "shortcut"]),
+    ("shortcut:backtick", "Backtick — Click Text", "`", &["`", "click", "seek", "shortcut"]),
+    ("shortcut:esc", "Esc — Back / hide", "⎋", &["escape", "esc", "shortcut"]),
+    ("shortcut:arrows", "Arrows — Move selection", "↑↓", &["up", "down", "arrows", "shortcut"]),
 ];
 
 /// Rectangle-style window actions on the frontmost window.
@@ -149,6 +214,20 @@ pub enum Plan {
         needs_selection: bool,
     },
     Builtin(Builtin),
+    /// Write `theme` to config and tell the panel to apply it.
+    SetTheme(&'static str),
+    /// Write `presentation` to config and tell the panel to apply it.
+    SetPresentation(&'static str),
+    /// Keep the panel open and set the search field.
+    FillQuery(String),
+    /// Activate the current selection (Return).
+    RunSelected,
+    /// Esc behavior in the panel.
+    DoEscape,
+    /// Flash a hint; stay open.
+    Hint(String),
+    /// Ask AI with whatever is in the search field (Swift supplies the text).
+    AskAi,
     Window(WindowAction),
     Layout(LayoutOp),
     /// Superkey's Seek: OCR the screen, let the user pick text, click it.
@@ -179,12 +258,16 @@ impl Engine {
     /// Load everything from the config dir, creating it on first run.
     /// Never fails: problems become warnings so the launcher still opens.
     pub fn load(config_dir: &Path) -> Self {
+        Self::load_with_apps(config_dir, apps::scan())
+    }
+
+    /// Like [`Self::load`], but use a pre-built app list (macOS Spotlight scan).
+    pub fn load_with_apps(config_dir: &Path, apps: Vec<AppEntry>) -> Self {
         let mut warnings = Vec::new();
         let config = Config::load_or_init(config_dir).unwrap_or_else(|e| {
             warnings.push(format!("{e:#}"));
             Config::default()
         });
-        let apps = apps::scan();
         let (scripts, script_warnings) = scripts::discover(&config.scripts_dir(config_dir));
         warnings.extend(script_warnings);
         let saved_layouts = layouts::list(config_dir);
@@ -218,6 +301,7 @@ impl Engine {
                 icon: Some(icon.to_string()),
                 kind: CommandKind::Builtin,
                 arguments: vec![],
+                hotkey: None,
                 keywords: kw.iter().map(|s| s.to_string()).collect(),
             });
         }
@@ -230,6 +314,7 @@ impl Engine {
                 icon: Some(icon.to_string()),
                 kind: CommandKind::Window,
                 arguments: vec![],
+                hotkey: None,
                 keywords: vec!["window".into(), "snap".into(), "tile".into(), "rectangle".into()],
             });
         }
@@ -241,7 +326,8 @@ impl Engine {
             icon: Some("🎯".into()),
             kind: CommandKind::Builtin,
             arguments: vec![],
-            keywords: vec!["seek".into(), "click".into(), "ocr".into(), "mouse".into(), "superkey".into()],
+            hotkey: None,
+                keywords: vec!["seek".into(), "click".into(), "ocr".into(), "mouse".into(), "superkey".into()],
         });
 
         commands.push(Command {
@@ -255,7 +341,8 @@ impl Engine {
                 optional: false,
                 secure: false,
             }],
-            keywords: vec!["window".into(), "workspace".into(), "arrangement".into(), "save".into()],
+            hotkey: None,
+                keywords: vec!["window".into(), "workspace".into(), "arrangement".into(), "save".into()],
         });
         for (slug, name, n) in &saved_layouts {
             let id = format!("layout:restore:{slug}");
@@ -266,6 +353,7 @@ impl Engine {
                 icon: Some("🗂".into()),
                 kind: CommandKind::Layout,
                 arguments: vec![],
+                hotkey: None,
                 keywords: vec!["window".into(), "workspace".into(), "layout".into(), name.clone()],
             });
             restore_ids.insert(id, slug.clone());
@@ -282,6 +370,7 @@ impl Engine {
                     optional: false,
                     secure: false,
                 }],
+                hotkey: None,
                 keywords: vec!["layout".into(), "delete".into()],
             });
         }
@@ -310,6 +399,7 @@ impl Engine {
                 } else {
                     vec![]
                 },
+                hotkey: None,
                 keywords: c.keywords.clone(),
             });
             ai.insert(id, c.clone());
@@ -329,6 +419,7 @@ impl Engine {
                 icon: s.icon.clone().or(Some("📜".into())),
                 kind: CommandKind::Script,
                 arguments: s.arguments.clone(),
+                hotkey: None,
                 keywords: s.package.iter().cloned().collect(),
             });
             scripts.insert(id, s);
@@ -351,6 +442,7 @@ impl Engine {
                 } else {
                     vec![]
                 },
+                hotkey: None,
                 keywords: l.keywords.clone(),
             });
             links.insert(id, l.clone());
@@ -365,9 +457,60 @@ impl Engine {
                 icon: None,
                 kind: CommandKind::App,
                 arguments: vec![],
+                hotkey: None,
                 keywords: vec![],
             });
             apps.insert(id, a.path);
+        }
+
+        for (id, title, icon, kw) in SHORTCUT_ROWS {
+            commands.push(Command {
+                id: (*id).into(),
+                title: (*title).into(),
+                subtitle: Some("In-app key".into()),
+                icon: Some((*icon).into()),
+                kind: CommandKind::Builtin,
+                arguments: vec![],
+                hotkey: None,
+                keywords: kw.iter().map(|s| (*s).into()).collect(),
+            });
+        }
+
+        match config.general.theme.as_str() {
+            "system" | "light" | "dark" => {}
+            other => warnings.push(format!(
+                "theme `{other}` is unknown; use system, light, or dark"
+            )),
+        }
+        match config.general.presentation.as_str() {
+            "island" | "spotlight" => {}
+            other => warnings.push(format!(
+                "presentation `{other}` is unknown; use island or spotlight"
+            )),
+        }
+
+        // Attach [[hotkeys]] to matching commands (by id or title).
+        let mut key_for: HashMap<String, String> = HashMap::new();
+        for h in &config.hotkeys {
+            let wanted = h.command.trim();
+            let id = commands
+                .iter()
+                .find(|c| c.id == wanted || c.title.eq_ignore_ascii_case(wanted))
+                .map(|c| c.id.clone());
+            if let Some(id) = id {
+                key_for.insert(id, h.key.trim().to_string());
+            } else {
+                warnings.push(format!(
+                    "hotkey `{}`: no command named `{}` (use a command title or id)",
+                    h.key, h.command
+                ));
+            }
+        }
+        for c in &mut commands {
+            if let Some(key) = key_for.get(&c.id) {
+                c.hotkey = Some(key.clone());
+                c.keywords.push(key.clone());
+            }
         }
 
         Self {
@@ -433,8 +576,29 @@ impl Engine {
             return BUILTINS
                 .iter()
                 .find(|(_, k, ..)| *k == key)
-                .map(|(b, ..)| Plan::Builtin(*b))
+                .map(|(b, ..)| match b {
+                    Builtin::ThemeSystem => Plan::SetTheme("system"),
+                    Builtin::ThemeLight => Plan::SetTheme("light"),
+                    Builtin::ThemeDark => Plan::SetTheme("dark"),
+                    Builtin::PresentationIsland => Plan::SetPresentation("island"),
+                    Builtin::PresentationSpotlight => Plan::SetPresentation("spotlight"),
+                    Builtin::Settings => Plan::FillQuery("settings".into()),
+                    Builtin::Shortcuts => Plan::FillQuery("shortcut".into()),
+                    other => Plan::Builtin(*other),
+                })
                 .ok_or_else(|| anyhow::anyhow!("unknown builtin `{key}`"));
+        }
+        match id {
+            "shortcut:return" => {
+                return Ok(Plan::Hint("Press Return on a result to run it".into()));
+            }
+            "shortcut:tab" => return Ok(Plan::AskAi),
+            "shortcut:backtick" => return Ok(Plan::Seek),
+            "shortcut:esc" => return Ok(Plan::DoEscape),
+            "shortcut:arrows" => {
+                return Ok(Plan::Hint("Use ↑ and ↓ to move through the list".into()));
+            }
+            _ => {}
         }
         if let Some(key) = id.strip_prefix("window:") {
             return WINDOW_ACTIONS

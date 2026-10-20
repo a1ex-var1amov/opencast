@@ -1,11 +1,22 @@
+import AppKit
 import SwiftUI
 
 enum Theme {
-    static let accent = Color(red: 1, green: Double(0x6b) / 255, blue: Double(0x3d) / 255)
+    /// Follows System Settings → Accent Color.
+    static var accent: Color { Color(nsColor: .controlAccentColor) }
 
-    static func island(_ scheme: ColorScheme) -> Color {
-        scheme == .dark ? .black : rgb(0xfafafb)
+    /// Accessibility → Display → Reduce transparency.
+    static var reduceTransparency: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
     }
+
+    /// Opaque fallback when glass is off (Reduce transparency or solid toast contrast).
+    static func island(_ scheme: ColorScheme) -> Color {
+        scheme == .dark ? rgb(0x1c1c1e) : rgb(0xf5f5f7)
+    }
+
+    static let spotlightRadius: CGFloat = 22
+    static let islandBottomRadius: CGFloat = 18
 
     static func primary(_ scheme: ColorScheme) -> Color {
         scheme == .dark ? rgb(0xececf0) : rgb(0x17171a)

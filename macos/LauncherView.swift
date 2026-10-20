@@ -5,6 +5,10 @@ struct LauncherView: View {
     @Bindable var model: Model
     @FocusState private var focused: Bool
     @Environment(\.colorScheme) private var scheme
+    @State private var pointer = CGPoint(x: -1_000_000, y: -1_000_000)
+    @State private var reduceTransparency = Theme.reduceTransparency
+
+    private var isSpotlight: Bool { model.presentation == "spotlight" }
 
     var body: some View {
         Group {
@@ -20,7 +24,8 @@ struct LauncherView: View {
             }
         }
         .foregroundStyle(Theme.primary(scheme))
-        .background(Theme.island(scheme))
+        .background { panelFill }
+        .preferredColorScheme(model.themePreference == "light" ? .light : model.themePreference == "dark" ? .dark : nil)
         .overlay(alignment: .bottom) {
             if let text = model.toastText {
                 Text(text)
@@ -28,17 +33,18 @@ struct LauncherView: View {
                     .foregroundStyle(model.toastIsError ? Color.white : Theme.island(scheme))
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
-                    .background(model.toastIsError ? Theme.danger : Theme.primary(scheme), in: RoundedRectangle(cornerRadius: 10))
+                    .background(model.toastIsError ? Theme.danger : Theme.primary(scheme), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .padding(.bottom, 50)
             }
         }
-        .clipShape(islandShape)
+        .clipShape(panelShape)
         .ignoresSafeArea()
-        .overlay { islandShape.stroke(Theme.stroke(scheme), lineWidth: 0.5) }
+        .overlay { panelShape.stroke(Theme.stroke(scheme), lineWidth: 0.5) }
         .compositingGroup()
-        .shadow(color: Theme.shadow(scheme), radius: Theme.shadowRoom, y: 22)
+        .shadow(color: Theme.shadow(scheme), radius: Theme.shadowRoom, y: isSpotlight ? 12 : 22)
         .padding(.horizontal, Theme.shadowRoom)
         .padding(.bottom, Theme.shadowRoom)
+        .padding(.top, isSpotlight ? Theme.shadowRoom : 0)
         .onAppear { selectField() }
         .onChange(of: model.focusTick) { _, _ in selectField() }
         .onChange(of: model.ready) { _, ready in
@@ -46,19 +52,40 @@ struct LauncherView: View {
         }
         .onChange(of: model.query) { _, _ in
             model.selected = 0
+            model.listStart = 0
             model.noteContentChanged()
             if model.ready { model.search() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification)) { _ in
+            reduceTransparency = Theme.reduceTransparency
+        }
     }
 
-    private var islandShape: UnevenRoundedRectangle {
-        UnevenRoundedRectangle(bottomLeadingRadius: 18, bottomTrailingRadius: 18)
+    private var panelShape: AnyShape {
+        if isSpotlight {
+            AnyShape(RoundedRectangle(cornerRadius: Theme.spotlightRadius, style: .continuous))
+        } else {
+            AnyShape(UnevenRoundedRectangle(
+                bottomLeadingRadius: Theme.islandBottomRadius,
+                bottomTrailingRadius: Theme.islandBottomRadius
+            ))
+        }
+    }
+
+    @ViewBuilder private var panelFill: some View {
+        if reduceTransparency {
+            Theme.island(scheme)
+        } else {
+            Rectangle().fill(.ultraThinMaterial)
+        }
     }
 
     private var search: some View {
         VStack(spacing: 0) {
             field
-            list.frame(height: model.listHeight)
+            if !model.clicking {
+                list.frame(height: model.listHeight)
+            }
             footer
         }
     }
@@ -67,8 +94,19 @@ struct LauncherView: View {
         HStack(spacing: 10) {
             TextField(
                 "",
-                text: $model.query,
-                prompt: Text("Search apps and commands, or ask AI…").foregroundStyle(Theme.tertiary(scheme))
+                text: Binding(
+                    get: { model.clicking ? model.seekQuery : model.query },
+                    set: { value in
+                        if model.clicking {
+                            model.seekQuery = value
+                            model.seekIndex = 0
+                        } else {
+                            model.query = value
+                        }
+                    }
+                ),
+                prompt: Text(model.clicking ? "Type what you see…" : "Search apps and commands, or ask AI…")
+                    .foregroundStyle(Theme.tertiary(scheme))
             )
             .textFieldStyle(.plain)
             .font(.system(size: 19))
@@ -86,26 +124,22 @@ struct LauncherView: View {
     }
 
     private var list: some View {
-        ScrollView {
+        Group {
             if model.rows.isEmpty {
                 Text("No results")
                     .foregroundStyle(Theme.secondary(scheme))
                     .frame(maxWidth: .infinity, minHeight: 44)
                     .padding(.vertical, 6)
             } else {
-                ScrollViewReader { proxy in
-                    LazyVStack(spacing: 0) {
-                        ForEach(Array(model.rows.enumerated()), id: \.element.id) { index, row in
-                            rowView(row, index: index)
-                                .id(index)
-                        }
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    .onChange(of: model.selected) { _, index in
-                        proxy.scrollTo(index, anchor: .center)
+                let start = model.listStart
+                let visible = Array(model.rows.enumerated()).dropFirst(start).prefix(8)
+                VStack(spacing: 0) {
+                    ForEach(Array(visible), id: \.element.id) { index, row in
+                        rowView(row, index: index)
                     }
                 }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
             }
         }
     }
@@ -137,6 +171,14 @@ struct LauncherView: View {
                 } else {
                     Spacer(minLength: 0)
                 }
+                if let hotkey = command.hotkey {
+                    Text(hotkey)
+                        .font(.system(size: 12, design: .monospaced))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Theme.kbd(scheme), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .foregroundStyle(Theme.secondary(scheme))
+                }
                 Text(command.kind.label)
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.tertiary(scheme))
@@ -146,13 +188,24 @@ struct LauncherView: View {
         .frame(height: 44)
         .background {
             if index == model.selected {
-                RoundedRectangle(cornerRadius: 9)
-                    .fill(Theme.accent.opacity(scheme == .light ? 0.12 : 0.18))
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Theme.accent.opacity(scheme == .light ? 0.14 : 0.22))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(Theme.accent.opacity(0.35), lineWidth: 1)
+                    )
             }
         }
-        .contentShape(RoundedRectangle(cornerRadius: 9))
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .onHover { inside in
-            if inside { model.selected = index }
+            guard inside else { return }
+            let loc = NSEvent.mouseLocation
+            let dx = loc.x - pointer.x
+            let dy = loc.y - pointer.y
+            // A stationary cursor must not grab the highlight when the window slides.
+            guard dx * dx + dy * dy > 1 else { return }
+            pointer = loc
+            model.selected = index
         }
         .onTapGesture { model.activate(index) }
     }
@@ -182,9 +235,18 @@ struct LauncherView: View {
                 .foregroundStyle(Theme.tertiary(scheme))
             Spacer()
             HStack(spacing: 14) {
-                if let verb = model.verb {
-                    hint(verb, "Return")
-                    if !model.askSelected { hint("Ask AI", "Tab") }
+                if model.clicking {
+                    if !model.seekCount.isEmpty {
+                        Text(model.seekCount)
+                    }
+                    hint("Back", "Esc")
+                    hint("Click", "Return")
+                } else {
+                    if let verb = model.verb {
+                        hint(verb, "Return")
+                        if !model.askSelected { hint("Ask AI", "Tab") }
+                    }
+                    hint("Click", "`")
                 }
             }
         }
@@ -198,7 +260,7 @@ struct LauncherView: View {
             Text(key)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
-                .background(Theme.kbd(scheme), in: RoundedRectangle(cornerRadius: 5))
+                .background(Theme.kbd(scheme), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
         .font(.system(size: 12))
         .foregroundStyle(Theme.secondary(scheme))

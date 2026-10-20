@@ -117,72 +117,16 @@ func seekSpanCheck() {
 
 struct SeekView: View {
     @Bindable var model: Model
-    @FocusState private var focused: Bool
-    @State private var dropped = false
 
     var body: some View {
-        GeometryReader { geo in
-            let spans = model.seekSpans
-            let cursor = spans.isEmpty ? 0 : ((model.seekIndex % spans.count) + spans.count) % spans.count
-            ZStack(alignment: .top) {
-                Color.clear.contentShape(Rectangle())
-                ForEach(spans) { span in
-                    hit(span, current: span.id == cursor)
-                }
-                if spans.indices.contains(cursor) {
-                    let current = spans[cursor]
-                    Path { path in
-                        path.move(to: CGPoint(x: geo.size.width / 2, y: 48))
-                        path.addLine(to: CGPoint(x: current.x + current.w / 2, y: current.y))
-                    }
-                    .stroke(Theme.accent, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .allowsHitTesting(false)
-                }
-                pill
+        let spans = model.seekSpans
+        let cursor = spans.isEmpty ? 0 : ((model.seekIndex % spans.count) + spans.count) % spans.count
+        ZStack {
+            Color.clear
+            ForEach(spans) { span in
+                hit(span, current: span.id == cursor)
             }
         }
-        .onAppear {
-            if model.seekScan != nil { showPill() }
-        }
-        .onChange(of: model.seekFocus) { _, _ in showPill() }
-    }
-
-    private var pill: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "viewfinder")
-                .font(.system(size: 16))
-                .foregroundStyle(Theme.accent)
-            TextField(
-                "",
-                text: Binding(
-                    get: { model.seekQuery },
-                    set: {
-                        model.seekQuery = $0
-                        model.seekIndex = 0
-                    }
-                ),
-                prompt: Text("Type what you see…").foregroundStyle(.white.opacity(0.55))
-            )
-            .textFieldStyle(.plain)
-            .font(.system(size: 16))
-            .foregroundStyle(.white)
-            .tint(.white)
-            .focusEffectDisabled()
-            .focused($focused)
-            .autocorrectionDisabled()
-            if !model.seekCount.isEmpty {
-                Text(model.seekCount)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.white.opacity(0.55))
-                    .lineLimit(1)
-            }
-        }
-        .padding(.horizontal, 18)
-        .frame(width: 480, height: 48)
-        .background(Color.black, in: UnevenRoundedRectangle(bottomLeadingRadius: 24, bottomTrailingRadius: 24))
-        .frame(maxWidth: .infinity)
-        .offset(y: dropped ? 0 : -48)
     }
 
     private func hit(_ span: SeekSpan, current: Bool) -> some View {
@@ -201,17 +145,6 @@ struct SeekView: View {
             }
             .frame(width: span.w, height: span.h)
             .position(x: span.x + span.w / 2, y: span.y + span.h / 2)
-    }
-
-    private func showPill() {
-        focused = true
-        let shown = $dropped
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) { shown.wrappedValue = false }
-        DispatchQueue.main.async {
-            withAnimation(.easeOut(duration: 0.16)) { shown.wrappedValue = true }
-        }
     }
 }
 

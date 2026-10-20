@@ -48,6 +48,8 @@ final class Model {
     var query = ""
     var commands: [Command] = []
     var selected = 0
+    /// First row drawn in the 8-row window. Moves only when the selection leaves it.
+    var listStart = 0
     var busy = false
     var mode: Mode = .search
     var ready = false
@@ -56,8 +58,9 @@ final class Model {
     var toastIsError = false
     var seekQuery = ""
     var seekIndex = 0
-    var seekFocus = 0
     var seekScan: SeekScan?
+    /// Backtick has switched the island to click, before the scan comes back.
+    var clicking = false
     var appIcons: [String: NSImage] = [:]
     var argDrafts: [String] = []
     var argField = 0
@@ -69,6 +72,10 @@ final class Model {
     var chatTurns: [ChatTurn] = []
     var chatInput = ""
     var chatStreaming = false
+    /// `system`, `light`, or `dark`.
+    var themePreference = "system"
+    /// `island` or `spotlight`.
+    var presentation = "island"
 
     private var chatRequestId: String?
     private var chatSystem: String?
@@ -101,11 +108,12 @@ final class Model {
     }
 
     var islandHeight: CGFloat {
+        if clicking || seekScan != nil { return 58 + 38 }
         switch mode {
         case .search:
-            58 + listHeight + 38
+            return 58 + listHeight + 38
         case .args, .output, .chat:
-            480
+            return 480
         }
     }
 
@@ -150,9 +158,12 @@ final class Model {
         host.wantsLayer = true
         host.layer?.backgroundColor = NSColor.clear.cgColor
         launcher.contentView = host
+        launcher.sharingType = .none
         self.launcher = launcher
 
         let seek = IslandPanel()
+        seek.refusesKey = true
+        seek.sharingType = .none
         let seekHost = ClearHost(rootView: SeekView(model: self))
         seekHost.wantsLayer = true
         seekHost.layer?.backgroundColor = NSColor.clear.cgColor
@@ -203,7 +214,7 @@ final class Model {
     }
 
     func show() {
-        if seekScan != nil { return }
+        if clicking || seekScan != nil { return }
         if !readKeep {
             keepOnBlur = ProcessInfo.processInfo.environment["OPENCAST_KEEP_ON_BLUR"] != nil
             readKeep = true
@@ -233,11 +244,12 @@ final class Model {
             launcher.makeKeyAndOrderFront(nil)
         }
         focusTick += 1
+        refreshSettings()
     }
 
     func hide(fromRust: Bool = false) {
         // ExecResult hide is applied after the seek event. Leave the overlay up.
-        if seekScan != nil { return }
+        if clicking || seekScan != nil { return }
         guard !hiding else { return }
         let up = launcher?.isVisible == true || seek?.isVisible == true || NSApp.isActive
         guard up else { return }
@@ -252,7 +264,7 @@ final class Model {
     }
 
     func launcherResignedKey() {
-        if seekScan != nil { return }
+        if clicking || seekScan != nil { return }
         if keepOnBlur { return }
         hide()
     }
@@ -296,7 +308,10 @@ final class Model {
     }
 
     func handleKey(_ event: NSEvent) -> Bool {
-        if seekScan != nil, seek?.isKeyWindow == true { return seekKey(event) }
+        if clicking || seekScan != nil {
+            guard launcher?.isKeyWindow == true || seek?.isKeyWindow == true else { return false }
+            return seekKey(event)
+        }
         guard launcher?.isKeyWindow == true else { return false }
         let mods = event.modifierFlags.intersection([.command, .shift, .option, .control])
         if event.keyCode == 53, mods.isEmpty {
@@ -331,11 +346,39 @@ final class Model {
             appIcons[path] = image
         }
         commands = parsed
-        if selected >= rows.count { selected = 0 }
+        if selected >= rows.count {
+            selected = 0
+            listStart = 0
+        }
+        alignList()
         noteContentChanged()
     }
 
+    private func startClick() {
+        guard !clicking, !busy else { return }
+        clicking = true
+        seekQuery = ""
+        seekIndex = 0
+        noteContentChanged()
+        focusTick += 1
+        execute(id: "seek", args: [])
+    }
+
+    private func cancelClick() {
+        clicking = false
+        seekScan = nil
+        seekQuery = ""
+        seekIndex = 0
+        seek?.orderOut(nil)
+        noteContentChanged()
+        focusTick += 1
+    }
+
     private func perform(_ id: String) {
+        if id == "seek" {
+            startClick()
+            return
+        }
         execute(id: id, args: [])
     }
 
@@ -363,6 +406,7 @@ final class Model {
             noteContentChanged()
             flash(text, error: false, thenHide: true)
         case .error(let message):
+            if clicking, seekScan == nil { cancelClick() }
             flash(message, error: true, thenHide: false)
         case .output(let title, let text):
             mode = .output(title: title, text: text)
@@ -372,7 +416,53 @@ final class Model {
         case .args(let command):
             showArgs(command)
         case .failure(let message):
+            if clicking, seekScan == nil { cancelClick() }
             flash(message, error: true, thenHide: false)
+        case .query(let q):
+            mode = .search
+            query = q
+            selected = 0
+            listStart = 0
+            noteContentChanged()
+            focusTick += 1
+            if ready { search() }
+        case .theme(let theme):
+            themePreference = theme
+            flash("Appearance: \(theme.capitalized)", error: false, thenHide: false)
+        case .presentation(let mode):
+            presentation = mode
+            noteContentChanged()
+            flash("Presentation: \(mode.capitalized)", error: false, thenHide: false)
+        case .runSelected:
+            activate(selected)
+        case .doEscape:
+            escape()
+        case .hint(let text):
+            flash(text, error: false, thenHide: false)
+        case .askAi:
+            openChat(prompt: trimmedQuery.isEmpty ? nil : trimmedQuery, system: nil, provider: nil, model: nil, autoSend: !trimmedQuery.isEmpty)
+        case .clickMode:
+            // Seek event attaches the overlay. Keep the island up.
+            if !clicking {
+                clicking = true
+                seekQuery = ""
+                seekIndex = 0
+                noteContentChanged()
+                focusTick += 1
+            }
+        }
+    }
+
+    func refreshSettings() {
+        Task.detached {
+            let raw = Engine.call(["op": "settings"])
+            await MainActor.run {
+                if let theme = raw["theme"] as? String { Model.shared.themePreference = theme }
+                if let presentation = raw["presentation"] as? String {
+                    Model.shared.presentation = presentation
+                    Model.shared.noteContentChanged()
+                }
+            }
         }
     }
 
@@ -406,7 +496,26 @@ final class Model {
     private func move(_ delta: Int) {
         let count = rows.count
         guard count > 0 else { return }
-        selected = (selected + delta + count) % count
+        let next = (selected + delta + count) % count
+        let wrapped = (delta > 0 && next < selected) || (delta < 0 && next > selected)
+        selected = next
+        if wrapped { listStart = delta > 0 ? 0 : max(0, count - 8) }
+        alignList()
+    }
+
+    /// Keep `selected` inside the visible window, and keep that window full.
+    private func alignList() {
+        let count = rows.count
+        let window = 8
+        guard count > 0 else {
+            listStart = 0
+            return
+        }
+        if selected < listStart { listStart = selected }
+        if selected >= listStart + window { listStart = selected - window + 1 }
+        let maxStart = max(0, count - window)
+        if listStart > maxStart { listStart = maxStart }
+        if listStart < 0 { listStart = 0 }
     }
 
     private func escape() {
@@ -466,6 +575,10 @@ final class Model {
             if !trimmedQuery.isEmpty {
                 openChat(prompt: trimmedQuery, system: nil, provider: nil, model: nil, autoSend: true)
             }
+            return true
+        }
+        if mods.isEmpty, event.charactersIgnoringModifiers == "`" {
+            startClick()
             return true
         }
         return false
@@ -702,25 +815,30 @@ final class Model {
     }
 
     private func presentSeek(_ scan: SeekScan) {
-        seekScan = scan
-        seekQuery = ""
-        seekIndex = 0
         guard let seek else { return }
-        let screen = NSScreen.screens.max(by: { $0.frame.maxY < $1.frame.maxY }) ?? NSScreen.main!
+        clicking = true
+        seekScan = scan
+        let anchor = NSScreen.screens.max(by: { $0.frame.maxY < $1.frame.maxY }) ?? NSScreen.main!
         let x = scan.monitor.x
-        let y = screen.frame.maxY - scan.monitor.y - scan.monitor.h
+        let y = anchor.frame.maxY - scan.monitor.y - scan.monitor.h
         seek.setFrame(NSRect(x: x, y: y, width: scan.monitor.w, height: scan.monitor.h), display: true)
-        launcher?.orderOut(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        seek.makeKeyAndOrderFront(nil)
-        seekFocus += 1
+        seek.orderFront(nil)
+        launcher?.orderFront(nil)
+    }
+
+    private func endSeek() {
+        cancelClick()
     }
 
     private func seekKey(_ event: NSEvent) -> Bool {
         let mods = event.modifierFlags.intersection([.command, .shift, .option, .control])
         if event.keyCode == 53, mods.isEmpty {
-            Task.detached { _ = Engine.call(["op": "seekClose"]) }
+            endSeek()
             return true
+        }
+        if seekScan == nil {
+            // OCR still running: swallow Return/Tab so we do not activate a command.
+            return event.keyCode == 36 || event.keyCode == 76 || event.keyCode == 48
         }
         if event.keyCode == 48, mods.isEmpty || mods == .shift {
             stepSeek(mods == .shift ? -1 : 1)
@@ -751,21 +869,25 @@ final class Model {
         let match = spans[cursor]
         let x = Double(scan.monitor.x + match.x + match.w / 2)
         let y = Double(scan.monitor.y + match.y + match.h / 2)
+        clicking = false
         seekScan = nil
         seekQuery = ""
         seekIndex = 0
+        seek?.orderOut(nil)
         hide(fromRust: true)
         Task.detached { _ = Engine.call(["op": "seekClick", "x": x, "y": y]) }
     }
 
     private func frame(on screen: NSScreen, height: CGFloat) -> NSRect {
         let room = Theme.shadowRoom
-        return NSRect(
-            x: screen.frame.midX - 380 - room,
-            y: screen.frame.maxY - height - room,
-            width: 760 + room * 2,
-            height: height + room
-        )
+        let width = 760 + room * 2
+        let topRoom: CGFloat = presentation == "spotlight" ? room : 0
+        let fullHeight = height + room + topRoom
+        let x = screen.frame.midX - 380 - room
+        let y: CGFloat = presentation == "spotlight"
+            ? screen.frame.midY - fullHeight / 2
+            : screen.frame.maxY - height - room
+        return NSRect(x: x, y: y, width: width, height: fullHeight)
     }
 }
 
@@ -791,7 +913,10 @@ final class IslandPanel: NSPanel {
         acceptsMouseMovedEvents = true
     }
 
-    override var canBecomeKey: Bool { true }
+    /// The match overlay must not take the key window from the search island.
+    var refusesKey = false
+
+    override var canBecomeKey: Bool { !refusesKey }
     override var canBecomeMain: Bool { true }
 }
 

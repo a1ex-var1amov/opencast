@@ -26,10 +26,43 @@ impl CommandKind {
             Self::Ai => 2,
             Self::Script => 3,
             Self::Quicklink => 4,
-            Self::Layout => 5,
-            Self::Builtin => 6,
-            Self::Window => 7,
+            Self::Window => 5,
+            Self::Layout => 6,
+            Self::Builtin => 7,
         }
+    }
+
+    /// Category names Raycast-style search promotes when the query looks like a type.
+    fn category_aliases(self) -> &'static [&'static str] {
+        match self {
+            Self::Window => &["window", "windows", "snap", "tile", "wm", "rectangle"],
+            Self::Layout => &["layout", "layouts", "workspace", "arrangement"],
+            Self::Ai => &["ai", "llm"],
+            Self::App => &["app", "apps", "application", "applications"],
+            Self::Script => &["script", "scripts"],
+            Self::Quicklink => &["quicklink", "quicklinks"],
+            Self::Builtin => &["builtin"],
+            Self::Calculator => &["calc", "calculator"],
+        }
+    }
+
+    /// Large boost when `q` looks like a type name (prefix of a category alias).
+    fn category_boost(self, q: &str) -> i64 {
+        let ql = q.trim().to_lowercase();
+        if ql.len() < 2 {
+            return 0;
+        }
+        for alias in self.category_aliases() {
+            // "windo" → window; require the alias to grow from the query (not "sett" → settings-on-builtin).
+            if alias.starts_with(&ql) {
+                return 400;
+            }
+            // Full alias typed, maybe with more: "window left"
+            if ql.len() >= alias.len() && ql.starts_with(alias) {
+                return 400;
+            }
+        }
+        0
     }
 }
 
@@ -50,6 +83,9 @@ pub struct Command {
     pub kind: CommandKind,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub arguments: Vec<Argument>,
+    /// Global hotkey bound to this command, when one exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hotkey: Option<String>,
     #[serde(skip)]
     pub keywords: Vec<String>,
 }
@@ -94,6 +130,7 @@ impl Registry {
     fn score(&self, c: &Command, q: &str) -> Option<i64> {
         let title_l = c.title.to_lowercase();
         let ql = q.to_lowercase();
+        let cat = c.kind.category_boost(q);
         let mut best = self.matcher.fuzzy_match(&c.title, q).map(|s| {
             // Strongly prefer prefix and word-start matches, like Raycast.
             let bonus = if title_l.starts_with(&ql) {
@@ -111,7 +148,11 @@ impl Registry {
                 best = Some(best.map_or(s, |b| b.max(s)));
             }
         }
-        best
+        // Category-only hit (e.g. "windo" → all window snaps) still ranks.
+        if best.is_none() && cat > 0 {
+            best = Some(0);
+        }
+        best.map(|s| s + cat)
     }
 
     /// Ranked results. An empty query lists commands (not apps) first.
@@ -127,6 +168,7 @@ impl Registry {
                 icon: Some("🧮".into()),
                 kind: CommandKind::Calculator,
                 arguments: vec![],
+                hotkey: None,
                 keywords: vec![],
             });
         }
@@ -165,7 +207,8 @@ mod tests {
             icon: None,
             kind,
             arguments: vec![],
-            keywords: kw.iter().map(|s| s.to_string()).collect(),
+            hotkey: None,
+                keywords: kw.iter().map(|s| s.to_string()).collect(),
         }
     }
 
@@ -174,8 +217,27 @@ mod tests {
             cmd("app:safari", "Safari", CommandKind::App, &[]),
             cmd("app:settings", "System Settings", CommandKind::App, &[]),
             cmd("app:slack", "Slack", CommandKind::App, &[]),
+            cmd("app:window-app", "Window Manager Helper", CommandKind::App, &[]),
             cmd("ai:fix", "Fix Spelling and Grammar", CommandKind::Ai, &["proofread"]),
             cmd("builtin:reload", "Reload Commands", CommandKind::Builtin, &[]),
+            cmd(
+                "window:left-half",
+                "Left Half",
+                CommandKind::Window,
+                &["window", "snap"],
+            ),
+            cmd(
+                "window:maximize",
+                "Maximize",
+                CommandKind::Window,
+                &["window", "snap"],
+            ),
+            cmd(
+                "layout:remember",
+                "Remember Layout",
+                CommandKind::Layout,
+                &["layout", "workspace"],
+            ),
         ])
     }
 
@@ -210,5 +272,28 @@ mod tests {
         let res = reg().search("12*3", 10);
         assert_eq!(res[0].kind, CommandKind::Calculator);
         assert_eq!(res[0].title, "36");
+    }
+
+    #[test]
+    fn category_prefix_promotes_window_commands() {
+        let res = reg().search("windo", 10);
+        assert!(res.len() >= 2);
+        assert_eq!(res[0].kind, CommandKind::Window);
+        assert_eq!(res[1].kind, CommandKind::Window);
+        let win = res.iter().position(|c| c.kind == CommandKind::Window).unwrap();
+        let decoy = res.iter().position(|c| c.id == "app:window-app").unwrap();
+        assert!(win < decoy);
+    }
+
+    #[test]
+    fn category_layout_beats_unrelated_apps() {
+        let res = reg().search("layout", 5);
+        assert_eq!(res[0].kind, CommandKind::Layout);
+    }
+
+    #[test]
+    fn category_ai_prefix() {
+        let res = reg().search("ai", 5);
+        assert_eq!(res[0].kind, CommandKind::Ai);
     }
 }

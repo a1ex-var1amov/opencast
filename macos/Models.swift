@@ -20,6 +20,7 @@ struct Command: Identifiable, Equatable, Sendable {
     var icon: String?
     var kind: Kind
     var arguments: [Argument]
+    var hotkey: String?
 
     enum Kind: String, Equatable, Sendable {
         case builtin, ai, script, quicklink, app, calculator, window, layout
@@ -49,6 +50,7 @@ struct Command: Identifiable, Equatable, Sendable {
         subtitle = raw["subtitle"] as? String
         icon = raw["icon"] as? String
         arguments = (raw["arguments"] as? [[String: Any]])?.compactMap(Argument.init) ?? []
+        hotkey = raw["hotkey"] as? String
     }
 }
 
@@ -81,6 +83,14 @@ enum ExecOutcome: Sendable {
     case chat(prompt: String?, system: String?, provider: String?, model: String?, autoSend: Bool)
     case args(Command)
     case failure(String)
+    case query(String)
+    case theme(String)
+    case presentation(String)
+    case runSelected
+    case doEscape
+    case hint(String)
+    case askAi
+    case clickMode
 
     init(_ raw: [String: Any]) {
         switch raw["type"] as? String {
@@ -106,6 +116,22 @@ enum ExecOutcome: Sendable {
             } else {
                 self = .failure("Bad arguments payload")
             }
+        case "query":
+            self = .query(raw["query"] as? String ?? "")
+        case "theme":
+            self = .theme(raw["theme"] as? String ?? "system")
+        case "presentation":
+            self = .presentation(raw["presentation"] as? String ?? "island")
+        case "runSelected":
+            self = .runSelected
+        case "doEscape":
+            self = .doEscape
+        case "hint":
+            self = .hint(raw["text"] as? String ?? "")
+        case "askAi":
+            self = .askAi
+        case "clickMode":
+            self = .clickMode
         default:
             self = .failure(raw["error"] as? String ?? "Unknown result")
         }
