@@ -3,7 +3,11 @@ import SwiftUI
 struct ChatView: View {
     @Bindable var model: Model
     @FocusState private var composer: Bool
-    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorScheme) private var systemScheme
+    private var scheme: ColorScheme {
+        let _ = model.appearanceEpoch
+        return Theme.scheme(preference: model.themePreference, system: systemScheme)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -140,6 +144,7 @@ struct ChatView: View {
     private var field: some View {
         TextEditor(text: $model.chatInput)
             .font(.system(size: 15))
+            .foregroundStyle(Theme.primary(scheme))
             .scrollContentBackground(.hidden)
             .scrollIndicators(.never)
             .focused($composer)
@@ -232,7 +237,9 @@ private struct FenceBlock: View {
     var code: String
     var copy: (String) -> Void
     @State private var copied = false
-    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorScheme) private var systemScheme
+    @Environment(\.themePreference) private var themePreference
+    private var scheme: ColorScheme { Theme.scheme(preference: themePreference, system: systemScheme) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

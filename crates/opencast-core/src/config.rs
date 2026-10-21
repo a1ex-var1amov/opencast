@@ -35,7 +35,19 @@ pub struct Config {
     #[serde(default)]
     pub quicklinks: Vec<QuicklinkConfig>,
     #[serde(default)]
+    pub snippets: Vec<SnippetConfig>,
+    #[serde(default)]
     pub hotkeys: Vec<HotkeyBinding>,
+}
+
+/// Text expansion: run the command to copy (and paste when possible).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnippetConfig {
+    pub keyword: String,
+    pub name: Option<String>,
+    pub text: String,
+    #[serde(default)]
+    pub keywords: Vec<String>,
 }
 
 /// A global hotkey bound to any command: an app, a window action, an AI

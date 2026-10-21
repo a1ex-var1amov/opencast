@@ -9,10 +9,15 @@ pub mod apps;
 pub mod calc;
 pub mod commands;
 pub mod config;
+pub mod emoji;
 pub mod engine;
+pub mod files;
 pub mod layouts;
+pub mod notes;
+pub mod pins;
 pub mod providers;
 pub mod scripts;
+pub mod usage;
 
 pub use commands::{Argument, Command, CommandKind, Registry};
 pub use config::Config;

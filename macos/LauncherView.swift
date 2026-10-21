@@ -4,10 +4,14 @@ import SwiftUI
 struct LauncherView: View {
     @Bindable var model: Model
     @FocusState private var focused: Bool
-    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorScheme) private var systemScheme
     @State private var pointer = CGPoint(x: -1_000_000, y: -1_000_000)
     @State private var reduceTransparency = Theme.reduceTransparency
 
+    private var scheme: ColorScheme {
+        let _ = model.appearanceEpoch
+        return Theme.scheme(preference: model.themePreference, system: systemScheme)
+    }
     private var isSpotlight: Bool { model.presentation == "spotlight" }
 
     var body: some View {
@@ -15,6 +19,8 @@ struct LauncherView: View {
             switch model.mode {
             case .search:
                 search
+            case .actions(let command):
+                ActionsPane(model: model, command: command)
             case .args(let command):
                 ArgsForm(model: model, command: command)
             case .output(let title, let text):
@@ -25,7 +31,9 @@ struct LauncherView: View {
         }
         .foregroundStyle(Theme.primary(scheme))
         .background { panelFill }
-        .preferredColorScheme(model.themePreference == "light" ? .light : model.themePreference == "dark" ? .dark : nil)
+        .environment(\.themePreference, model.themePreference)
+        // Accessory apps: nil preferredColorScheme does not track day/night — pin to resolved scheme.
+        .preferredColorScheme(scheme)
         .overlay(alignment: .bottom) {
             if let text = model.toastText {
                 Text(text)
@@ -41,10 +49,6 @@ struct LauncherView: View {
         .ignoresSafeArea()
         .overlay { panelShape.stroke(Theme.stroke(scheme), lineWidth: 0.5) }
         .compositingGroup()
-        .shadow(color: Theme.shadow(scheme), radius: Theme.shadowRoom, y: isSpotlight ? 12 : 22)
-        .padding(.horizontal, Theme.shadowRoom)
-        .padding(.bottom, Theme.shadowRoom)
-        .padding(.top, isSpotlight ? Theme.shadowRoom : 0)
         .onAppear { selectField() }
         .onChange(of: model.focusTick) { _, _ in selectField() }
         .onChange(of: model.ready) { _, ready in
@@ -110,6 +114,8 @@ struct LauncherView: View {
             )
             .textFieldStyle(.plain)
             .font(.system(size: 19))
+            .foregroundStyle(Theme.primary(scheme))
+            .tint(Theme.accent)
             .focusEffectDisabled()
             .focused($focused)
             .autocorrectionDisabled()
@@ -149,9 +155,10 @@ struct LauncherView: View {
             switch row {
             case .ask:
                 Image(systemName: "sparkles")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 16, weight: .semibold))
+                    .symbolRenderingMode(.hierarchical)
                     .foregroundStyle(Theme.accent)
-                    .frame(width: 24, height: 24)
+                    .frame(width: 28, height: 28)
                 Text("Ask AI “\(model.trimmedQuery)”")
                     .lineLimit(1)
                 Spacer(minLength: 8)
@@ -211,28 +218,55 @@ struct LauncherView: View {
     }
 
     @ViewBuilder private func icon(_ command: Command) -> some View {
-        if command.kind == .app, let image = model.appIcons[String(command.id.dropFirst(4))] {
+        if command.kind == .clipboard,
+           let image = ClipboardHistory.shared.image(for: command.id)
+        {
             Image(nsImage: image)
                 .resizable()
                 .interpolation(.high)
-                .frame(width: 24, height: 24)
-        } else if let name = Theme.symbol(for: command),
-                  NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil {
+                .frame(width: 28, height: 28)
+                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+        } else if let path = fileIconPath(command), let image = model.appIcons[path] {
+            Image(nsImage: image)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 28, height: 28)
+        } else if let name = Theme.resolvedSymbol(for: command) {
             Image(systemName: name)
-                .font(.system(size: 16))
-                .frame(width: 24, height: 24)
+                .font(.system(size: 17, weight: .medium))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(Theme.primary(scheme))
+                .frame(width: 28, height: 28)
         } else {
             Text(command.id == "window:center-third" ? "\u{2153}" : (command.icon ?? ""))
                 .font(.system(size: 17))
-                .frame(width: 24, height: 24)
+                .frame(width: 28, height: 28)
+        }
+    }
+
+    private func fileIconPath(_ command: Command) -> String? {
+        switch command.kind {
+        case .app: String(command.id.dropFirst(4))
+        case .file: String(command.id.dropFirst(5))
+        default: nil
         }
     }
 
     private var footer: some View {
         HStack {
-            Text("OpenCast")
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.tertiary(scheme))
+            if model.searchingFiles {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.mini)
+                    Text("Searching files…")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.tertiary(scheme))
+                }
+            } else {
+                Text("OpenCast")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.tertiary(scheme))
+            }
             Spacer()
             HStack(spacing: 14) {
                 if model.clicking {
@@ -246,6 +280,7 @@ struct LauncherView: View {
                         hint(verb, "Return")
                         if !model.askSelected { hint("Ask AI", "Tab") }
                     }
+                    hint("Actions", "⌘K")
                     hint("Click", "`")
                 }
             }
@@ -270,14 +305,84 @@ struct LauncherView: View {
         guard case .search = model.mode else { return }
         focused = true
         DispatchQueue.main.async {
-            NSApp.keyWindow?.fieldEditor(false, for: nil)?.selectAll(nil)
+            let appearance = Theme.nsAppearance(preference: model.themePreference)
+            if let editor = NSApp.keyWindow?.fieldEditor(false, for: nil) as? NSTextView {
+                if let appearance {
+                    editor.appearance = appearance
+                    appearance.performAsCurrentDrawingAppearance {
+                        editor.textColor = .labelColor
+                        editor.insertionPointColor = .labelColor
+                    }
+                }
+                editor.selectAll(nil)
+            }
         }
+    }
+}
+
+private struct ActionsPane: View {
+    @Bindable var model: Model
+    var command: Command
+    @Environment(\.colorScheme) private var systemScheme
+    private var scheme: ColorScheme {
+        let _ = model.appearanceEpoch
+        return Theme.scheme(preference: model.themePreference, system: systemScheme)
+    }
+
+    private var actions: [Model.ActionRow] { model.actionRows(for: command) }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                BackButton { model.backToSearch(clearQuery: false) }
+                Text(command.title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .lineLimit(1)
+                Spacer()
+                Text("Actions")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.tertiary(scheme))
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 52)
+            ForEach(Array(actions.enumerated()), id: \.element.id) { index, action in
+                let on = index == model.selected
+                HStack {
+                    Text(action.title)
+                        .font(.system(size: 14))
+                    Spacer()
+                }
+                .padding(.horizontal, 14)
+                .frame(height: 36)
+                .background(on ? Theme.accent.opacity(0.18) : Color.clear)
+                .contentShape(Rectangle())
+                .onTapGesture { model.runAction(action.id, for: command) }
+            }
+            Spacer(minLength: 0)
+            HStack {
+                Text("Esc back")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.tertiary(scheme))
+                Spacer()
+                Text("Return")
+                    .font(.system(size: 12))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Theme.kbd(scheme), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .foregroundStyle(Theme.secondary(scheme))
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 38)
+        }
+        .frame(height: 52 + CGFloat(min(actions.count, 8)) * 36 + 38)
     }
 }
 
 struct BackButton: View {
     var action: () -> Void
-    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorScheme) private var systemScheme
+    @Environment(\.themePreference) private var themePreference
+    private var scheme: ColorScheme { Theme.scheme(preference: themePreference, system: systemScheme) }
 
     var body: some View {
         Button(action: action) {
@@ -295,7 +400,9 @@ struct BackButton: View {
 struct HintBar: View {
     var left: String
     var hints: [(String, String)]
-    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorScheme) private var systemScheme
+    @Environment(\.themePreference) private var themePreference
+    private var scheme: ColorScheme { Theme.scheme(preference: themePreference, system: systemScheme) }
 
     var body: some View {
         HStack {
@@ -326,7 +433,11 @@ private struct ArgsForm: View {
     @Bindable var model: Model
     var command: Command
     @FocusState private var focus: Int?
-    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorScheme) private var systemScheme
+    private var scheme: ColorScheme {
+        let _ = model.appearanceEpoch
+        return Theme.scheme(preference: model.themePreference, system: systemScheme)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -370,11 +481,12 @@ private struct ArgsForm: View {
     }
 
     @ViewBuilder private var argIcon: some View {
-        if let name = Theme.symbol(for: command),
-           NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil {
+        if let name = Theme.resolvedSymbol(for: command) {
             Image(systemName: name)
-                .font(.system(size: 16))
-                .frame(width: 18, height: 18)
+                .font(.system(size: 17, weight: .medium))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(Theme.primary(scheme))
+                .frame(width: 22, height: 22)
         } else if let icon = command.icon, !icon.isEmpty {
             Text(icon)
                 .font(.system(size: 17))
@@ -394,13 +506,15 @@ private struct ArgsForm: View {
         }
         .textFieldStyle(.plain)
         .font(.system(size: 14))
+        .foregroundStyle(Theme.primary(scheme))
+        .tint(Theme.accent)
         .focused($focus, equals: index)
         .focusEffectDisabled()
         .autocorrectionDisabled()
         .padding(.horizontal, 10)
         .frame(minWidth: 90, maxWidth: .infinity)
         .frame(height: 32)
-        .background(scheme == .dark ? Color.white.opacity(0.06) : Color.white, in: RoundedRectangle(cornerRadius: 8))
+        .background(scheme == .dark ? Color.white.opacity(0.06) : Color.black.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
                 .stroke(focus == index ? Theme.accent : Theme.stroke(scheme).opacity(0.7), lineWidth: 1)
@@ -415,7 +529,9 @@ private struct ArgsForm: View {
 private struct OutputPane: View {
     var title: String
     var text: String
-    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorScheme) private var systemScheme
+    @Environment(\.themePreference) private var themePreference
+    private var scheme: ColorScheme { Theme.scheme(preference: themePreference, system: systemScheme) }
 
     var body: some View {
         VStack(spacing: 0) {

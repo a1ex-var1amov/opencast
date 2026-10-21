@@ -23,7 +23,7 @@ struct Command: Identifiable, Equatable, Sendable {
     var hotkey: String?
 
     enum Kind: String, Equatable, Sendable {
-        case builtin, ai, script, quicklink, app, calculator, window, layout
+        case builtin, ai, script, quicklink, app, calculator, window, layout, file, snippet, clipboard
 
         var label: String {
             switch self {
@@ -35,6 +35,9 @@ struct Command: Identifiable, Equatable, Sendable {
             case .calculator: "Calculator"
             case .window: "Window"
             case .layout: "Layout"
+            case .file: "File"
+            case .snippet: "Snippet"
+            case .clipboard: "Clipboard"
             }
         }
     }
@@ -51,6 +54,16 @@ struct Command: Identifiable, Equatable, Sendable {
         icon = raw["icon"] as? String
         arguments = (raw["arguments"] as? [[String: Any]])?.compactMap(Argument.init) ?? []
         hotkey = raw["hotkey"] as? String
+    }
+
+    init(id: String, title: String, subtitle: String?, icon: String?, kind: Kind, arguments: [Argument], hotkey: String?) {
+        self.id = id
+        self.title = title
+        self.subtitle = subtitle
+        self.icon = icon
+        self.kind = kind
+        self.arguments = arguments
+        self.hotkey = hotkey
     }
 }
 
@@ -86,6 +99,7 @@ enum ExecOutcome: Sendable {
     case query(String)
     case theme(String)
     case presentation(String)
+    case stayAwake(String)
     case runSelected
     case doEscape
     case hint(String)
@@ -122,6 +136,8 @@ enum ExecOutcome: Sendable {
             self = .theme(raw["theme"] as? String ?? "system")
         case "presentation":
             self = .presentation(raw["presentation"] as? String ?? "island")
+        case "stayAwake":
+            self = .stayAwake(raw["mode"] as? String ?? "off")
         case "runSelected":
             self = .runSelected
         case "doEscape":

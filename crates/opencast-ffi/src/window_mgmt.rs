@@ -271,6 +271,8 @@ function run(argv) {
         monitor_containing(&rects, x, y).ok_or_else(|| anyhow!("no monitors found"))
     }
 
+    static PREV_RECT: std::sync::Mutex<Option<Rect>> = std::sync::Mutex::new(None);
+
     pub async fn apply_window_action(action: WindowAction) -> Result<()> {
         // Let focus return to the previous app after the panel hides.
         tokio::time::sleep(Duration::from_millis(180)).await;
@@ -284,6 +286,26 @@ function run(argv) {
             w: front.w,
             h: front.h,
         };
+        if action.is_restore() {
+            let prev = PREV_RECT
+                .lock()
+                .unwrap()
+                .take()
+                .ok_or_else(|| anyhow!("no previous window size to restore"))?;
+            return set_front_rect(prev, &front.app).await;
+        }
+        if !action.is_display_move() {
+            *PREV_RECT.lock().unwrap() = Some(current);
+        }
+        if action.is_display_move() {
+            let delta = if matches!(action, WindowAction::NextDisplay) {
+                1
+            } else {
+                -1
+            };
+            let t = adjacent_display_rect(current, front.menu, delta)?;
+            return set_front_rect(t, &front.app).await;
+        }
         let mon = monitor_at(front.x + front.w / 2.0, front.y + front.h / 2.0)?;
         // Work area: the monitor minus the menu bar. (The Dock is ignored;
         // macOS keeps windows from disappearing under it.)
@@ -294,12 +316,55 @@ function run(argv) {
             h: mon.h - front.menu,
         };
         let t = target_rect(action, work, current);
+        set_front_rect(t, &front.app).await
+    }
+
+    async fn set_front_rect(t: Rect, app: &str) -> Result<()> {
         let args = [t.x, t.y, t.w, t.h].map(|v| format!("{}", v.round())).to_vec();
         let reply = osascript(SET_RECT, &args).await?;
         if reply.contains("error") {
-            bail!("could not move the window ({}): {reply}", front.app);
+            bail!("could not move the window ({app}): {reply}");
         }
         Ok(())
+    }
+
+    fn adjacent_display_rect(current: Rect, menu: f64, delta: i32) -> Result<Rect> {
+        use core_graphics::display::CGDisplay;
+        let ids = CGDisplay::active_displays().map_err(|e| anyhow!("no monitors found ({e})"))?;
+        let mut rects: Vec<Rect> = ids
+            .into_iter()
+            .map(|id| {
+                let bounds = CGDisplay::new(id).bounds();
+                Rect {
+                    x: bounds.origin.x,
+                    y: bounds.origin.y,
+                    w: bounds.size.width,
+                    h: bounds.size.height,
+                }
+            })
+            .collect();
+        rects.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+        let cx = current.x + current.w / 2.0;
+        let cy = current.y + current.h / 2.0;
+        let idx = rects
+            .iter()
+            .position(|r| cx >= r.x && cx < r.x + r.w && cy >= r.y && cy < r.y + r.h)
+            .unwrap_or(0);
+        let n = rects.len();
+        let next = ((idx as i32 + delta).rem_euclid(n as i32)) as usize;
+        let mon = rects[next];
+        let work = Rect {
+            x: mon.x,
+            y: mon.y + menu,
+            w: mon.w,
+            h: mon.h - menu,
+        };
+        Ok(Rect {
+            x: work.x + (work.w - current.w).max(0.0) / 2.0,
+            y: work.y + (work.h - current.h).max(0.0) / 2.0,
+            w: current.w.min(work.w),
+            h: current.h.min(work.h),
+        })
     }
 
     pub async fn capture_layout() -> Result<Vec<AppWindows>> {

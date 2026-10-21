@@ -90,6 +90,15 @@ fn handle(request: &str) -> String {
                 }
                 serde_json::to_string(&r).unwrap_or_else(|_| r#"{"type":"error","message":"internal error"}"#.into())
             }
+            "pin" => {
+                let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("");
+                let pinned = with_engine(|engine| opencast_core::pins::toggle(&engine.config_dir, id));
+                serde_json::json!({ "pinned": pinned }).to_string()
+            }
+            "configDir" => {
+                let dir = with_engine(|engine| engine.config_dir.display().to_string());
+                serde_json::json!({ "path": dir }).to_string()
+            }
             "copy" => {
                 let text = v.get("text").and_then(|x| x.as_str()).unwrap_or("");
                 match crate::platform::write_clipboard(text) {
@@ -101,6 +110,17 @@ fn handle(request: &str) -> String {
                 let text = v.get("text").and_then(|x| x.as_str()).unwrap_or("").to_string();
                 let r = runtime().block_on(async {
                     crate::platform::write_clipboard(&text)?;
+                    emit(serde_json::json!({ "type": "hide" }));
+                    crate::platform::paste_into_frontmost().await
+                });
+                match r {
+                    Ok(()) => r#"{"ok":true}"#.into(),
+                    Err(e) => serde_json::json!({ "error": e }).to_string(),
+                }
+            }
+            // Paste whatever is already on the pasteboard (e.g. restored clip image).
+            "pasteFront" => {
+                let r = runtime().block_on(async {
                     emit(serde_json::json!({ "type": "hide" }));
                     crate::platform::paste_into_frontmost().await
                 });

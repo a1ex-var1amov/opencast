@@ -24,5 +24,16 @@
 	<true/>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>OpenCast reads the screen to find the text you typed.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>dev.opencast.launcher</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>opencast</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

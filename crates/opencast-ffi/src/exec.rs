@@ -43,6 +43,9 @@ pub enum ExecResult {
     Presentation {
         presentation: String,
     },
+    StayAwake {
+        mode: String,
+    },
     RunSelected,
     DoEscape,
     Hint {
@@ -99,6 +102,7 @@ pub async fn run_command(id: String, args: Vec<String>) -> ExecResult {
             engine.config.general.hyperkey,
         )
     });
+    opencast_core::usage::bump(&config_dir, &id);
     let plan = match plan {
         Ok(p) => p,
         Err(e) => return err(format!("{e:#}")),
@@ -246,9 +250,88 @@ pub async fn run_command(id: String, args: Vec<String>) -> ExecResult {
             | Builtin::ThemeDark
             | Builtin::PresentationIsland
             | Builtin::PresentationSpotlight
+            | Builtin::StayAwakeOff
+            | Builtin::StayAwakeIndefinite
+            | Builtin::StayAwake30m
+            | Builtin::StayAwake1h
+            | Builtin::StayAwake3h
             | Builtin::Settings
-            | Builtin::Shortcuts => err("settings builtins should resolve to Set* or FillQuery"),
+            | Builtin::Shortcuts
+            | Builtin::ClipboardHistory
+            | Builtin::SearchScreenshots
+            | Builtin::PasteLatestScreenshot
+            | Builtin::EmojiPicker
+            | Builtin::Notes
+            | Builtin::NewNote
+            | Builtin::ToggleDarkMode
+            | Builtin::VolumeUp
+            | Builtin::VolumeDown
+            | Builtin::VolumeMute
+            | Builtin::BrightnessUp
+            | Builtin::BrightnessDown
+            | Builtin::EmptyTrash
+            | Builtin::LockScreen
+            | Builtin::Sleep
+            | Builtin::EjectAll
+            | Builtin::QuitFrontApp
+            | Builtin::KillFrontApp => {
+                err("settings/system builtins should resolve to Set*/StayAwake/FillQuery/SystemShell")
+            }
         },
+        Plan::PasteText(text) => {
+            hide();
+            match crate::platform::write_clipboard(&text) {
+                Ok(()) => match crate::platform::paste_into_frontmost().await {
+                    Ok(()) => ExecResult::Hide,
+                    Err(e) => err(e),
+                },
+                Err(e) => err(e),
+            }
+        }
+        Plan::SystemShell(cmd) => {
+            hide();
+            match tokio::process::Command::new("sh")
+                .arg("-c")
+                .arg(cmd)
+                .status()
+                .await
+            {
+                Ok(s) if s.success() => ExecResult::Hide,
+                Ok(_) => err("system command failed"),
+                Err(e) => err(e),
+            }
+        }
+        Plan::QuitApp(name) => {
+            hide();
+            let script = format!(
+                "osascript -e 'tell application \"{}\" to quit'",
+                name.replace('\\', "\\\\").replace('"', "\\\"")
+            );
+            match tokio::process::Command::new("sh")
+                .arg("-c")
+                .arg(script)
+                .status()
+                .await
+            {
+                Ok(s) if s.success() => ExecResult::Hide,
+                Ok(_) => err(format!("could not quit {name}")),
+                Err(e) => err(e),
+            }
+        }
+        Plan::SaveNote { title, body } => {
+            if body.trim().is_empty() {
+                return err("note body is empty");
+            }
+            let note = opencast_core::notes::add(&config_dir, &title, &body);
+            let label = if note.title.is_empty() {
+                "untitled"
+            } else {
+                note.title.as_str()
+            };
+            ExecResult::Toast {
+                text: format!("Saved note · {label}"),
+            }
+        }
         Plan::SetTheme(theme) => match config::set_general_key(&config_dir, "theme", theme) {
             Ok(()) => ExecResult::Theme {
                 theme: theme.to_string(),
@@ -263,6 +346,9 @@ pub async fn run_command(id: String, args: Vec<String>) -> ExecResult {
                 Err(e) => err(format!("{e:#}")),
             }
         }
+        Plan::StayAwake(mode) => ExecResult::StayAwake {
+            mode: mode.to_string(),
+        },
         Plan::FillQuery(query) => ExecResult::Query { query },
         Plan::RunSelected => ExecResult::RunSelected,
         Plan::DoEscape => ExecResult::DoEscape,

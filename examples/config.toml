@@ -96,6 +96,22 @@ icon = "📝"
 prompt = "Summarize in 3-5 bullet points:\n\n{selection}"
 
 [[ai_commands]]
+id = "improve"
+title = "Improve Writing"
+icon = "✨"
+keywords = ["rewrite", "polish", "edit"]
+system = "You improve prose. Return only the improved text, no commentary."
+prompt = "Improve clarity and flow, keep the meaning and language:\n\n{selection}"
+
+[[ai_commands]]
+id = "translate"
+title = "Translate to English"
+icon = "🌐"
+keywords = ["translation", "english"]
+system = "You are a translator. Return only the English translation, no commentary."
+prompt = "Translate to English:\n\n{selection}"
+
+[[ai_commands]]
 id = "shell"
 title = "Shell Command For…"
 icon = "⌨️"
@@ -153,3 +169,21 @@ keywords = ["gh", "code"]
 title = "Search Kagi"
 url = "https://kagi.com/search?q={query}"
 icon = "🔎"
+
+# ---------------------------------------------------------------------------
+# Snippets. Search by keyword; Return pastes into the frontmost app.
+# ---------------------------------------------------------------------------
+
+[[snippets]]
+keyword = "sig"
+name = "Email signature"
+text = """
+Best,
+Alex
+"""
+keywords = ["signature", "email"]
+
+[[snippets]]
+keyword = "shrug"
+name = "Shrug"
+text = "¯\\_(ツ)_/¯"

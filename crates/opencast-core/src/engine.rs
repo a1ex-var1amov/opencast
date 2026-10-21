@@ -28,6 +28,29 @@ pub enum Builtin {
     PresentationSpotlight,
     Settings,
     Shortcuts,
+    StayAwakeOff,
+    StayAwakeIndefinite,
+    StayAwake30m,
+    StayAwake1h,
+    StayAwake3h,
+    EmptyTrash,
+    LockScreen,
+    Sleep,
+    EjectAll,
+    QuitFrontApp,
+    KillFrontApp,
+    ClipboardHistory,
+    SearchScreenshots,
+    PasteLatestScreenshot,
+    ToggleDarkMode,
+    VolumeUp,
+    VolumeDown,
+    VolumeMute,
+    BrightnessUp,
+    BrightnessDown,
+    EmojiPicker,
+    NewNote,
+    Notes,
 }
 
 const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
@@ -100,7 +123,7 @@ const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
         "settings",
         "Settings",
         "⚙️",
-        &["config", "preferences", "theme", "appearance", "presentation"],
+        &["config", "preferences", "theme", "appearance", "presentation", "awake"],
     ),
     (
         Builtin::Shortcuts,
@@ -108,6 +131,167 @@ const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
         "Shortcuts",
         "⌨️",
         &["hotkey", "keys", "keymap", "tab", "click", "shortcut"],
+    ),
+    (
+        Builtin::StayAwakeOff,
+        "stay-awake-off",
+        "Stay Awake: Off",
+        "💤",
+        &["awake", "caffeine", "sleep", "amphetamine", "keepingyouawake", "off"],
+    ),
+    (
+        Builtin::StayAwakeIndefinite,
+        "stay-awake-indefinite",
+        "Stay Awake: Indefinite",
+        "☕️",
+        &["awake", "caffeine", "sleep", "amphetamine", "keepingyouawake"],
+    ),
+    (
+        Builtin::StayAwake30m,
+        "stay-awake-30m",
+        "Stay Awake: 30 minutes",
+        "☕️",
+        &["awake", "caffeine", "sleep", "amphetamine", "keepingyouawake", "30"],
+    ),
+    (
+        Builtin::StayAwake1h,
+        "stay-awake-1h",
+        "Stay Awake: 1 hour",
+        "☕️",
+        &["awake", "caffeine", "sleep", "amphetamine", "keepingyouawake", "60"],
+    ),
+    (
+        Builtin::StayAwake3h,
+        "stay-awake-3h",
+        "Stay Awake: 3 hours",
+        "☕️",
+        &["awake", "caffeine", "sleep", "amphetamine", "keepingyouawake"],
+    ),
+    (
+        Builtin::ClipboardHistory,
+        "clipboard",
+        "Clipboard History",
+        "📋",
+        &["clip", "clipboard", "paste", "cb", "history"],
+    ),
+    (
+        Builtin::SearchScreenshots,
+        "screenshots",
+        "Search Screenshots",
+        "🖼",
+        &["shots", "screenshot", "screenshots", "capture", "ocr"],
+    ),
+    (
+        Builtin::PasteLatestScreenshot,
+        "paste-latest-screenshot",
+        "Paste Latest Screenshot",
+        "🖼",
+        &["screenshot", "paste", "latest", "shot"],
+    ),
+    (
+        Builtin::EmojiPicker,
+        "emoji",
+        "Emoji",
+        "😀",
+        &["emoji", "emo", "emojis", "glyph"],
+    ),
+    (
+        Builtin::Notes,
+        "notes",
+        "Notes",
+        "📝",
+        &["note", "notes", "memo"],
+    ),
+    (
+        Builtin::NewNote,
+        "new-note",
+        "New Note",
+        "📝",
+        &["note", "notes", "memo", "write"],
+    ),
+    (
+        Builtin::ToggleDarkMode,
+        "dark-mode",
+        "Toggle Dark Mode",
+        "🌗",
+        &["dark", "light", "appearance", "system", "macos"],
+    ),
+    (
+        Builtin::VolumeUp,
+        "volume-up",
+        "Volume Up",
+        "🔊",
+        &["volume", "sound", "audio", "louder"],
+    ),
+    (
+        Builtin::VolumeDown,
+        "volume-down",
+        "Volume Down",
+        "🔉",
+        &["volume", "sound", "audio", "quieter"],
+    ),
+    (
+        Builtin::VolumeMute,
+        "volume-mute",
+        "Toggle Mute",
+        "🔇",
+        &["volume", "mute", "unmute", "sound", "audio"],
+    ),
+    (
+        Builtin::BrightnessUp,
+        "brightness-up",
+        "Brightness Up",
+        "☀️",
+        &["brightness", "display", "screen", "brighter"],
+    ),
+    (
+        Builtin::BrightnessDown,
+        "brightness-down",
+        "Brightness Down",
+        "🌤",
+        &["brightness", "display", "screen", "dimmer"],
+    ),
+    (
+        Builtin::EmptyTrash,
+        "empty-trash",
+        "Empty Trash",
+        "🗑",
+        &["trash", "bin", "system"],
+    ),
+    (
+        Builtin::LockScreen,
+        "lock-screen",
+        "Lock Screen",
+        "🔒",
+        &["lock", "screensaver", "system"],
+    ),
+    (
+        Builtin::Sleep,
+        "sleep",
+        "Sleep",
+        "😴",
+        &["sleep", "suspend", "system"],
+    ),
+    (
+        Builtin::EjectAll,
+        "eject-all",
+        "Eject All",
+        "💿",
+        &["eject", "disk", "volume", "system"],
+    ),
+    (
+        Builtin::QuitFrontApp,
+        "quit-front",
+        "Quit Front App",
+        "✕",
+        &["quit", "close", "system"],
+    ),
+    (
+        Builtin::KillFrontApp,
+        "kill-front",
+        "Force Quit Front App",
+        "☠️",
+        &["kill", "force", "quit", "system"],
     ),
 ];
 
@@ -136,6 +320,10 @@ pub enum WindowAction {
     LastThird,
     Maximize,
     Center,
+    AlmostMaximize,
+    NextDisplay,
+    PreviousDisplay,
+    RestoreSize,
 }
 
 pub const WINDOW_ACTIONS: &[(WindowAction, &str, &str, &str)] = &[
@@ -151,7 +339,11 @@ pub const WINDOW_ACTIONS: &[(WindowAction, &str, &str, &str)] = &[
     (WindowAction::CenterThird, "center-third", "Center Third", "⅓"),
     (WindowAction::LastThird, "last-third", "Last Third", "⅓"),
     (WindowAction::Maximize, "maximize", "Maximize", "⛶"),
+    (WindowAction::AlmostMaximize, "almost-maximize", "Almost Maximize", "❐"),
     (WindowAction::Center, "center", "Center", "◎"),
+    (WindowAction::NextDisplay, "next-display", "Next Display", "→"),
+    (WindowAction::PreviousDisplay, "previous-display", "Previous Display", "←"),
+    (WindowAction::RestoreSize, "restore", "Restore Window Size", "↩"),
 ];
 
 impl WindowAction {
@@ -180,8 +372,19 @@ impl WindowAction {
             Self::CenterThird => (third, 0.0, third, 1.0),
             Self::LastThird => (2.0 * third, 0.0, third, 1.0),
             Self::Maximize => (0.0, 0.0, 1.0, 1.0),
-            Self::Center => return None,
+            Self::AlmostMaximize => (0.05, 0.05, 0.9, 0.9),
+            Self::Center | Self::NextDisplay | Self::PreviousDisplay | Self::RestoreSize => {
+                return None
+            }
         })
+    }
+
+    pub fn is_display_move(self) -> bool {
+        matches!(self, Self::NextDisplay | Self::PreviousDisplay)
+    }
+
+    pub fn is_restore(self) -> bool {
+        matches!(self, Self::RestoreSize)
     }
 }
 
@@ -218,8 +421,18 @@ pub enum Plan {
     SetTheme(&'static str),
     /// Write `presentation` to config and tell the panel to apply it.
     SetPresentation(&'static str),
+    /// Prevent idle sleep: `off`, `indefinite`, `30m`, `1h`, `3h`.
+    StayAwake(&'static str),
     /// Keep the panel open and set the search field.
     FillQuery(String),
+    /// Copy snippet text (shell pastes when possible).
+    PasteText(String),
+    /// Run a one-shot system shell line (empty trash, lock, …).
+    SystemShell(&'static str),
+    /// Quit an app by display name (AppleScript).
+    QuitApp(String),
+    /// Persist a quick note and toast.
+    SaveNote { title: String, body: String },
     /// Activate the current selection (Return).
     RunSelected,
     /// Esc behavior in the panel.
@@ -250,6 +463,7 @@ pub struct Engine {
     scripts: HashMap<String, ScriptMeta>,
     ai: HashMap<String, AiCommandConfig>,
     links: HashMap<String, QuicklinkConfig>,
+    snippets: HashMap<String, String>,
     /// `layout:restore:<slug>` command id → layout slug.
     restore_ids: HashMap<String, String>,
 }
@@ -304,6 +518,20 @@ impl Engine {
                 hotkey: None,
                 keywords: kw.iter().map(|s| s.to_string()).collect(),
             });
+        }
+        if let Some(c) = commands.iter_mut().find(|c| c.id == "builtin:new-note") {
+            c.arguments = vec![
+                Argument {
+                    placeholder: "Title".into(),
+                    optional: true,
+                    secure: false,
+                },
+                Argument {
+                    placeholder: "Body".into(),
+                    optional: false,
+                    secure: false,
+                },
+            ];
         }
 
         for (_, key, title, icon) in WINDOW_ACTIONS {
@@ -448,6 +676,29 @@ impl Engine {
             links.insert(id, l.clone());
         }
 
+        let mut snippets = HashMap::new();
+        for s in &config.snippets {
+            let key = s.keyword.trim();
+            if key.is_empty() || s.text.is_empty() {
+                continue;
+            }
+            let id = format!("snippet:{key}");
+            let mut kw = s.keywords.clone();
+            kw.push(key.to_string());
+            kw.push("snippet".into());
+            commands.push(Command {
+                id: id.clone(),
+                title: s.name.clone().unwrap_or_else(|| format!("Snippet: {key}")),
+                subtitle: Some(s.text.chars().take(60).collect::<String>()),
+                icon: Some("✂️".into()),
+                kind: CommandKind::Snippet,
+                arguments: vec![],
+                hotkey: None,
+                keywords: kw,
+            });
+            snippets.insert(id, s.text.clone());
+        }
+
         for a in app_list {
             let id = format!("app:{}", a.path.display());
             commands.push(Command {
@@ -523,12 +774,91 @@ impl Engine {
             scripts,
             ai,
             links,
+            snippets,
             restore_ids,
         }
     }
 
     pub fn search(&self, query: &str, limit: usize) -> Vec<Command> {
-        self.registry.search(query, limit)
+        let usage = crate::usage::counts(&self.config_dir);
+        let pins = crate::pins::load(&self.config_dir);
+        let mut out = self.registry.search_with_usage(query, limit, &usage, &pins);
+        let q = query.trim();
+        let ql = q.to_lowercase();
+
+        // Emoji overlay (not in the permanent registry).
+        for row in crate::emoji::matching(q, 20) {
+            if !out.iter().any(|c| c.id == row.id) {
+                out.push(row);
+            }
+        }
+
+        for row in crate::notes::matching(&self.config_dir, q, 20) {
+            if !out.iter().any(|c| c.id == row.id) {
+                out.push(row);
+            }
+        }
+
+        // Quit-by-name: only when the query looks like a quit.
+        if ql == "quit" || ql.starts_with("quit ") || ql.starts_with("kill ") {
+            let needle = ql
+                .trim_start_matches("quit")
+                .trim_start_matches("kill")
+                .trim();
+            for (id, path) in &self.apps {
+                let name = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("App");
+                if !needle.is_empty() && !name.to_lowercase().contains(needle) {
+                    continue;
+                }
+                let quit_id = format!("quit:{id}");
+                if out.iter().any(|c| c.id == quit_id) {
+                    continue;
+                }
+                out.push(Command {
+                    id: quit_id,
+                    title: format!("Quit {name}"),
+                    subtitle: Some("System".into()),
+                    icon: Some("✕".into()),
+                    kind: CommandKind::Builtin,
+                    arguments: vec![],
+                    hotkey: None,
+                    keywords: vec!["quit".into(), "close".into(), "kill".into()],
+                });
+                if out.len() >= limit {
+                    break;
+                }
+            }
+        }
+
+        // Fallback quicklinks when hits are thin.
+        if !q.is_empty() {
+            let strong = out
+                .iter()
+                .filter(|c| c.kind != CommandKind::Calculator)
+                .count();
+            if strong < 3 {
+                for link in &self.config.quicklinks {
+                    if !link.url.contains("{query}") {
+                        continue;
+                    }
+                    let id = format!("link:{}", link.key());
+                    if out.iter().any(|c| c.id == id) {
+                        continue;
+                    }
+                    if let Some(c) = self.registry.get(&id) {
+                        out.push(c.clone());
+                    }
+                }
+            }
+        }
+
+        if out.len() > limit {
+            out.truncate(limit);
+        }
+        out
     }
 
     pub fn scripts_dir(&self) -> PathBuf {
@@ -582,11 +912,97 @@ impl Engine {
                     Builtin::ThemeDark => Plan::SetTheme("dark"),
                     Builtin::PresentationIsland => Plan::SetPresentation("island"),
                     Builtin::PresentationSpotlight => Plan::SetPresentation("spotlight"),
+                    Builtin::StayAwakeOff => Plan::StayAwake("off"),
+                    Builtin::StayAwakeIndefinite => Plan::StayAwake("indefinite"),
+                    Builtin::StayAwake30m => Plan::StayAwake("30m"),
+                    Builtin::StayAwake1h => Plan::StayAwake("1h"),
+                    Builtin::StayAwake3h => Plan::StayAwake("3h"),
                     Builtin::Settings => Plan::FillQuery("settings".into()),
                     Builtin::Shortcuts => Plan::FillQuery("shortcut".into()),
+                    Builtin::ClipboardHistory => Plan::FillQuery("clip".into()),
+                    Builtin::SearchScreenshots => Plan::FillQuery("shots".into()),
+                    // Swift intercepts `builtin:paste-latest-screenshot` before execute.
+                    Builtin::PasteLatestScreenshot => Plan::Hint(
+                        "Paste Latest Screenshot runs from the launcher".into(),
+                    ),
+                    Builtin::EmojiPicker => Plan::FillQuery("emoji".into()),
+                    Builtin::Notes => Plan::FillQuery("note".into()),
+                    Builtin::NewNote => {
+                        let title = args.first().cloned().unwrap_or_default();
+                        let body = args.get(1).cloned().unwrap_or_default();
+                        let (title, body) = if body.trim().is_empty() {
+                            (String::new(), title)
+                        } else {
+                            (title, body)
+                        };
+                        Plan::SaveNote { title, body }
+                    }
+                    Builtin::ToggleDarkMode => Plan::SystemShell(
+                        "osascript -e 'tell application \"System Events\" to tell appearance preferences to set dark mode to not dark mode'",
+                    ),
+                    Builtin::VolumeUp => Plan::SystemShell(
+                        "osascript -e 'set volume output volume (output volume of (get volume settings) + 10)'",
+                    ),
+                    Builtin::VolumeDown => Plan::SystemShell(
+                        "osascript -e 'set volume output volume (output volume of (get volume settings) - 10)'",
+                    ),
+                    Builtin::VolumeMute => Plan::SystemShell(
+                        "osascript -e 'set volume output muted not (output muted of (get volume settings))'",
+                    ),
+                    // Accessibility key codes (144/145) — needs Accessibility permission.
+                    Builtin::BrightnessUp => Plan::SystemShell(
+                        "osascript -e 'tell application \"System Events\" to key code 145'",
+                    ),
+                    Builtin::BrightnessDown => Plan::SystemShell(
+                        "osascript -e 'tell application \"System Events\" to key code 144'",
+                    ),
+                    Builtin::EmptyTrash => Plan::SystemShell(
+                        "osascript -e 'tell application \"Finder\" to empty the trash'",
+                    ),
+                    Builtin::LockScreen => Plan::SystemShell(
+                        "osascript -e 'tell application \"System Events\" to keystroke \"q\" using {command down, control down}'",
+                    ),
+                    Builtin::Sleep => {
+                        Plan::SystemShell("osascript -e 'tell application \"System Events\" to sleep'")
+                    }
+                    Builtin::EjectAll => Plan::SystemShell(
+                        "osascript -e 'tell application \"Finder\" to eject (every disk whose ejectable is true)'",
+                    ),
+                    Builtin::QuitFrontApp => Plan::SystemShell(
+                        "osascript -e 'tell application \"System Events\" to keystroke \"q\" using command down'",
+                    ),
+                    Builtin::KillFrontApp => Plan::SystemShell(
+                        "osascript -e 'tell application \"System Events\" to set pid to unix id of first process whose frontmost is true' -e 'do shell script \"kill -9 \" & pid'",
+                    ),
                     other => Plan::Builtin(*other),
                 })
                 .ok_or_else(|| anyhow::anyhow!("unknown builtin `{key}`"));
+        }
+        if let Some(path) = id.strip_prefix("file:") {
+            return Ok(Plan::OpenUrl(path.to_string()));
+        }
+        if let Some(glyph) = crate::emoji::glyph(id) {
+            return Ok(Plan::PasteText(glyph.to_string()));
+        }
+        if id.starts_with("note:") {
+            if let Some(n) = crate::notes::get(&self.config_dir, id) {
+                return Ok(Plan::PasteText(n.body));
+            }
+            bail!("note not found");
+        }
+        if let Some(app_id) = id.strip_prefix("quit:") {
+            if let Some(path) = self.apps.get(app_id) {
+                let name = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("Unknown")
+                    .to_string();
+                return Ok(Plan::QuitApp(name));
+            }
+            bail!("unknown app to quit");
+        }
+        if let Some(text) = self.snippets.get(id) {
+            return Ok(Plan::PasteText(text.clone()));
         }
         match id {
             "shortcut:return" => {

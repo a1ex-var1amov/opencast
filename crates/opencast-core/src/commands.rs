@@ -1,5 +1,7 @@
 //! The command registry and fuzzy search over it.
 
+use std::collections::HashMap;
+
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use serde::Serialize;
@@ -15,6 +17,9 @@ pub enum CommandKind {
     Calculator,
     Window,
     Layout,
+    File,
+    Snippet,
+    Clipboard,
 }
 
 impl CommandKind {
@@ -22,13 +27,16 @@ impl CommandKind {
     fn rank(self) -> u8 {
         match self {
             Self::Calculator => 0,
-            Self::App => 1,
-            Self::Ai => 2,
-            Self::Script => 3,
-            Self::Quicklink => 4,
-            Self::Window => 5,
-            Self::Layout => 6,
-            Self::Builtin => 7,
+            Self::Clipboard => 1,
+            Self::App => 2,
+            Self::Ai => 3,
+            Self::Snippet => 4,
+            Self::Script => 5,
+            Self::Quicklink => 6,
+            Self::File => 7,
+            Self::Window => 8,
+            Self::Layout => 9,
+            Self::Builtin => 10,
         }
     }
 
@@ -43,6 +51,9 @@ impl CommandKind {
             Self::Quicklink => &["quicklink", "quicklinks"],
             Self::Builtin => &["builtin"],
             Self::Calculator => &["calc", "calculator"],
+            Self::File => &["file", "files", "find", "document", "documents"],
+            Self::Snippet => &["snippet", "snippets", "expand"],
+            Self::Clipboard => &["clip", "clipboard", "paste", "cb"],
         }
     }
 
@@ -127,7 +138,13 @@ impl Registry {
         self.commands.iter().find(|c| c.id == id)
     }
 
-    fn score(&self, c: &Command, q: &str) -> Option<i64> {
+    fn score(
+        &self,
+        c: &Command,
+        q: &str,
+        usage: &HashMap<String, u32>,
+        pins: &std::collections::HashSet<String>,
+    ) -> Option<i64> {
         let title_l = c.title.to_lowercase();
         let ql = q.to_lowercase();
         let cat = c.kind.category_boost(q);
@@ -152,11 +169,23 @@ impl Registry {
         if best.is_none() && cat > 0 {
             best = Some(0);
         }
-        best.map(|s| s + cat)
+        best.map(|s| {
+            s + cat + crate::usage::boost(usage, &c.id) + crate::pins::boost(pins, &c.id)
+        })
     }
 
     /// Ranked results. An empty query lists commands (not apps) first.
     pub fn search(&self, query: &str, limit: usize) -> Vec<Command> {
+        self.search_with_usage(query, limit, &HashMap::new(), &std::collections::HashSet::new())
+    }
+
+    pub fn search_with_usage(
+        &self,
+        query: &str,
+        limit: usize,
+        usage: &HashMap<String, u32>,
+        pins: &std::collections::HashSet<String>,
+    ) -> Vec<Command> {
         let q = query.trim();
         let mut out: Vec<Command> = Vec::new();
 
@@ -175,7 +204,15 @@ impl Registry {
 
         if q.is_empty() {
             let mut all: Vec<&Command> = self.commands.iter().collect();
-            all.sort_by_key(|c| (c.id != "builtin:chat", c.kind == CommandKind::App, c.kind.rank()));
+            all.sort_by_key(|c| {
+                (
+                    !pins.contains(&c.id),
+                    c.id != "builtin:chat",
+                    c.kind == CommandKind::App,
+                    std::cmp::Reverse(usage.get(&c.id).copied().unwrap_or(0)),
+                    c.kind.rank(),
+                )
+            });
             out.extend(all.into_iter().take(limit).cloned());
             return out;
         }
@@ -183,7 +220,7 @@ impl Registry {
         let mut scored: Vec<(i64, &Command)> = self
             .commands
             .iter()
-            .filter_map(|c| self.score(c, q).map(|s| (s, c)))
+            .filter_map(|c| self.score(c, q, usage, pins).map(|s| (s, c)))
             .collect();
         scored.sort_by(|a, b| {
             b.0.cmp(&a.0)

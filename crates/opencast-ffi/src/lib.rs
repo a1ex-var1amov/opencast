@@ -4,6 +4,8 @@
 #[cfg(target_os = "macos")]
 mod apps_mac;
 #[cfg(target_os = "macos")]
+mod files_mac;
+#[cfg(target_os = "macos")]
 mod dispatch;
 #[cfg(target_os = "macos")]
 mod exec;

@@ -29,8 +29,14 @@ final class Model {
     enum Mode: Equatable {
         case search
         case args(Command)
+        case actions(Command)
         case output(title: String, text: String)
         case chat(prompt: String?, system: String?, provider: String?, model: String?, autoSend: Bool)
+    }
+
+    struct ActionRow: Identifiable, Equatable {
+        var id: String
+        var title: String
     }
 
     enum Row: Identifiable, Equatable {
@@ -76,6 +82,10 @@ final class Model {
     var themePreference = "system"
     /// `island` or `spotlight`.
     var presentation = "island"
+    /// Soft Spotlight expand in flight (footer hint).
+    var searchingFiles = false
+    /// Bumps when macOS light/dark flips so Appearance: System redraws.
+    var appearanceEpoch = 0
 
     private var chatRequestId: String?
     private var chatSystem: String?
@@ -89,8 +99,10 @@ final class Model {
     private var keepOnBlur = false
     private var hiding = false
     private var searchGen = 0
+    private var fileSearchTask: Task<Void, Never>?
     private var toastTask: Task<Void, Never>?
     private var resignObserver: NSObjectProtocol?
+    private var appearanceObservers: [NSObjectProtocol] = []
     private var keyMonitor: Any?
 
     var trimmedQuery: String {
@@ -112,6 +124,9 @@ final class Model {
         switch mode {
         case .search:
             return 58 + listHeight + 38
+        case .actions(let command):
+            let n = actionRows(for: command).count
+            return 52 + CGFloat(min(max(n, 1), 8)) * 36 + 38
         case .args, .output, .chat:
             return 480
         }
@@ -177,10 +192,36 @@ final class Model {
         ) { _ in
             MainActor.assumeIsolated { Model.shared.launcherResignedKey() }
         }
+        // LSUIElement: Distributed note is the reliable day/night signal.
+        appearanceObservers = [
+            DistributedNotificationCenter.default.addObserver(
+                forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
+                object: nil,
+                queue: .main
+            ) { _ in
+                MainActor.assumeIsolated { Model.shared.systemAppearanceDidChange() }
+            },
+        ]
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             let handled = MainActor.assumeIsolated { Model.shared.handleKey(event) }
             return handled ? nil : event
         }
+        applyPanelAppearance()
+    }
+
+    /// Keep AppKit text fields / materials on the same light/dark as Appearance.
+    func applyPanelAppearance() {
+        let appearance = Theme.nsAppearance(preference: themePreference)
+        for panel in [launcher, seek].compactMap({ $0 }) {
+            panel.appearance = appearance
+            panel.contentView?.appearance = appearance
+        }
+    }
+
+    func systemAppearanceDidChange() {
+        appearanceEpoch += 1
+        guard themePreference == "system" else { return }
+        applyPanelAppearance()
     }
 
     func accept(_ raw: String) {
@@ -283,14 +324,91 @@ final class Model {
         searchGen += 1
         let gen = searchGen
         let q = query
+        fileSearchTask?.cancel()
+        searchingFiles = false
         Task.detached {
             let result = Engine.call(["op": "search", "query": q])
             guard let raw = result["commands"] as? [[String: Any]] else { return }
             let parsed = raw.compactMap(Command.init)
             await MainActor.run {
-                Model.shared.deliverSearch(parsed, gen: gen)
+                let merged = ClipboardHistory.shared.merge(into: parsed, query: q)
+                Model.shared.deliverSearch(merged, gen: gen)
+                Model.shared.scheduleFileSearch(query: q, inMenu: merged, gen: gen)
             }
         }
+    }
+
+    /// Soft Spotlight after in-menu paint — never blocks the first result list.
+    private func scheduleFileSearch(query: String, inMenu: [Command], gen: Int) {
+        fileSearchTask?.cancel()
+        let force = Self.forcesFileSearch(query)
+        let soft = Self.shouldSoftFileSearch(query: query, inMenu: inMenu)
+        guard force || soft else {
+            searchingFiles = false
+            return
+        }
+        searchingFiles = true
+        noteContentChanged()
+        let delayNs: UInt64 = force ? 50_000_000 : 180_000_000
+        fileSearchTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: delayNs)
+            guard !Task.isCancelled, gen == searchGen else { return }
+            let q = query
+            let files: [Command] = await Task.detached {
+                let raw = Engine.call(["op": "searchFiles", "query": q])
+                let list = raw["commands"] as? [[String: Any]] ?? []
+                return list.compactMap(Command.init)
+            }.value
+            guard !Task.isCancelled, gen == searchGen else { return }
+            searchingFiles = false
+            guard !files.isEmpty else {
+                noteContentChanged()
+                return
+            }
+            var seen = Set(commands.map(\.id))
+            var next = commands
+            for f in files where seen.insert(f.id).inserted {
+                next.append(f)
+            }
+            deliverSearch(next, gen: gen)
+        }
+    }
+
+    /// `file …` / `find …` / `content:` — user asked for disk explicitly.
+    static func forcesFileSearch(_ query: String) -> Bool {
+        let ql = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if ql.hasPrefix("content:") || ql.hasPrefix("in:") { return true }
+        for p in ["files ", "file ", "find ", "documents ", "document ", "docs "] {
+            if ql.hasPrefix(p) { return true }
+        }
+        return false
+    }
+
+    /// Soft expand when the query looks like a path/file, or in-menu hits are thin.
+    static func shouldSoftFileSearch(query: String, inMenu: [Command]) -> Bool {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard q.count >= 3 else { return false }
+        // Clipboard / screenshots browse — mdfind is useless and slow.
+        if ClipboardHistory.isBrowseQuery(q) || ClipboardHistory.isShotsQuery(q) { return false }
+        if looksLikePathOrFile(q) { return true }
+        let strong = inMenu.filter { cmd in
+            switch cmd.kind {
+            case .calculator, .clipboard: return false
+            default:
+                return !cmd.id.hasPrefix("emoji:") && !cmd.id.hasPrefix("note:")
+            }
+        }.count
+        return strong < 2
+    }
+
+    static func looksLikePathOrFile(_ q: String) -> Bool {
+        if q.hasPrefix("~") || q.hasPrefix("/") { return true }
+        if q.contains("/") { return true }
+        // `report.pdf`, `notes.txt`
+        guard let last = q.split(separator: "/").last else { return false }
+        let parts = last.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count >= 2, let ext = parts.last, (1 ... 5).contains(ext.count) else { return false }
+        return ext.allSatisfy { $0.isLetter || $0.isNumber }
     }
 
     func activate(_ index: Int) {
@@ -321,6 +439,8 @@ final class Model {
         switch mode {
         case .search:
             return searchKey(event, mods)
+        case .actions:
+            return actionsKey(event, mods)
         case .args:
             return argsKey(event, mods)
         case .output:
@@ -328,6 +448,34 @@ final class Model {
         case .chat:
             return chatKey(event, mods)
         }
+    }
+
+    private func actionsKey(_ event: NSEvent, _ mods: NSEvent.ModifierFlags) -> Bool {
+        guard case .actions(let command) = mode else { return false }
+        let actions = actionRows(for: command)
+        if (mods == .control && event.charactersIgnoringModifiers?.lowercased() == "n")
+            || (mods.isEmpty && event.keyCode == 125)
+        {
+            if !actions.isEmpty {
+                selected = min(selected + 1, actions.count - 1)
+                noteContentChanged()
+            }
+            return true
+        }
+        if (mods == .control && event.charactersIgnoringModifiers?.lowercased() == "p")
+            || (mods.isEmpty && event.keyCode == 126)
+        {
+            selected = max(selected - 1, 0)
+            noteContentChanged()
+            return true
+        }
+        if mods.isEmpty, event.keyCode == 36 || event.keyCode == 76 {
+            if actions.indices.contains(selected) {
+                runAction(actions[selected].id, for: command)
+            }
+            return true
+        }
+        return false
     }
 
     func showWarnings(_ warnings: [String]) {
@@ -338,11 +486,14 @@ final class Model {
 
     private func deliverSearch(_ parsed: [Command], gen: Int) {
         guard gen == searchGen else { return }
-        for command in parsed where command.kind == .app {
-            let path = String(command.id.dropFirst(4))
+        for command in parsed where command.kind == .app || command.kind == .file {
+            let path = command.kind == .app
+                ? String(command.id.dropFirst(4))
+                : String(command.id.dropFirst(5))
             guard appIcons[path] == nil else { continue }
             let image = NSWorkspace.shared.icon(forFile: path)
-            image.size = NSSize(width: 24, height: 24)
+            // Keep a retina-sized rep; SwiftUI scales to the row. 24pt size made icons soft.
+            image.size = NSSize(width: 64, height: 64)
             appIcons[path] = image
         }
         commands = parsed
@@ -374,9 +525,44 @@ final class Model {
         focusTick += 1
     }
 
-    private func perform(_ id: String) {
+    func perform(_ id: String) {
         if id == "seek" {
             startClick()
+            return
+        }
+        if id == "builtin:paste-latest-screenshot" {
+            busy = true
+            let ok = ClipboardHistory.shared.pasteLatestScreenshot() != nil
+            Task.detached {
+                if ok {
+                    _ = Engine.call(["op": "pasteFront"])
+                }
+                await MainActor.run {
+                    Model.shared.busy = false
+                    if ok {
+                        Model.shared.apply(.hide)
+                    } else {
+                        Model.shared.flash("No screenshots found", error: true, thenHide: false)
+                    }
+                }
+            }
+            return
+        }
+        if id.hasPrefix("clip:") || id.hasPrefix("shot:") {
+            busy = true
+            let ok = ClipboardHistory.shared.restoreToPasteboard(id)
+            let fallback = ok ? nil : ClipboardHistory.shared.text(for: id)
+            Task.detached {
+                if ok {
+                    _ = Engine.call(["op": "pasteFront"])
+                } else if let text = fallback {
+                    _ = Engine.call(["op": "paste", "text": text])
+                }
+                await MainActor.run {
+                    Model.shared.busy = false
+                    Model.shared.apply(.hide)
+                }
+            }
             return
         }
         execute(id: id, args: [])
@@ -428,11 +614,23 @@ final class Model {
             if ready { search() }
         case .theme(let theme):
             themePreference = theme
+            applyPanelAppearance()
+            noteContentChanged()
             flash("Appearance: \(theme.capitalized)", error: false, thenHide: false)
         case .presentation(let mode):
             presentation = mode
             noteContentChanged()
             flash("Presentation: \(mode.capitalized)", error: false, thenHide: false)
+        case .stayAwake(let mode):
+            StayAwakeController.shared.apply(mode)
+            let label: String = switch mode {
+            case "indefinite": "Indefinite"
+            case "30m": "30 minutes"
+            case "1h": "1 hour"
+            case "3h": "3 hours"
+            default: "Off"
+            }
+            flash("Stay Awake: \(label)", error: false, thenHide: false)
         case .runSelected:
             activate(selected)
         case .doEscape:
@@ -457,11 +655,14 @@ final class Model {
         Task.detached {
             let raw = Engine.call(["op": "settings"])
             await MainActor.run {
-                if let theme = raw["theme"] as? String { Model.shared.themePreference = theme }
+                if let theme = raw["theme"] as? String {
+                    Model.shared.themePreference = theme
+                    Model.shared.applyPanelAppearance()
+                }
                 if let presentation = raw["presentation"] as? String {
                     Model.shared.presentation = presentation
-                    Model.shared.noteContentChanged()
                 }
+                Model.shared.noteContentChanged()
             }
         }
     }
@@ -581,7 +782,186 @@ final class Model {
             startClick()
             return true
         }
+        // Cmd+Shift+P — pin / unpin selected command.
+        if mods == [.command, .shift], chars == "p" {
+            togglePinSelected()
+            return true
+        }
+        // Cmd+K — action panel for the selected row.
+        if mods == .command, chars == "k" {
+            openActions()
+            return true
+        }
         return false
+    }
+
+    private func openActions() {
+        guard rows.indices.contains(selected),
+              case .command(let command) = rows[selected]
+        else { return }
+        mode = .actions(command)
+        selected = 0
+        listStart = 0
+        noteContentChanged()
+        focusTick += 1
+    }
+
+    func actionRows(for command: Command) -> [ActionRow] {
+        if command.kind == .clipboard {
+            var rows = [
+                ActionRow(id: "paste", title: "Paste"),
+                ActionRow(id: "copy-clip", title: "Copy to Clipboard"),
+                ActionRow(id: "clip-pin", title: "Pin / Unpin"),
+                ActionRow(id: "clip-delete", title: "Delete"),
+                ActionRow(id: "clip-delete-all", title: "Delete All (keep pinned)"),
+            ]
+            if command.id.hasPrefix("clip:"), ClipboardHistory.shared.text(for: command.id) != nil {
+                rows.insert(ActionRow(id: "paste-plain", title: "Paste as Plain Text"), at: 1)
+            }
+            if ClipboardHistory.shared.ocrText(for: command.id) != nil {
+                rows.insert(ActionRow(id: "copy-ocr", title: "Copy Text from Image"), at: 1)
+            }
+            return rows
+        }
+        var rows = [
+            ActionRow(id: "pin", title: "Pin / Unpin"),
+            ActionRow(id: "copy-title", title: "Copy Title"),
+            ActionRow(id: "copy-id", title: "Copy Command Id"),
+        ]
+        if command.id.hasPrefix("app:") || command.id.hasPrefix("file:") {
+            rows.insert(ActionRow(id: "reveal", title: "Reveal in Finder"), at: 1)
+            rows.insert(ActionRow(id: "copy-path", title: "Copy Path"), at: 2)
+        }
+        return rows
+    }
+
+    func runAction(_ actionId: String, for command: Command) {
+        switch actionId {
+        case "pin":
+            Task.detached {
+                let r = Engine.call(["op": "pin", "id": command.id])
+                let pinned = r["pinned"] as? Bool ?? false
+                await MainActor.run {
+                    Model.shared.mode = .search
+                    Model.shared.flash(pinned ? "Pinned" : "Unpinned", error: false, thenHide: false)
+                    if Model.shared.ready { Model.shared.search() }
+                }
+            }
+        case "copy-title":
+            copyToClipboard(command.title, toast: "Copied title")
+            mode = .search
+        case "copy-id":
+            copyToClipboard(command.id, toast: "Copied id")
+            mode = .search
+        case "copy-path":
+            let path = command.id.hasPrefix("app:")
+                ? String(command.id.dropFirst(4))
+                : String(command.id.dropFirst(5))
+            copyToClipboard(path, toast: "Copied path")
+            mode = .search
+        case "reveal":
+            let path = command.id.hasPrefix("app:")
+                ? String(command.id.dropFirst(4))
+                : String(command.id.dropFirst(5))
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+            mode = .search
+            hide()
+        case "paste":
+            mode = .search
+            perform(command.id)
+        case "paste-plain":
+            mode = .search
+            if let text = ClipboardHistory.shared.text(for: command.id) {
+                busy = true
+                Task.detached {
+                    _ = Engine.call(["op": "paste", "text": text])
+                    await MainActor.run {
+                        Model.shared.busy = false
+                        Model.shared.apply(.hide)
+                    }
+                }
+            }
+        case "copy-clip":
+            if ClipboardHistory.shared.copyOnly(command.id) {
+                flash("Copied", error: false, thenHide: false)
+            }
+            mode = .search
+        case "copy-ocr":
+            if let ocr = ClipboardHistory.shared.ocrText(for: command.id) {
+                copyToClipboard(ocr, toast: "Copied text from image")
+            }
+            mode = .search
+        case "clip-pin":
+            if let pinned = ClipboardHistory.shared.togglePin(command.id) {
+                flash(pinned ? "Pinned" : "Unpinned", error: false, thenHide: false)
+                search()
+            }
+            mode = .search
+        case "clip-delete":
+            ClipboardHistory.shared.delete(command.id)
+            flash("Deleted", error: false, thenHide: false)
+            mode = .search
+            search()
+        case "clip-delete-all":
+            ClipboardHistory.shared.deleteAll(keepPinned: true)
+            flash("Cleared clipboard history", error: false, thenHide: false)
+            mode = .search
+            search()
+        default:
+            mode = .search
+        }
+        noteContentChanged()
+    }
+
+    private func togglePinSelected() {
+        guard rows.indices.contains(selected),
+              case .command(let command) = rows[selected]
+        else { return }
+        Task.detached {
+            let r = Engine.call(["op": "pin", "id": command.id])
+            let pinned = r["pinned"] as? Bool ?? false
+            await MainActor.run {
+                Model.shared.flash(pinned ? "Pinned" : "Unpinned", error: false, thenHide: false)
+                if Model.shared.ready { Model.shared.search() }
+            }
+        }
+    }
+
+    /// Deep link: `opencast://run/<id>` or `opencast://search?q=…`.
+    func handleDeepLink(_ url: URL) {
+        guard url.scheme == "opencast" else { return }
+        show()
+        let host = (url.host ?? "").lowercased()
+        let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        if host == "search" {
+            query = comps?.queryItems?.first(where: { $0.name == "q" })?.value ?? ""
+            selected = 0
+            listStart = 0
+            noteContentChanged()
+            focusTick += 1
+            if ready { search() }
+            return
+        }
+        // run/<command-id> — id may contain colons (builtin:reload).
+        var id = ""
+        if host == "run" {
+            id = String(url.path.drop(while: { $0 == "/" }))
+        } else if url.path.hasPrefix("/run/") {
+            id = String(url.path.dropFirst("/run/".count))
+        }
+        id = id.removingPercentEncoding ?? id
+        guard !id.isEmpty else { return }
+        let commandId = id
+        if ready {
+            perform(commandId)
+        } else {
+            Task { @MainActor in
+                for _ in 0..<40 where !Model.shared.ready {
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                }
+                Model.shared.perform(commandId)
+            }
+        }
     }
 
     private func argsKey(_ event: NSEvent, _ mods: NSEvent.ModifierFlags) -> Bool {
@@ -879,15 +1259,12 @@ final class Model {
     }
 
     private func frame(on screen: NSScreen, height: CGFloat) -> NSRect {
-        let room = Theme.shadowRoom
-        let width = 760 + room * 2
-        let topRoom: CGFloat = presentation == "spotlight" ? room : 0
-        let fullHeight = height + room + topRoom
-        let x = screen.frame.midX - 380 - room
+        let width: CGFloat = 760
+        let x = screen.frame.midX - width / 2
         let y: CGFloat = presentation == "spotlight"
-            ? screen.frame.midY - fullHeight / 2
-            : screen.frame.maxY - height - room
-        return NSRect(x: x, y: y, width: width, height: fullHeight)
+            ? screen.frame.midY - height / 2
+            : screen.frame.maxY - height
+        return NSRect(x: x, y: y, width: width, height: height)
     }
 }
 
@@ -944,8 +1321,12 @@ struct OpenCastApp {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // LSUIElement / .accessory has no default menu; Edit items make Cmd+C/V/X/A work in fields.
+        Self.installEditMenu()
         MainActor.assumeIsolated {
             Model.shared.install()
+            StayAwakeController.shared.install()
+            ClipboardHistory.shared.install()
         }
         Task.detached {
             opencast_start(opencastCallback)
@@ -953,5 +1334,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let warnings = Engine.call(["op": "warnings"])["warnings"] as? [String] ?? []
             await MainActor.run { Model.shared.showWarnings(warnings) }
         }
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        MainActor.assumeIsolated {
+            for url in urls {
+                Model.shared.handleDeepLink(url)
+            }
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            StayAwakeController.shared.shutdown()
+            ClipboardHistory.shared.shutdown()
+        }
+    }
+
+    /// ponytail: Edit menu only — enough for text-field key equivalents; full app menu if we leave accessory.
+    private static func installEditMenu() {
+        let main = NSMenu()
+        let edit = NSMenuItem()
+        let submenu = NSMenu(title: "Edit")
+        submenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        submenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        submenu.addItem(.separator())
+        submenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        submenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        submenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        submenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        edit.submenu = submenu
+        main.addItem(edit)
+        NSApp.mainMenu = main
     }
 }
