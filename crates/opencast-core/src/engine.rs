@@ -1627,20 +1627,23 @@ impl Engine {
                 let id = r.command_id();
                 if server.in_launcher {
                     let desc: String = r.description.lines().next().unwrap_or("").chars().take(70).collect();
-                    let sub = if desc.is_empty() {
-                        format!(
-                            "{} · {}",
-                            server.id,
-                            if r.mime.is_empty() { "resource" } else { &r.mime }
-                        )
+                    // One glyph for the whole MCP family, so the subtitle says
+                    // what kind of thing this is: a document, not a tool.
+                    let what = if r.mime.is_empty() {
+                        "resource".to_string()
                     } else {
-                        format!("{} · {desc}", server.id)
+                        r.mime.clone()
+                    };
+                    let sub = if desc.is_empty() {
+                        format!("{} · {what}", server.id)
+                    } else {
+                        format!("{} · {what} · {desc}", server.id)
                     };
                     commands.push(Command {
                         id: id.clone(),
                         title: r.display_title(),
                         subtitle: Some(sub),
-                        icon: Some("📄".into()),
+                        icon: Some("🔌".into()),
                         kind: CommandKind::McpResource,
                         arguments: vec![],
                         hotkey: None,
@@ -1653,16 +1656,18 @@ impl Engine {
                 let id = pr.command_id();
                 if server.in_launcher {
                     let desc: String = pr.description.lines().next().unwrap_or("").chars().take(70).collect();
+                    // "prompt" in the subtitle: same glyph as the tools, and it
+                    // runs a chat, not the server's action.
                     let sub = if desc.is_empty() {
                         format!("{} · prompt", server.id)
                     } else {
-                        format!("{} · {desc}", server.id)
+                        format!("{} · prompt · {desc}", server.id)
                     };
                     commands.push(Command {
                         id: id.clone(),
                         title: pr.display_title(),
                         subtitle: Some(sub),
-                        icon: Some("✨".into()),
+                        icon: Some("🔌".into()),
                         kind: CommandKind::McpPrompt,
                         arguments: pr
                             .arguments
@@ -3732,7 +3737,12 @@ steps = ["ai:nope"]
         let c = e.registry.get(res_id).unwrap();
         assert_eq!(c.title, "Open issues");
         assert_eq!(c.kind, CommandKind::McpResource);
-        assert!(c.subtitle.as_deref().unwrap().contains("Every issue still open"));
+        assert_eq!(c.icon.as_deref(), Some("🔌"));
+        // Same glyph as the tools, so the subtitle carries the kind.
+        assert_eq!(
+            c.subtitle.as_deref(),
+            Some("gh · text/markdown · Every issue still open in opencast")
+        );
         assert_eq!(e.search("open issues", 5)[0].id, res_id);
         assert_eq!(
             e.plan(res_id, &[]).unwrap(),
@@ -3748,6 +3758,11 @@ steps = ["ai:nope"]
         let c = e.registry.get(prompt_id).unwrap();
         assert_eq!(c.title, "Triage an issue");
         assert_eq!(c.kind, CommandKind::McpPrompt);
+        assert_eq!(c.icon.as_deref(), Some("🔌"));
+        assert_eq!(
+            c.subtitle.as_deref(),
+            Some("gh · prompt · Summarizes and labels one issue")
+        );
         assert_eq!(c.arguments[0].placeholder, "number");
         match e.plan(prompt_id, &["42".into()]).unwrap() {
             Plan::McpGetPrompt {
