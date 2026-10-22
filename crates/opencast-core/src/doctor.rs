@@ -84,6 +84,7 @@ const FILES: &[(&str, u64, &str)] = &[
     ("pinned.json", 1024 * 1024, "pins"),
     ("layouts.json", 4 * 1024 * 1024, "window layouts"),
     ("mcp-tools.json", 10 * 1024 * 1024, "MCP tool cache"),
+    ("mcp-extras.json", 4 * 1024 * 1024, "MCP resources and prompts"),
 ];
 
 fn human(bytes: u64) -> String {
@@ -216,6 +217,16 @@ pub fn run(engine: &Engine, load_time: Option<Duration>) -> Report {
                 ),
             );
         }
+    }
+    // Resources and prompts are optional capabilities; show what they added.
+    let extras = crate::mcp::load_extras(&engine.config_dir);
+    let n_res: usize = extras.resources.values().map(Vec::len).sum();
+    let n_prompts: usize = extras.prompts.values().map(Vec::len).sum();
+    if n_res + n_prompts > 0 {
+        report.push(
+            Level::Ok,
+            format!("{n_res} MCP resource(s) and {n_prompts} prompt(s) are commands too"),
+        );
     }
 
     // Search speed with this user's apps, history and notes.

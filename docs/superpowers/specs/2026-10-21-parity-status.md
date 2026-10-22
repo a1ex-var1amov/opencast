@@ -22,8 +22,9 @@ possible; Swift parts are compiled only by `./build-app.command`.
 >
 > For the surface as it is now read the README and `examples/config.toml` (they
 > are the reference), and "Status and roadmap" in the README for what is next:
-> MCP OAuth and resources/prompts, images to vision models, browser history,
-> Raycast React-extension compatibility, Linux packaging, universal binaries.
+> MCP OAuth, browser history, Raycast React-extension compatibility and Linux
+> packaging. (MCP resources/prompts, images to vision models and universal
+> binaries have since landed.)
 
 ## Conflicts found and fixed tonight
 

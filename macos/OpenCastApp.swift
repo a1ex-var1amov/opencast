@@ -1801,6 +1801,10 @@ final class Model {
         case "note-editor":
             hide()
             NotesEditorController.shared.show(noteId: first.isEmpty ? nil : first)
+        case "mcp-prompt":
+            // An MCP server filled in one of its own prompt templates: open a
+            // chat with it, unsent, so it can be edited or given an attachment.
+            openChat(prompt: first, system: nil, provider: nil, model: nil, autoSend: false)
         default:
             flash("Unknown action \(action)", error: true, thenHide: false)
         }

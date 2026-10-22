@@ -7,6 +7,13 @@ first tag is in `git log`.
 ## Unreleased
 
 ### Added
+- MCP servers contribute more than tools. A server that advertises **resources**
+  gets one command per document (Return reads it into the panel; the URI and MIME
+  type show in the preview); one that advertises **prompt templates** gets a
+  command per template — fill its arguments and the server's own wording opens in
+  a chat, unsent, ready to edit or attach something to. Listed once by **Refresh
+  MCP Tools** and cached in `mcp-extras.json`, so searching never connects.
+  Servers without those capabilities are unaffected.
 - Image attachments reach vision models as pixels. Screenshots, clipboard images
   and image files are downscaled and sent to `gpt-4o`, `claude…`, `gemini…`,
   `…-vl`, `pixtral…` and friends; every other model keeps getting on-device OCR

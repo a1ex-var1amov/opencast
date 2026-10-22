@@ -10,7 +10,9 @@ macOS first; `crates/opencast-core` must stay portable (no platform UI deps).
   `supports_vision`/`looks_vision` decides pixels vs the panel's OCR text). Sidecar
   state (usage, pins, notes) is
   cached in `Engine` — search must never read disk.
-- `crates/opencast-core` also: `mcp.rs` (MCP client: stdio + HTTP, tool cache),
+- `crates/opencast-core` also: `mcp.rs` (MCP client: stdio + HTTP; tool, resource
+  and prompt caches — `mcp-tools.json` and `mcp-extras.json`, so listing commands
+  never connects),
   `chats.rs` (saved chats), `sync.rs` (iCloud symlink sync), `updates.rs`,
   `usage.rs` (frecency + learned picks), `extensions.rs` (git-installed
   extensions), `alfred.rs` (Alfred workflow → generated bash commands),

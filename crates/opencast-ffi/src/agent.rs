@@ -39,15 +39,16 @@ pub fn hub() -> Arc<McpHub> {
     guard.1.clone()
 }
 
-/// Fetch every server's tool list and cache it. Returns (tool count, errors);
-/// reloads the engine when the cache changed so new commands appear.
+/// Fetch every server's tools, resources and prompts and cache them. Returns
+/// (tool count, errors); reloads the engine when anything changed so new
+/// commands appear.
 pub async fn refresh_tools() -> (usize, Vec<String>) {
     let hub = hub();
     let dir = with_engine(|e| e.config_dir.clone());
     if hub.server_ids().is_empty() {
         return (0, Vec::new());
     }
-    let (cache, errors) = hub.refresh_all().await;
+    let (cache, extras, errors) = hub.refresh_all().await;
     let mut merged = opencast_core::mcp::load_cache(&dir);
     // Keep the old list for servers that failed this time; drop removed servers.
     merged.retain(|k, _| hub.server_ids().contains(k));
@@ -55,9 +56,21 @@ pub async fn refresh_tools() -> (usize, Vec<String>) {
     for (k, v) in cache {
         merged.insert(k, v);
     }
+    // Resources and prompts are in their own file, so an older cache still loads.
+    let mut merged_extras = opencast_core::mcp::load_extras(&dir);
+    merged_extras.resources.retain(|k, _| hub.server_ids().contains(k));
+    merged_extras.prompts.retain(|k, _| hub.server_ids().contains(k));
+    let before = merged_extras.clone();
+    for (k, v) in extras.resources {
+        merged_extras.resources.insert(k, v);
+    }
+    for (k, v) in extras.prompts {
+        merged_extras.prompts.insert(k, v);
+    }
     let count = merged.values().map(Vec::len).sum();
-    if changed {
+    if changed || merged_extras != before {
         opencast_core::mcp::save_cache(&dir, &merged);
+        opencast_core::mcp::save_extras(&dir, &merged_extras);
         crate::exec::reload();
     }
     (count, errors)

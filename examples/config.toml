@@ -294,6 +294,9 @@ icon = "🔎"
 #   in_launcher       list tools as commands (default true)
 #   in_chat           offer tools to the AI chat (default true)
 #   auto_approve      tools the AI may run without asking, e.g. ["get_*", "list_*"]
+# Servers that also advertise resources or prompt templates get commands for
+# those too: Return reads a resource into the panel; a prompt opens a chat with
+# the server's own wording, unsent, so you can edit it first.
 # Run "Refresh MCP Tools" after editing.
 # ---------------------------------------------------------------------------
 

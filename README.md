@@ -40,7 +40,8 @@ the core is portable.
   OpenCast clicks it, via on-device OCR. Needs the Screen Recording permission.
 - **MCP tools**: add `[[mcp_servers]]` and every server's tools become
   launcher commands *and* tools the AI chat can call (with your approval) —
-  thousands of integrations, no extension store needed.
+  thousands of integrations, no extension store needed. Servers that advertise
+  resources or prompt templates get those as commands too.
 - **Shortcuts.app**: every shortcut you have is a command.
 - **Learns what you pick**: type `sl`, choose Slack once, and Slack is the top
   hit for `sl` from then on. Recent use counts more than old use; `vsc` finds
@@ -361,8 +362,12 @@ Run **Refresh MCP Tools** (or just save the file — config changes reload
 automatically). Each tool becomes a command ("Create Issue", "Search Code"…)
 whose argument form comes from the tool's schema, and the AI chat can call the
 tools: it shows each call and asks before running anything not in
-`auto_approve`. Stdio servers (`command`) and Streamable HTTP servers (`url`,
-with `headers` / `headers_cmd`) are supported; OAuth-only remote servers are
+`auto_approve`. Servers that also advertise **resources** get one command per
+document (Return reads it into the panel; the URI shows in the preview) and
+**prompt templates** get one command each (fill the arguments, and the server's
+own wording opens in a chat, unsent, ready to edit). Stdio servers (`command`)
+and Streamable HTTP servers (`url`, with `headers` / `headers_cmd`) are
+supported; OAuth-only remote servers are
 not yet.
 
 ## Shortcuts, snippets, schedule, menus
@@ -529,9 +534,8 @@ and receives streamed tokens from it.
 
 ## Status and roadmap
 
-v0.2. Next: OAuth for remote MCP servers, MCP resources/prompts, images to
-vision models, browser history, Raycast extension (React) compatibility,
-Linux packaging (the core is portable), and universal (arm64 + x86_64) binaries.
+v0.2. Next: OAuth for remote MCP servers, browser history, Raycast extension
+(React) compatibility, and Linux packaging (the core is portable).
 
 Prior art worth knowing: [SuperCmd](https://github.com/SuperCmdLabs/SuperCmd)
 (Electron, Raycast-extension compatible) and

@@ -551,6 +551,27 @@ pub async fn run_command(id: String, args: Vec<String>, ctx: ExecContext) -> Exe
             },
             Err(e) => err(format!("{e:#}")),
         },
+        // A resource is a document: show its text (Return copies it).
+        Plan::McpReadResource { server, uri } => match crate::agent::hub().read_resource(&server, &uri).await {
+            Ok(text) => ExecResult::Markdown {
+                title: format!("{server} · {uri}"),
+                text,
+            },
+            Err(e) => err(format!("{e:#}")),
+        },
+        // The server wrote the prompt; the panel puts it in a chat, unsent, so
+        // you can edit it (or attach something) before pressing Return.
+        Plan::McpGetPrompt {
+            server,
+            name,
+            arguments,
+        } => match crate::agent::hub().get_prompt(&server, &name, arguments).await {
+            Ok(text) => ExecResult::Ui {
+                action: "mcp-prompt".to_string(),
+                args: vec![text],
+            },
+            Err(e) => err(format!("{e:#}")),
+        },
         Plan::ResumeChat(chat) => ExecResult::ResumeChat { chat: *chat },
         Plan::Ui(action) => ExecResult::Ui {
             action: action.to_string(),

@@ -29,6 +29,10 @@ pub enum CommandKind {
     Shortcut,
     /// A tool from an MCP server.
     Mcp,
+    /// A document an MCP server exposes (`resources/list`).
+    McpResource,
+    /// A prompt template an MCP server exposes (`prompts/list`).
+    McpPrompt,
 }
 
 impl CommandKind {
@@ -45,6 +49,9 @@ impl CommandKind {
             Self::File => 7,
             Self::Shortcut => 6,
             Self::Mcp => 7,
+            // Same tier as the tools they come from: rare, but real commands.
+            Self::McpResource => 7,
+            Self::McpPrompt => 7,
             Self::Window => 8,
             Self::Layout => 9,
             Self::Builtin => 10,
@@ -67,6 +74,8 @@ impl CommandKind {
             Self::Clipboard => &["clip", "clipboard", "paste", "cb"],
             Self::Shortcut => &["shortcut", "shortcuts"],
             Self::Mcp => &["mcp", "tool", "tools"],
+            Self::McpResource => &["mcp", "resource", "resources", "file", "document"],
+            Self::McpPrompt => &["mcp", "prompt", "prompts", "template"],
         }
     }
 

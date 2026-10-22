@@ -971,6 +971,18 @@ pub enum Plan {
         tool: String,
         arguments: serde_json::Value,
     },
+    /// Read an MCP resource (a document a server exposes) and show its text.
+    McpReadResource {
+        server: String,
+        uri: String,
+    },
+    /// Ask an MCP server to fill in one of its own prompt templates; the panel
+    /// opens a chat with the result, editable before it is sent.
+    McpGetPrompt {
+        server: String,
+        name: String,
+        arguments: serde_json::Value,
+    },
     /// Reopen a saved chat.
     ResumeChat(Box<crate::chats::SavedChat>),
     /// Panel-side feature (menu search, dictation, schedule, settings window…).
@@ -1018,6 +1030,8 @@ pub struct Extras {
     pub shortcuts: Vec<String>,
     /// MCP tools by server (from `mcp-tools.json`).
     pub mcp_tools: crate::mcp::ToolCache,
+    /// MCP resources and prompts by server (from `mcp-extras.json`).
+    pub mcp_extras: crate::mcp::ExtrasCache,
     /// Browser bookmarks (`bookmarks.json`).
     pub bookmarks: Vec<crate::bookmarks::Bookmark>,
     /// Exchange rates (`rates.json`).
@@ -1034,6 +1048,7 @@ impl Extras {
         Self {
             shortcuts,
             mcp_tools: crate::mcp::load_cache(config_dir),
+            mcp_extras: crate::mcp::load_extras(config_dir),
             bookmarks: crate::bookmarks::load_cache(config_dir),
             rates: crate::currency::load(config_dir),
         }
@@ -1109,6 +1124,10 @@ pub struct Engine {
     restore_ids: HashMap<String, String>,
     /// `mcp:<server>:<tool>` → tool.
     mcp_tools: HashMap<String, crate::mcp::McpTool>,
+    /// `mcp:<server>:res:<uri>` → resource a server exposes.
+    mcp_resources: HashMap<String, crate::mcp::McpResource>,
+    /// `mcp:<server>:prompt:<name>` → prompt template a server exposes.
+    mcp_prompts: HashMap<String, crate::mcp::McpPrompt>,
     extras: Extras,
     sidecars: RwLock<Sidecars>,
     /// This Mac's time zone (`America/New_York`).
@@ -1599,6 +1618,70 @@ impl Engine {
             }
         }
 
+        // Resources and prompts a server advertises (cached, so listing them
+        // never connects). Reading one is a command like any other.
+        let mut mcp_resources = HashMap::new();
+        let mut mcp_prompts = HashMap::new();
+        for server in &config.mcp_servers {
+            for r in extras.mcp_extras.resources.get(&server.id).cloned().unwrap_or_default() {
+                let id = r.command_id();
+                if server.in_launcher {
+                    let desc: String = r.description.lines().next().unwrap_or("").chars().take(70).collect();
+                    let sub = if desc.is_empty() {
+                        format!(
+                            "{} · {}",
+                            server.id,
+                            if r.mime.is_empty() { "resource" } else { &r.mime }
+                        )
+                    } else {
+                        format!("{} · {desc}", server.id)
+                    };
+                    commands.push(Command {
+                        id: id.clone(),
+                        title: r.display_title(),
+                        subtitle: Some(sub),
+                        icon: Some("📄".into()),
+                        kind: CommandKind::McpResource,
+                        arguments: vec![],
+                        hotkey: None,
+                        keywords: vec![server.id.clone(), r.uri.clone(), "mcp".into(), "resource".into()],
+                    });
+                }
+                mcp_resources.insert(id, r);
+            }
+            for pr in extras.mcp_extras.prompts.get(&server.id).cloned().unwrap_or_default() {
+                let id = pr.command_id();
+                if server.in_launcher {
+                    let desc: String = pr.description.lines().next().unwrap_or("").chars().take(70).collect();
+                    let sub = if desc.is_empty() {
+                        format!("{} · prompt", server.id)
+                    } else {
+                        format!("{} · {desc}", server.id)
+                    };
+                    commands.push(Command {
+                        id: id.clone(),
+                        title: pr.display_title(),
+                        subtitle: Some(sub),
+                        icon: Some("✨".into()),
+                        kind: CommandKind::McpPrompt,
+                        arguments: pr
+                            .arguments
+                            .iter()
+                            .take(3)
+                            .map(|a| Argument {
+                                placeholder: a.name.clone(),
+                                optional: !a.required,
+                                secure: false,
+                            })
+                            .collect(),
+                        hotkey: None,
+                        keywords: vec![server.id.clone(), pr.name.clone(), "mcp".into(), "prompt".into()],
+                    });
+                }
+                mcp_prompts.insert(id, pr);
+            }
+        }
+
         for (id, title, icon, kw) in SHORTCUT_ROWS {
             commands.push(Command {
                 id: (*id).into(),
@@ -1705,6 +1788,8 @@ impl Engine {
             snippets,
             restore_ids,
             mcp_tools,
+            mcp_resources,
+            mcp_prompts,
             extras,
             sidecars,
             local_tz: crate::tz::local_zone_name(),
@@ -1936,6 +2021,53 @@ impl Engine {
                 Some(format!("{}\n\n{params}", t.description)),
                 None,
                 vec![("Server", t.server.clone()), ("Tool", t.name.clone())],
+            ));
+        }
+        if let Some(r) = self.mcp_resources.get(id) {
+            return Some(p(
+                &r.display_title(),
+                (!r.description.is_empty()).then(|| r.description.clone()),
+                None,
+                vec![
+                    ("Server", r.server.clone()),
+                    ("URI", r.uri.clone()),
+                    (
+                        "Type",
+                        if r.mime.is_empty() {
+                            "resource".into()
+                        } else {
+                            r.mime.clone()
+                        },
+                    ),
+                ],
+            ));
+        }
+        if let Some(pr) = self.mcp_prompts.get(id) {
+            let params = if pr.arguments.is_empty() {
+                "No arguments.".to_string()
+            } else {
+                pr.arguments
+                    .iter()
+                    .map(|a| {
+                        format!(
+                            "- `{}`{}{}",
+                            a.name,
+                            if a.required { ", required" } else { "" },
+                            if a.description.is_empty() {
+                                String::new()
+                            } else {
+                                format!(": {}", a.description)
+                            }
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            return Some(p(
+                &pr.display_title(),
+                Some(format!("{}\n\n{params}", pr.description)),
+                None,
+                vec![("Server", pr.server.clone()), ("Prompt", pr.name.clone())],
             ));
         }
         if let Some(path) = self.app_path(id) {
@@ -2678,6 +2810,19 @@ impl Engine {
                 arguments: t.arguments_from(args)?,
             });
         }
+        if let Some(r) = self.mcp_resources.get(id) {
+            return Ok(Plan::McpReadResource {
+                server: r.server.clone(),
+                uri: r.uri.clone(),
+            });
+        }
+        if let Some(p) = self.mcp_prompts.get(id) {
+            return Ok(Plan::McpGetPrompt {
+                server: p.server.clone(),
+                name: p.name.clone(),
+                arguments: p.arguments_from(args)?,
+            });
+        }
         if id.starts_with("chat:") {
             return self
                 .chat(id)
@@ -3404,9 +3549,36 @@ steps = ["ai:nope"]
                 },
             ],
         );
+        // The same server also exposes a document and a prompt template.
+        let mut mcp_extras = crate::mcp::ExtrasCache::default();
+        mcp_extras.resources.insert(
+            "gh".into(),
+            vec![crate::mcp::McpResource {
+                server: "gh".into(),
+                uri: "issues://opencast/open".into(),
+                name: "Open issues".into(),
+                description: "Every issue still open in opencast".into(),
+                mime: "text/markdown".into(),
+            }],
+        );
+        mcp_extras.prompts.insert(
+            "gh".into(),
+            vec![crate::mcp::McpPrompt {
+                server: "gh".into(),
+                name: "triage_issue".into(),
+                title: Some("Triage an issue".into()),
+                description: "Summarizes and labels one issue".into(),
+                arguments: vec![crate::mcp::McpPromptArg {
+                    name: "number".into(),
+                    description: "issue number".into(),
+                    required: true,
+                }],
+            }],
+        );
         Extras {
             shortcuts: vec!["Send Arrival Message".into(), "Resize Image".into()],
             mcp_tools,
+            mcp_extras,
             bookmarks: vec![crate::bookmarks::Bookmark {
                 title: "Grafana Prod".into(),
                 url: "https://grafana.example.com".into(),
@@ -3549,6 +3721,58 @@ steps = ["ai:nope"]
             .text
             .unwrap()
             .contains("`repo`"));
+    }
+
+    #[test]
+    fn mcp_resources_and_prompts_become_commands() {
+        let e = engine_with_extras(GH);
+
+        // A resource is a row you can press Return on: it reads the document.
+        let res_id = "mcp:gh:res:issues://opencast/open";
+        let c = e.registry.get(res_id).unwrap();
+        assert_eq!(c.title, "Open issues");
+        assert_eq!(c.kind, CommandKind::McpResource);
+        assert!(c.subtitle.as_deref().unwrap().contains("Every issue still open"));
+        assert_eq!(e.search("open issues", 5)[0].id, res_id);
+        assert_eq!(
+            e.plan(res_id, &[]).unwrap(),
+            Plan::McpReadResource {
+                server: "gh".into(),
+                uri: "issues://opencast/open".into(),
+            }
+        );
+        assert!(e.preview(res_id).unwrap().facts.iter().any(|(k, _)| k == "URI"));
+
+        // A prompt is a row that opens a chat with the server's own wording.
+        let prompt_id = "mcp:gh:prompt:triage_issue";
+        let c = e.registry.get(prompt_id).unwrap();
+        assert_eq!(c.title, "Triage an issue");
+        assert_eq!(c.kind, CommandKind::McpPrompt);
+        assert_eq!(c.arguments[0].placeholder, "number");
+        match e.plan(prompt_id, &["42".into()]).unwrap() {
+            Plan::McpGetPrompt {
+                server,
+                name,
+                arguments,
+            } => {
+                assert_eq!(server, "gh");
+                assert_eq!(name, "triage_issue");
+                assert_eq!(arguments["number"], "42");
+            }
+            p => panic!("{p:?}"),
+        }
+        // A missing required argument explains itself.
+        let err = e.plan(prompt_id, &[]).unwrap_err().to_string();
+        assert!(err.contains("needs 1 argument(s): number"), "{err}");
+        assert!(e
+            .preview(prompt_id)
+            .unwrap()
+            .text
+            .unwrap()
+            .contains("`number`, required"));
+
+        // A server not in config contributes nothing, cached or not.
+        assert!(engine_with_extras("").registry.get(res_id).is_none());
     }
 
     #[test]

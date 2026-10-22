@@ -235,6 +235,135 @@ impl McpTool {
     }
 }
 
+// ---- resources and prompts --------------------------------------------------
+
+/// A document a server exposes (`resources/list`): a file, a page, a DB row.
+/// Reading it is a launcher command, so the text lands in the panel instead of
+/// needing a chat round trip.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct McpResource {
+    pub server: String,
+    pub uri: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default, rename = "mimeType")]
+    pub mime: String,
+}
+
+impl McpResource {
+    pub fn command_id(&self) -> String {
+        format!("mcp:{}:res:{}", self.server, self.uri)
+    }
+
+    /// Title: the server's `name`, else the last path-ish segment of the URI.
+    pub fn display_title(&self) -> String {
+        if !self.name.trim().is_empty() {
+            return self.name.trim().to_string();
+        }
+        self.uri
+            .rsplit(['/', ':'])
+            .find(|s| !s.is_empty())
+            .unwrap_or(&self.uri)
+            .to_string()
+    }
+}
+
+/// One argument of a server-side prompt template.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct McpPromptArg {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub required: bool,
+}
+
+/// A prompt template a server exposes (`prompts/list`): the server fills it in,
+/// so the same wording stays in the server's own hands.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct McpPrompt {
+    pub server: String,
+    pub name: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub arguments: Vec<McpPromptArg>,
+}
+
+impl McpPrompt {
+    pub fn command_id(&self) -> String {
+        format!("mcp:{}:prompt:{}", self.server, self.name)
+    }
+
+    pub fn display_title(&self) -> String {
+        if let Some(t) = self.title.as_deref().filter(|t| !t.trim().is_empty()) {
+            return t.trim().to_string();
+        }
+        self.name
+            .split(['_', '-', '.'])
+            .filter(|w| !w.is_empty())
+            .map(|w| {
+                let mut c = w.chars();
+                match c.next() {
+                    Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                    None => String::new(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Positional launcher args → the `arguments` object the server expects.
+    pub fn arguments_from(&self, values: &[String]) -> Result<Value> {
+        let required: Vec<&McpPromptArg> = self.arguments.iter().filter(|a| a.required).collect();
+        if values.len() < required.len() {
+            bail!(
+                "prompt `{}` needs {} argument(s): {}",
+                self.name,
+                required.len(),
+                required.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ")
+            );
+        }
+        let mut obj = serde_json::Map::new();
+        for (arg, value) in self.arguments.iter().zip(values) {
+            obj.insert(arg.name.clone(), json!(value));
+        }
+        Ok(Value::Object(obj))
+    }
+}
+
+/// Resources and prompts, cached on disk like tools: the launcher lists commands
+/// without connecting to a single server.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ExtrasCache {
+    #[serde(default)]
+    pub resources: HashMap<String, Vec<McpResource>>,
+    #[serde(default)]
+    pub prompts: HashMap<String, Vec<McpPrompt>>,
+}
+
+fn extras_path(dir: &Path) -> std::path::PathBuf {
+    dir.join("mcp-extras.json")
+}
+
+pub fn load_extras(dir: &Path) -> ExtrasCache {
+    std::fs::read_to_string(extras_path(dir))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_extras(dir: &Path, extras: &ExtrasCache) {
+    let _ = std::fs::create_dir_all(dir);
+    if let Ok(s) = serde_json::to_string_pretty(extras) {
+        let _ = std::fs::write(extras_path(dir), s);
+    }
+}
+
 // ---- tool cache -------------------------------------------------------------
 
 pub type ToolCache = HashMap<String, Vec<McpTool>>;
@@ -609,8 +738,134 @@ impl McpClient {
         }
         Ok(text)
     }
+
+    /// Every resource the server exposes (follows pagination). A server without
+    /// the resources capability is not an error — it just has none.
+    pub async fn list_resources(&mut self) -> Result<Vec<McpResource>> {
+        let mut out = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..20 {
+            let params = match &cursor {
+                Some(c) => json!({"cursor": c}),
+                None => json!({}),
+            };
+            let r = match self.request("resources/list", params).await {
+                Ok(r) => r,
+                Err(e) => return unsupported_to_empty(e, "resources"),
+            };
+            for it in r["resources"].as_array().cloned().unwrap_or_default() {
+                let uri = it["uri"].as_str().unwrap_or_default().to_string();
+                if uri.is_empty() {
+                    continue;
+                }
+                out.push(McpResource {
+                    server: self.server.id.clone(),
+                    name: it["name"].as_str().unwrap_or("").to_string(),
+                    description: it["description"].as_str().unwrap_or("").to_string(),
+                    mime: it["mimeType"].as_str().unwrap_or("").to_string(),
+                    uri,
+                });
+            }
+            cursor = r["nextCursor"].as_str().map(str::to_string);
+            if cursor.is_none() {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    /// Read one resource as text. Binary parts become a placeholder line, so a
+    /// mixed result still reads.
+    pub async fn read_resource(&mut self, uri: &str) -> Result<String> {
+        let r = self.request("resources/read", json!({"uri": uri})).await?;
+        let mut parts: Vec<String> = Vec::new();
+        for c in r["contents"].as_array().cloned().unwrap_or_default() {
+            if let Some(t) = c["text"].as_str() {
+                parts.push(t.to_string());
+            } else if let Some(b) = c["blob"].as_str() {
+                let mime = c["mimeType"].as_str().unwrap_or("binary");
+                parts.push(format!("[{mime} data, {} bytes — not text]", b.len()));
+            }
+        }
+        if parts.is_empty() {
+            bail!("mcp `{}`: resource `{uri}` returned nothing", self.server.id);
+        }
+        Ok(parts.join("\n\n"))
+    }
+
+    /// Every prompt template (follows pagination); empty when unsupported.
+    pub async fn list_prompts(&mut self) -> Result<Vec<McpPrompt>> {
+        let mut out = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..20 {
+            let params = match &cursor {
+                Some(c) => json!({"cursor": c}),
+                None => json!({}),
+            };
+            let r = match self.request("prompts/list", params).await {
+                Ok(r) => r,
+                Err(e) => return unsupported_to_empty(e, "prompts"),
+            };
+            for p in r["prompts"].as_array().cloned().unwrap_or_default() {
+                let name = p["name"].as_str().unwrap_or_default().to_string();
+                if name.is_empty() {
+                    continue;
+                }
+                out.push(McpPrompt {
+                    server: self.server.id.clone(),
+                    title: p["title"].as_str().map(str::to_string),
+                    description: p["description"].as_str().unwrap_or("").to_string(),
+                    arguments: p["arguments"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|a| McpPromptArg {
+                            name: a["name"].as_str().unwrap_or_default().to_string(),
+                            description: a["description"].as_str().unwrap_or("").to_string(),
+                            required: a["required"].as_bool().unwrap_or(false),
+                        })
+                        .filter(|a| !a.name.is_empty())
+                        .collect(),
+                    name,
+                });
+            }
+            cursor = r["nextCursor"].as_str().map(str::to_string);
+            if cursor.is_none() {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    /// Ask the server to fill in one of its prompt templates; returns the text.
+    pub async fn get_prompt(&mut self, name: &str, arguments: Value) -> Result<String> {
+        let r = self
+            .request("prompts/get", json!({"name": name, "arguments": arguments}))
+            .await?;
+        let msgs: Vec<String> = r["messages"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|m| m["content"]["text"].as_str().map(str::to_string))
+            .collect();
+        if msgs.is_empty() {
+            bail!("mcp `{}`: prompt `{name}` returned no text", self.server.id);
+        }
+        Ok(msgs.join("\n\n"))
+    }
 }
 
+/// A server that has not implemented a method answers -32601; that is "none", not
+/// a failure worth a warning for every refresh.
+fn unsupported_to_empty<T>(e: anyhow::Error, what: &str) -> Result<Vec<T>> {
+    let m = e.to_string().to_lowercase();
+    if m.contains("not found") || m.contains("not supported") || m.contains("unknown method") {
+        return Ok(Vec::new());
+    }
+    Err(e.context(format!("mcp: listing {what}")))
+}
 /// Keeps one live client per server, started on first use.
 #[derive(Default)]
 pub struct McpHub {
@@ -665,31 +920,87 @@ impl McpHub {
         r
     }
 
-    /// Fetch every server's tools. Failures are reported, not fatal.
-    pub async fn refresh_all(&self) -> (ToolCache, Vec<String>) {
+    /// Fetch every server's tools, resources and prompts. Failures are reported,
+    /// not fatal: one dead server must not hide the others' commands.
+    pub async fn refresh_all(&self) -> (ToolCache, ExtrasCache, Vec<String>) {
         let mut cache = ToolCache::new();
+        let mut extras = ExtrasCache::default();
         let mut errors = Vec::new();
         for id in self.server_ids() {
             match self.list_tools(&id).await {
                 Ok(tools) => {
-                    cache.insert(id, tools);
+                    cache.insert(id.clone(), tools);
+                }
+                Err(e) => errors.push(format!("{e:#}")),
+            }
+            // Resources and prompts are optional capabilities: a server that has
+            // them gains commands, one that does not costs nothing.
+            match self.list_resources(&id).await {
+                Ok(r) => {
+                    if !r.is_empty() {
+                        extras.resources.insert(id.clone(), r);
+                    }
+                }
+                Err(e) => errors.push(format!("{e:#}")),
+            }
+            match self.list_prompts(&id).await {
+                Ok(p) => {
+                    if !p.is_empty() {
+                        extras.prompts.insert(id.clone(), p);
+                    }
                 }
                 Err(e) => errors.push(format!("{e:#}")),
             }
         }
-        (cache, errors)
+        (cache, extras, errors)
+    }
+
+    pub async fn list_resources(&self, id: &str) -> Result<Vec<McpResource>> {
+        let c = self.client(id).await?;
+        let r = c.lock().await.list_resources().await;
+        if r.is_err() {
+            self.forget(id).await;
+        }
+        r
+    }
+
+    pub async fn list_prompts(&self, id: &str) -> Result<Vec<McpPrompt>> {
+        let c = self.client(id).await?;
+        let r = c.lock().await.list_prompts().await;
+        if r.is_err() {
+            self.forget(id).await;
+        }
+        r
+    }
+
+    pub async fn read_resource(&self, server: &str, uri: &str) -> Result<String> {
+        let c = self.client(server).await?;
+        let r = c.lock().await.read_resource(uri).await;
+        self.reconnect_if_dead(server, &r).await;
+        r
+    }
+
+    pub async fn get_prompt(&self, server: &str, name: &str, arguments: Value) -> Result<String> {
+        let c = self.client(server).await?;
+        let r = c.lock().await.get_prompt(name, arguments).await;
+        self.reconnect_if_dead(server, &r).await;
+        r
+    }
+
+    /// A transport failure (not a tool or server error) means the process died:
+    /// drop the client so the next call starts a fresh one.
+    async fn reconnect_if_dead(&self, server: &str, r: &Result<String>) {
+        let Err(e) = r else { return };
+        let msg = format!("{e:#}");
+        if msg.contains("exited") || msg.contains("timed out") || msg.contains("Broken pipe") {
+            self.forget(server).await;
+        }
     }
 
     pub async fn call(&self, server: &str, tool: &str, arguments: Value) -> Result<String> {
         let c = self.client(server).await?;
         let r = c.lock().await.call(tool, arguments).await;
-        if let Err(e) = &r {
-            // Transport failures (not tool errors) mean the server died; restart next time.
-            let msg = format!("{e:#}");
-            if msg.contains("exited") || msg.contains("timed out") || msg.contains("Broken pipe") {
-                self.forget(server).await;
-            }
-        }
+        self.reconnect_if_dead(server, &r).await;
         r
     }
 }
@@ -791,7 +1102,8 @@ mod tests {
         assert!(t.contains("\"n\": 1"));
     }
 
-    /// A tiny MCP server in shell + python-free sh: answers initialize, tools/list, tools/call.
+    /// A tiny MCP server in shell + python-free sh: answers initialize, tools,
+    /// resources and prompts.
     #[cfg(unix)]
     #[tokio::test]
     async fn stdio_roundtrip_against_a_fake_server() {
@@ -806,6 +1118,10 @@ while IFS= read -r line; do
     *'"method":"initialize"'*) echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"serverInfo\":{\"name\":\"fake\"}}}" ;;
     *'"method":"tools/list"'*) echo 'noise on stdout'; echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"tools\":[{\"name\":\"echo\",\"description\":\"Echo\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}},\"required\":[\"text\"]}},{\"name\":\"hidden\"}]}}" ;;
     *'"method":"tools/call"'*) echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"pong\"}]}}" ;;
+    *'"method":"resources/list"'*) echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"resources\":[{\"uri\":\"notes://today\",\"name\":\"Today's note\",\"description\":\"The daily scratch note\",\"mimeType\":\"text/markdown\"}]}}" ;;
+    *'"method":"resources/read"'*) echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"contents\":[{\"uri\":\"notes://today\",\"mimeType\":\"text/markdown\",\"text\":\"hello from the note\"},{\"uri\":\"notes://today\",\"mimeType\":\"image/png\",\"blob\":\"AAAA\"}]}}" ;;
+    *'"method":"prompts/list"'*) echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"prompts\":[{\"name\":\"summarize_note\",\"title\":\"Summarize a note\",\"description\":\"Summarizes one note\",\"arguments\":[{\"name\":\"day\",\"description\":\"which day\",\"required\":true}]}]}}" ;;
+    *'"method":"prompts/get"'*) echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"messages\":[{\"role\":\"user\",\"content\":{\"type\":\"text\",\"text\":\"Summarize the note for today\"}}]}}" ;;
   esac
 done
 "#,
@@ -835,5 +1151,95 @@ done
         assert_eq!(tools[0].params()[0].0, "text");
         let out = hub.call("fake", "echo", json!({"text": "ping"})).await.unwrap();
         assert_eq!(out, "pong");
+
+        // Resources: listed, then read as text (a binary part becomes a note).
+        let res = hub.list_resources("fake").await.unwrap();
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].uri, "notes://today");
+        assert_eq!(res[0].mime, "text/markdown");
+        let text = hub.read_resource("fake", "notes://today").await.unwrap();
+        assert!(text.contains("hello from the note"), "{text}");
+        assert!(text.contains("image/png data"), "{text}");
+
+        // Prompts: listed with their arguments, then filled in by the server.
+        let prompts = hub.list_prompts("fake").await.unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].display_title(), "Summarize a note");
+        assert_eq!(prompts[0].arguments[0].name, "day");
+        let args = prompts[0].arguments_from(&["today".to_string()]).unwrap();
+        assert_eq!(args["day"], json!("today"));
+        let filled = hub.get_prompt("fake", "summarize_note", args).await.unwrap();
+        assert_eq!(filled, "Summarize the note for today");
+
+        // refresh_all collects all three, and the extras land in their own cache.
+        let (tools, extras, errors) = hub.refresh_all().await;
+        assert_eq!(tools["fake"].len(), 1, "{errors:?}");
+        assert_eq!(extras.resources["fake"].len(), 1);
+        assert_eq!(extras.prompts["fake"].len(), 1);
+    }
+
+    #[test]
+    fn a_server_without_the_capability_lists_nothing() {
+        let e = anyhow!("mcp `gh`: jsonrpc error -32601: Method not found: resources/list");
+        assert_eq!(unsupported_to_empty::<McpResource>(e, "resources").unwrap().len(), 0);
+        // A real failure still surfaces.
+        let e2 = anyhow!("mcp `gh`: timed out");
+        assert!(unsupported_to_empty::<McpResource>(e2, "resources").is_err());
+    }
+
+    #[test]
+    fn resources_and_prompts_have_ids_and_titles() {
+        let r = McpResource {
+            server: "notes".into(),
+            uri: "notes://today".into(),
+            name: "".into(),
+            description: "Daily".into(),
+            mime: "text/markdown".into(),
+        };
+        assert_eq!(r.command_id(), "mcp:notes:res:notes://today");
+        assert_eq!(r.display_title(), "today");
+        let named = McpResource {
+            name: "Today's note".into(),
+            ..r.clone()
+        };
+        assert_eq!(named.display_title(), "Today's note");
+
+        let p = McpPrompt {
+            server: "notes".into(),
+            name: "summarize_note".into(),
+            title: None,
+            description: "".into(),
+            arguments: vec![McpPromptArg {
+                name: "day".into(),
+                description: "".into(),
+                required: true,
+            }],
+        };
+        assert_eq!(p.command_id(), "mcp:notes:prompt:summarize_note");
+        assert_eq!(p.display_title(), "Summarize Note");
+        // Missing a required argument is explained, not guessed.
+        let e = p.arguments_from(&[]).unwrap_err().to_string();
+        assert!(e.contains("needs 1 argument(s): day"), "{e}");
+        assert_eq!(p.arguments_from(&["fri".into()]).unwrap()["day"], json!("fri"));
+    }
+
+    #[test]
+    fn extras_cache_round_trips_through_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut extras = ExtrasCache::default();
+        extras.resources.insert(
+            "notes".into(),
+            vec![McpResource {
+                server: "notes".into(),
+                uri: "notes://today".into(),
+                name: "Today".into(),
+                description: "".into(),
+                mime: "text/markdown".into(),
+            }],
+        );
+        save_extras(dir.path(), &extras);
+        assert_eq!(load_extras(dir.path()), extras);
+        // An older install without this file simply has none.
+        assert_eq!(load_extras(&dir.path().join("nope")), ExtrasCache::default());
     }
 }
