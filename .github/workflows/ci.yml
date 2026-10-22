@@ -26,6 +26,8 @@ jobs:
       - run: cargo clippy -p opencast-ffi -- -D warnings
       - run: cargo test -p opencast-ffi --lib
       - run: swiftc -typecheck -parse-as-library -target arm64-apple-macos14.0 -import-objc-header macos/opencast.h macos/*.swift
+      # Panel logic tests (deep links, meeting links, snippet matching).
+      - run: ./test-swift.command
       # The dmg ships both slices, so the Intel one has to compile too.
       - run: rustup target add x86_64-apple-darwin
       - run: ./packaging/build-arch.zsh x86_64 build-ci-x86.log target/ci-slice-x86_64/OpenCast

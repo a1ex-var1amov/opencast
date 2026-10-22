@@ -86,19 +86,6 @@ final class Schedule {
 
     /// Zoom, Google Meet, Teams, Webex, Around, Whereby… links in the URL, location or notes.
     static func meetingURL(_ e: EKEvent) -> URL? {
-        let hosts = ["zoom.us", "meet.google.com", "teams.microsoft.com", "teams.live.com", "webex.com", "whereby.com", "around.co", "chime.aws", "meet.jit.si", "facetime.apple.com"]
-        var candidates: [String] = []
-        if let u = e.url?.absoluteString { candidates.append(u) }
-        if let l = e.location { candidates.append(l) }
-        if let n = e.notes { candidates.append(n) }
-        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return nil }
-        for text in candidates {
-            let ns = text as NSString
-            for m in detector.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
-                guard let url = m.url, let host = url.host?.lowercased() else { continue }
-                if hosts.contains(where: { host == $0 || host.hasSuffix("." + $0) }) { return url }
-            }
-        }
-        return nil
+        MeetingLinks.firstURL(in: [e.url?.absoluteString, e.location, e.notes])
     }
 }

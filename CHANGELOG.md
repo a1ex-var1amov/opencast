@@ -18,6 +18,11 @@ first tag is in `git log`.
   an alert explaining why the new copy quit.
 - The Homebrew cask is printed ready to paste (version, sha256 and owner/repo
   from your git remote) instead of a template full of `OWNER` placeholders.
+- Panel logic has tests: `./test-swift.command` compiles the pure panel files
+  with an assert-style runner (no Xcode project, no XCTest) and CI runs it.
+  30 checks cover deep links, meeting-link detection and snippet matching —
+  logic now extracted into `DeepLink.swift`, `MeetingLinks.swift` and
+  `SnippetMatch.swift`.
 
 ### Changed
 - An empty launcher shows a mix of kinds instead of one wall of window commands:
@@ -37,3 +42,7 @@ first tag is in `git log`.
 ### Fixed
 - `cargo test -p opencast-ffi --lib` failed on any machine with more built-in
   commands than the 60-row search limit.
+- Typing a snippet keyword could expand a *shorter* keyword that matched its
+  tail: with `;a` and `;ia` defined, `;ia` sometimes expanded `;a` and left an
+  `i` behind, because a dictionary decided which one won. The longest match wins
+  now.

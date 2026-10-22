@@ -57,12 +57,12 @@ final class SnippetExpander {
             buffer = ""
             return
         }
-        buffer += chars
-        if buffer.count > max(longest, 1) * 2 { buffer = String(buffer.suffix(longest)) }
-        for (keyword, text) in snippets where buffer.hasSuffix(keyword) {
+        buffer = SnippetMatch.trim(buffer + chars, longestKeyword: longest)
+        // Longest keyword wins: with `;a` and `;ia` defined, typing `;ia` must
+        // not expand `;a` and leave an `i` behind (dictionary order used to pick).
+        if let keyword = SnippetMatch.longest(buffer, keywords: snippets.keys) {
             buffer = ""
-            expand(keyword: keyword, text: text)
-            return
+            expand(keyword: keyword, text: snippets[keyword] ?? "")
         }
     }
 

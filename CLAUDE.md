@@ -40,7 +40,11 @@ macOS first; `crates/opencast-core` must stay portable (no platform UI deps).
 ## Build / test
 - Requirements: Rust and the Xcode command-line tools
 - `cargo test` — core tests (runs anywhere)
-- `./smoke.command` — tests, clippy, then OpenCast Doctor on the real config
+- `./test-swift.command` — panel logic tests: compiles the pure panel files
+  (DeepLink, MeetingLinks, SnippetMatch) with `macos-tests/main.swift` (assert
+  style, no XCTest); extracted files must not touch Bridge/AppKit
+- `./smoke.command` — fmt, tests, clippy, panel logic tests, then OpenCast Doctor
+  on the real config
 - The FFI crate only compiles for macOS (Linux builds a stub), so FFI and Swift
   changes are verified by `./build-app.command` on a Mac
 - `./build-app.command` — builds and installs the app to ~/Applications/OpenCast.app

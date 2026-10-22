@@ -12,6 +12,9 @@ cargo test -p opencast-core --quiet 2>&1 | grep -E "test result|FAILED|panicked|
 echo "== Lints =="
 cargo clippy -p opencast-core -p opencast-ffi --quiet -- -D warnings 2>&1 | tail -20
 [ ${pipestatus[1]} = 0 ] || fail=1
+echo "== Panel logic tests =="
+./test-swift.command 2>&1 | tail -3
+[ ${pipestatus[1]} = 0 ] || fail=1
 echo "== Doctor (your config) =="
 cargo run --release --quiet -p opencast-core --example doctor || fail=1
 if [ $fail = 0 ]; then echo "\n== All good =="; else echo "\n== Something needs attention (above) =="; fi

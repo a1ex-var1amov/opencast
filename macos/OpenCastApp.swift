@@ -2743,43 +2743,33 @@ final class Model {
 
     /// Deep link: `opencast://run/<id>` or `opencast://search?q=…`.
     func handleDeepLink(_ url: URL) {
-        // Finder › Open With › OpenCast on an .alfredworkflow / .alfredsnippets imports it.
-        if url.isFileURL, ["alfredworkflow", "alfredsnippets"].contains(url.pathExtension.lowercased()) {
-            show()
-            execute(id: "builtin:import-alfred", args: [url.path])
+        switch DeepLink.parse(url) {
+        case .ignored:
             return
-        }
-        guard url.scheme == "opencast" else { return }
-        show()
-        let host = (url.host ?? "").lowercased()
-        let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        if host == "search" {
-            query = comps?.queryItems?.first(where: { $0.name == "q" })?.value ?? ""
+        case .importAlfred(let path):
+            // Finder › Open With › OpenCast on an .alfredworkflow / .alfredsnippets.
+            show()
+            execute(id: "builtin:import-alfred", args: [path])
+        case .search(let q):
+            show()
+            query = q
             selected = 0
             listStart = 0
             noteContentChanged()
             focusTick += 1
             if ready { search() }
-            return
-        }
-        // run/<command-id> — id may contain colons (builtin:reload).
-        var id = ""
-        if host == "run" {
-            id = String(url.path.drop(while: { $0 == "/" }))
-        } else if url.path.hasPrefix("/run/") {
-            id = String(url.path.dropFirst("/run/".count))
-        }
-        id = id.removingPercentEncoding ?? id
-        guard !id.isEmpty else { return }
-        let commandId = id
-        if ready {
-            perform(commandId)
-        } else {
-            Task { @MainActor in
-                for _ in 0..<40 where !Model.shared.ready {
-                    try? await Task.sleep(nanoseconds: 50_000_000)
+        case .run(let id):
+            show()
+            if ready {
+                perform(id)
+            } else {
+                // A link can arrive before the engine has loaded its commands.
+                Task { @MainActor in
+                    for _ in 0..<40 where !Model.shared.ready {
+                        try? await Task.sleep(nanoseconds: 50_000_000)
+                    }
+                    Model.shared.perform(id)
                 }
-                Model.shared.perform(commandId)
             }
         }
     }

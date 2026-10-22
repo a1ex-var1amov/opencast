@@ -21,7 +21,8 @@ off disk, and add a test with every fix.
 
 ```sh
 cargo test                        # core tests, runs anywhere
-./smoke.command                   # tests + clippy + Doctor on your real config
+./test-swift.command              # panel logic tests (deep links, snippets, …)
+./smoke.command                   # tests + clippy + panel logic + Doctor on your config
 ./build-app.command               # build and install ~/Applications/OpenCast.app
 ./run-opencast.command            # debug app at target/debug/OpenCast.app
 ./release.command                 # signed + notarized dmg/zip (needs Developer ID)
@@ -31,6 +32,16 @@ The FFI crate and the panel only compile on a Mac, so check Swift/Rust-FFI
 changes with `./build-app.command` there. Do **not** export
 `MACOSX_DEPLOYMENT_TARGET` for cargo (Rust 1.91 release builds then cannot load
 proc macros); the app's minimum comes from swiftc's `-target`.
+
+### Testing panel code
+
+The panel has no Xcode project, so its tests are plain Swift compiled by
+`./test-swift.command`: the pure files plus `macos-tests/main.swift`, which is an
+assert-style runner (no XCTest). To test panel logic, put it in its own file that
+imports only Foundation — no `Bridge`, no `Engine.call`, no AppKit — and add that
+file to the list in `test-swift.command`. `DeepLink.swift`, `MeetingLinks.swift`
+and `SnippetMatch.swift` are the pattern: behaviour moved out of `Model`,
+`Schedule` and `SnippetExpander` unchanged, 30 checks now cover them.
 
 ## Rules this codebase follows
 
