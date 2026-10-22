@@ -5,6 +5,26 @@ the code after the extensions-and-builtins pass. ✅ done · 🟡 partial ·
 ⬜ not started. "Done" means implemented and unit-tested in core where
 possible; Swift parts are compiled only by `./build-app.command`.
 
+> **This is a snapshot of one evening, not the current state.** Rows below say
+> ⬜/🟡 for things that have since landed. What shipped afterwards, verified
+> against the code: Restart / Shut Down / Log Out / Quit All Apps with
+> confirmations, `[[ai_presets]]` + `profile.md` + `include` for shared config,
+> the translator (`tr …`, `translate_to`), browser page context
+> (`PageContext.swift`), model comparison (`CompareModels.swift`), emoji skin
+> tones, the full window set (sixths, First/Last Two Thirds, Center Half,
+> Maximize Height/Width, Reasonable Size, Move to edge, Toggle Fullscreen, Undo
+> Window Move), region glyphs + live preview + HUD + drag-to-snap +
+> `[[window_commands]]`, theme files (`theme_file`, `examples/themes/`), sticky
+> notes (`NotesEditor.swift`), Focus with site blocking and a menu-bar timer,
+> Dictate Anywhere, the "Keyboard Shortcuts" sheet (`CheatSheet.swift`),
+> Universal Actions, the File Buffer, `alfred_*` variables for plain scripts,
+> and OpenCast Doctor.
+>
+> For the surface as it is now read the README and `examples/config.toml` (they
+> are the reference), and "Status and roadmap" in the README for what is next:
+> MCP OAuth and resources/prompts, images to vision models, browser history,
+> Raycast React-extension compatibility, Linux packaging, universal binaries.
+
 ## Conflicts found and fixed tonight
 
 - **Currency made network requests unasked.** Now opt-in:

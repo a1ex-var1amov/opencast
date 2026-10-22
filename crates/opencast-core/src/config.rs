@@ -68,6 +68,93 @@ pub struct Config {
     /// Problems with `include` files (missing, invalid); shown as warnings.
     #[serde(skip)]
     pub include_warnings: Vec<String>,
+    /// Keys and section names in `config.toml` that nothing reads — typos serde
+    /// would otherwise swallow. Shown as warnings.
+    #[serde(skip)]
+    pub parse_warnings: Vec<String>,
+}
+
+/// Section and key names the parser accepts, taken from the structs by
+/// serializing a default `Config` — so this list cannot drift out of date.
+/// serde ignores unknown fields, so without this a typo in `config.toml` is
+/// silent: the setting just does nothing and nothing says so.
+///
+/// Checked: section names (`[general]`, `[[ai_commands]]`, …) and the keys of
+/// the single-instance tables (`[general]`, `[keys]`, `[focus]`). The keys of
+/// `[[providers]]`-style entries are left to serde, which reports the ones it
+/// cares about as missing fields.
+pub fn unknown_keys(src: &str) -> Vec<String> {
+    let Ok(file) = src.parse::<toml::Value>() else {
+        return Vec::new(); // a file that does not parse is reported as an error
+    };
+    let Ok(shape) = serde_json::to_value(Config::default()) else {
+        return Vec::new();
+    };
+    let Some(table) = file.as_table() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (name, val) in table {
+        let Some(spec) = shape.get(name) else {
+            let what = if section_like(val) { "section" } else { "key" };
+            out.push(format!(
+                "unknown {what} `{name}` is not read by anything{}",
+                did_you_mean(name, shape.as_object().into_iter().flat_map(|o| o.keys()))
+            ));
+            continue;
+        };
+        let (Some(rows), Some(want)) = (val.as_table(), spec.as_object()) else {
+            continue;
+        };
+        for (k, v) in rows {
+            if section_like(v) {
+                continue;
+            }
+            if !want.contains_key(k.as_str()) {
+                out.push(format!(
+                    "unknown key `[{name}] {k}` is not read by anything{}",
+                    did_you_mean(k, want.keys())
+                ));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// `[table]` or `[[array.of.tables]]` as parsed from TOML.
+fn section_like(v: &toml::Value) -> bool {
+    v.is_table() || v.as_array().is_some_and(|a| a.first().is_some_and(|t| t.is_table()))
+}
+
+/// “ (did you mean `x`?)” when a known name is within two edits.
+fn did_you_mean<'a, I: Iterator<Item = &'a String>>(needle: &str, names: I) -> String {
+    let mut best: Option<(usize, &str)> = None;
+    for n in names {
+        let d = edit_distance(needle, n);
+        if d <= 2 && best.is_none_or(|(bd, _)| d < bd) {
+            best = Some((d, n.as_str()));
+        }
+    }
+    match best {
+        Some((_, n)) => format!(" (did you mean `{n}`?)"),
+        None => String::new(),
+    }
+}
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let (ac, bc): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let mut prev: Vec<usize> = (0..=bc.len()).collect();
+    let mut cur = vec![0usize; bc.len() + 1];
+    for i in 1..=ac.len() {
+        cur[0] = i;
+        for j in 1..=bc.len() {
+            let cost = usize::from(ac[i - 1] != bc[j - 1]);
+            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[bc.len()]
 }
 
 /// `[[ai_presets]]`: a chat with its own provider, model, prompt and tools.
@@ -1092,7 +1179,8 @@ impl Config {
     }
 
     pub fn parse(src: &str) -> Result<Self> {
-        let cfg: Config = toml::from_str(src).context("parsing config.toml")?;
+        let mut cfg: Config = toml::from_str(src).context("parsing config.toml")?;
+        cfg.parse_warnings = unknown_keys(src);
         cfg.validate()?;
         Ok(cfg)
     }
@@ -1173,7 +1261,12 @@ impl Config {
                 }
             };
             match toml::from_str::<Config>(&text) {
-                Ok(other) => self.merge_from(other),
+                Ok(other) => {
+                    for w in unknown_keys(&text) {
+                        self.include_warnings.push(format!("include `{entry}`: {w}"));
+                    }
+                    self.merge_from(other);
+                }
                 Err(e) => self.include_warnings.push(format!("include `{entry}`: {e}")),
             }
         }
@@ -1646,6 +1739,34 @@ mod writer_tests {
             .snippets
             .iter()
             .any(|s| s.keyword == ";hi" && s.text == "Hello {cursor}"));
+    }
+
+    #[test]
+    fn unknown_config_keys_are_reported() {
+        // Typos serde would swallow: a wrong key, a wrong section name, a wrong
+        // key name inside a known section.
+        let c = Config::parse(
+            "[general]\nscipt_timeout_secs = 5\n\n[[ai_command]]\nid = \"x\"\ntitle = \"X\"\nprompt = \"p\"\n\n[keys]\naction = \"Cmd+K\"\n",
+        )
+        .unwrap();
+        let w = c.parse_warnings.join("\n");
+        assert!(
+            w.contains("scipt_timeout_secs") && w.contains("did you mean `script_timeout_secs`"),
+            "{w}"
+        );
+        assert!(
+            w.contains("`ai_command`") && w.contains("did you mean `ai_commands`"),
+            "{w}"
+        );
+        assert!(
+            w.contains("[keys] action") && w.contains("did you mean `actions`"),
+            "{w}"
+        );
+
+        // The documented surface must stay known: a setting in the example config
+        // that the structs do not have fails here.
+        assert_eq!(unknown_keys(DEFAULT_CONFIG), Vec::<String>::new());
+        assert!(Config::parse(DEFAULT_CONFIG).unwrap().parse_warnings.is_empty());
     }
 
     #[test]

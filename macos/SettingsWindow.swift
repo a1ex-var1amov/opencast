@@ -165,6 +165,11 @@ enum Keychain {
         return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
     }
 
+    /// Lets `/usr/bin/security` read the item without a prompt, which is how
+    /// `api_key_cmd = "security find-generic-password …"` works from the engine.
+    /// Apple marked these ACL APIs deprecated in 10.10 but never replaced them
+    /// for this case; `kSecAttrAccess` on `SecItemAdd` is still the only way to
+    /// name a second reader. The alternative would be keys in plain files.
     private static func access(label: String) -> SecAccess? {
         var apps: [SecTrustedApplication] = []
         var me: SecTrustedApplication?

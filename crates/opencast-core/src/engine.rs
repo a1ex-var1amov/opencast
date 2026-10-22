@@ -1654,6 +1654,7 @@ impl Engine {
         }
 
         warnings.extend(config.include_warnings.iter().cloned());
+        warnings.extend(config.parse_warnings.iter().cloned());
         // Attach [[hotkeys]] and `[[commands]] hotkey` to matching commands (by id or title).
         let mut key_for: HashMap<String, String> = HashMap::new();
         let mut seen_keys: HashMap<String, String> = HashMap::new();

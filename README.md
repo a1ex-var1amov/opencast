@@ -90,6 +90,17 @@ and asks for the rest. Each one is only needed by the features listed:
 Window moves go through the Accessibility API directly (no AppleScript, no
 subprocess), so a snap takes milliseconds.
 
+### From a script or another app
+
+```bash
+open "opencast://search?q=coffee"          # open the panel with this query typed
+open "opencast://run/builtin:reload"       # run a command by its id
+open -a OpenCast Workflow.alfredworkflow   # import an Alfred workflow or snippets
+```
+
+One OpenCast runs at a time: a second copy says so and quits, because two panels
+would fight over the same global hotkeys.
+
 ## Windows and layouts
 
 Type "half", "maximize", "third"… in the launcher to snap the window you were
@@ -480,7 +491,8 @@ as is):
   variables; `@opencast.mode markdown` renders output as Markdown and
   `@opencast.mode grid` shows list rows as a grid.
 - **OpenCast Doctor** (or `./smoke.command` in a terminal): checks the config
-  folder for oversized or repeated files, warnings, providers without keys,
+  folder for oversized or repeated files, keys and section names nothing reads
+  (typos in `config.toml` are usually silent), warnings, providers without keys,
   MCP servers that never connected, and search speed with your own apps.
 
 ## Releasing
@@ -512,7 +524,7 @@ and receives streamed tokens from it.
 
 v0.2. Next: OAuth for remote MCP servers, MCP resources/prompts, images to
 vision models, browser history, Raycast extension (React) compatibility,
-Linux packaging (the core is portable), and themes.
+Linux packaging (the core is portable), and universal (arm64 + x86_64) binaries.
 
 Prior art worth knowing: [SuperCmd](https://github.com/SuperCmdLabs/SuperCmd)
 (Electron, Raycast-extension compatible) and
@@ -524,6 +536,11 @@ OpenCast is an independent project, not affiliated with or endorsed by
 Raycast Technologies Ltd. or Running with Crayons Ltd. Raycast and Alfred are
 trademarks of their owners. OpenCast runs script commands and workflows built
 for other launchers; it does not use their services.
+
+Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) for the layout
+and the rules, [CHANGELOG.md](CHANGELOG.md) for what changed, and
+[SECURITY.md](SECURITY.md) for the threat model (a launcher runs your scripts as
+you) and how to report a problem privately.
 
 ## License
 

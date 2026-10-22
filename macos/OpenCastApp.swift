@@ -3368,6 +3368,29 @@ final class ClearHost<Content: View>: NSHostingView<Content> {
     }
 }
 
+/// One copy at a time. Two panels mean two global-hotkey grabbers, and the
+/// second copy's hotkeys would silently do nothing; they also fight over the
+/// usage/pins files. The lock is held by the fd until the process exits.
+enum SingleInstance {
+    private static var fd: Int32 = -1
+
+    /// Takes the lock, or returns false when another OpenCast holds it.
+    static func acquire() -> Bool {
+        let dir = ProcessInfo.processInfo.environment["OPENCAST_CONFIG_DIR"]
+            ?? (NSHomeDirectory() as NSString).appendingPathComponent(".config/opencast")
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let path = (dir as NSString).appendingPathComponent(".instance.lock")
+        let handle = open(path, O_RDWR | O_CREAT | O_CLOEXEC, S_IRUSR | S_IWUSR)
+        guard handle >= 0 else { return true } // no lockfile possible: do not block the app
+        if flock(handle, LOCK_EX | LOCK_NB) != 0 {
+            close(handle)
+            return false
+        }
+        fd = handle
+        return true
+    }
+}
+
 @main
 struct OpenCastApp {
     static func main() {
@@ -3375,6 +3398,16 @@ struct OpenCastApp {
         let delegate = AppDelegate()
         app.setActivationPolicy(.accessory)
         app.delegate = delegate
+        guard SingleInstance.acquire() else {
+            FileHandle.standardError.write("OpenCast is already running — this copy is quitting\n".data(using: .utf8) ?? Data())
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = "OpenCast is already running"
+            alert.informativeText = "This copy quit: two launchers would fight over the same hotkeys. Use the one already in your menu bar."
+            alert.alertStyle = .warning
+            alert.runModal()
+            return
+        }
         app.run()
     }
 }

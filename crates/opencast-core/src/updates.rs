@@ -81,6 +81,7 @@ pub async fn check(repo: &str, current: &str) -> Result<Option<Release>> {
     let client = reqwest::Client::builder()
         .user_agent(concat!("OpenCast/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(15))
         .build()?;
     let resp = client
         .get(format!("https://api.github.com/repos/{repo}/releases/latest"))

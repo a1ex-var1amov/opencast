@@ -22,6 +22,9 @@ use tokio::sync::mpsc;
 use crate::config::{Config, ProviderConfig, ProviderKind};
 use sse::{SseEvent, SseParser};
 
+/// How long an AI request may go without a single byte before it is dropped.
+const STALL_TIMEOUT_SECS: u64 = 120;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
@@ -362,6 +365,10 @@ impl Router {
     pub fn from_config(cfg: &Config) -> (Self, Vec<String>) {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
+            // Stall guard, not a cap on generation length: a request dies when no
+            // byte arrives for this long (a hung tunnel, a wedged local server).
+            // Long answers keep streaming as long as tokens keep coming.
+            .read_timeout(Duration::from_secs(STALL_TIMEOUT_SECS))
             .user_agent(concat!("OpenCast/", env!("CARGO_PKG_VERSION")))
             .build()
             .expect("http client");
