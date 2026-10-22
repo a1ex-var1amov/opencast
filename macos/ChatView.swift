@@ -13,15 +13,25 @@ struct ChatView: View {
         VStack(spacing: 0) {
             header
             messages
+            if let approval = model.pendingApproval {
+                approvalBanner(approval)
+            }
+            if !model.chatAttachments.isEmpty {
+                attachmentChips
+            }
             field
             HintBar(
                 left: model.chatStreaming ? "Streaming…" : "OpenCast",
-                hints: [
-                    ("Paste answer", "⌘↩"),
-                    ("Copy", "⌘⇧C"),
-                    ("New", "⌘N"),
-                    (model.chatStreaming ? "Stop" : "Back", "esc"),
-                ]
+                hints: model.pendingApproval != nil
+                    ? [("Allow", "↩"), ("Deny", "esc")]
+                    : [
+                        ("Attach", "⌘O"),
+                        ("Clipboard", "⌘⇧V"),
+                        ("Screen", "⌘⇧S"),
+                        ("Paste answer", "⌘↩"),
+                        ("New", "⌘N"),
+                        (model.chatStreaming ? "Stop" : "Back", "esc"),
+                    ]
             )
         }
         .onAppear { composer = true }
@@ -98,6 +108,67 @@ struct ChatView: View {
         .frame(maxHeight: .infinity)
     }
 
+    private func approvalBanner(_ a: ToolApproval) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "wrench.and.screwdriver.fill")
+                    .foregroundStyle(Theme.accent)
+                Text("Allow \(a.title)?")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Button("Deny") { model.answerApproval(false) }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.secondary(scheme))
+                Button("Allow") { model.answerApproval(true) }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            }
+            if a.arguments != "{}" {
+                ScrollView {
+                    Text(a.arguments)
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .foregroundStyle(Theme.secondary(scheme))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 90)
+            }
+        }
+        .padding(10)
+        .background(Theme.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.accent.opacity(0.35), lineWidth: 1))
+        .padding(.horizontal, 14)
+        .padding(.top, 6)
+    }
+
+    private var attachmentChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(model.chatAttachments) { a in
+                    HStack(spacing: 4) {
+                        Image(systemName: "paperclip")
+                        Text(a.name).lineLimit(1)
+                        Text("\(a.text.count) chars")
+                            .foregroundStyle(Theme.tertiary(scheme))
+                        Button {
+                            model.chatAttachments.removeAll { $0.id == a.id }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Theme.tertiary(scheme))
+                    }
+                    .font(.system(size: 11.5))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Theme.kbd(scheme), in: Capsule())
+                }
+            }
+            .padding(.horizontal, 14)
+        }
+        .padding(.top, 6)
+    }
+
     private var emptyHint: String {
         let who = model.chatProviderId ?? "your default provider"
         if let modelName = model.activeChatModel { return "Ask anything. Answers stream from \(who) · \(modelName)." }
@@ -108,6 +179,12 @@ struct ChatView: View {
         if turn.role == "user" {
             HStack {
                 Spacer(minLength: 48)
+                VStack(alignment: .trailing, spacing: 4) {
+                    if !turn.attachmentNames.isEmpty {
+                        Text(turn.attachmentNames.map { "📎 " + $0 }.joined(separator: "  "))
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.tertiary(scheme))
+                    }
                 Text(turn.content)
                     .textSelection(.enabled)
                     .padding(.horizontal, 12)
@@ -121,9 +198,15 @@ struct ChatView: View {
                             topTrailingRadius: 12
                         )
                     )
+                }
             }
         } else {
             VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(turn.tools.enumerated()), id: \.offset) { _, tool in
+                    Label(tool, systemImage: "wrench.and.screwdriver")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Theme.tertiary(scheme))
+                }
                 if turn.content.isEmpty {
                     if turn.error == nil, model.chatStreaming, index == model.chatTurns.count - 1 {
                         StreamCaret()

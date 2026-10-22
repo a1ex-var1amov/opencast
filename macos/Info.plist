@@ -22,8 +22,42 @@
 	<string>OpenCast controls other apps to snap windows, copy the selection, and paste answers.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>CFBundleShortVersionString</key>
+	<string>0.2.0</string>
+	<key>CFBundleVersion</key>
+	<string>0.2.0</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>OpenCast listens only while you dictate into the search field or chat.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>OpenCast turns your dictation into text, on-device when your language supports it.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>OpenCast shows your upcoming meetings in My Schedule and lets you join them with one key.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>OpenCast shows your upcoming meetings in My Schedule and lets you join them with one key.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>OpenCast searches your contacts so you can email, call or message them from the launcher.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>OpenCast lists, adds and completes your reminders from the launcher.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>OpenCast lists, adds and completes your reminders from the launcher.</string>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>OpenCast reads the screen to find the text you typed.</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Alfred Workflow</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>alfredworkflow</string>
+				<string>alfredsnippets</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

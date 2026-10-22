@@ -123,10 +123,32 @@ struct SeekView: View {
         let cursor = spans.isEmpty ? 0 : ((model.seekIndex % spans.count) + spans.count) % spans.count
         ZStack {
             Color.clear
+            if let from = model.seekLeaderFrom, spans.indices.contains(cursor) {
+                leader(from: from, to: spans[cursor])
+            }
             ForEach(spans) { span in
                 hit(span, current: span.id == cursor)
             }
         }
+    }
+
+    /// A line from the search field to the current match, so the eye finds it at once.
+    private func leader(from: CGPoint, to span: SeekSpan) -> some View {
+        let to = CGPoint(x: span.x + span.w / 2, y: span.y + span.h / 2)
+        return ZStack {
+            Path { p in
+                p.move(to: from)
+                // A gentle curve reads better than a straight diagonal.
+                p.addQuadCurve(to: to, control: CGPoint(x: to.x, y: from.y))
+            }
+            .stroke(Theme.accent.opacity(0.85), style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [6, 5]))
+            Circle()
+                .fill(Theme.accent)
+                .frame(width: 7, height: 7)
+                .position(from)
+        }
+        .allowsHitTesting(false)
+        .animation(.easeOut(duration: 0.15), value: to)
     }
 
     private func hit(_ span: SeekSpan, current: Bool) -> some View {

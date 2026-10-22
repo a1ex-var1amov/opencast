@@ -17,14 +17,14 @@ struct LauncherView: View {
     var body: some View {
         Group {
             switch model.mode {
-            case .search:
+            case .search, .list:
                 search
             case .actions(let command):
                 ActionsPane(model: model, command: command)
             case .args(let command):
                 ArgsForm(model: model, command: command)
             case .output(let title, let text):
-                OutputPane(title: title, text: text)
+                OutputPane(title: title, text: text, markdown: model.outputMarkdown)
             case .chat:
                 ChatView(model: model)
             }
@@ -67,17 +67,14 @@ struct LauncherView: View {
 
     private var panelShape: AnyShape {
         if isSpotlight {
-            AnyShape(RoundedRectangle(cornerRadius: Theme.spotlightRadius, style: .continuous))
-        } else {
-            AnyShape(UnevenRoundedRectangle(
-                bottomLeadingRadius: Theme.islandBottomRadius,
-                bottomTrailingRadius: Theme.islandBottomRadius
-            ))
+            return AnyShape(RoundedRectangle(cornerRadius: Theme.file.radius.map { CGFloat($0) } ?? Theme.spotlightRadius, style: .continuous))
         }
+        let r = Theme.file.radius.map { CGFloat($0) } ?? Theme.islandBottomRadius
+        return AnyShape(UnevenRoundedRectangle(bottomLeadingRadius: r, bottomTrailingRadius: r))
     }
 
     @ViewBuilder private var panelFill: some View {
-        if reduceTransparency {
+        if reduceTransparency || Theme.file.glass == false {
             Theme.island(scheme)
         } else {
             Rectangle().fill(.ultraThinMaterial)
@@ -88,7 +85,18 @@ struct LauncherView: View {
         VStack(spacing: 0) {
             field
             if !model.clicking {
-                list.frame(height: model.listHeight)
+                HStack(spacing: 0) {
+                    if model.isListMode, model.listOptions.isGrid {
+                        grid
+                    } else {
+                        list
+                    }
+                    if let preview = model.preview {
+                        Rectangle().fill(Theme.stroke(scheme).opacity(0.45)).frame(width: 0.5)
+                        PreviewPane(data: preview, scheme: scheme)
+                    }
+                }
+                .frame(height: model.listHeight)
             }
             footer
         }
@@ -109,16 +117,22 @@ struct LauncherView: View {
                         }
                     }
                 ),
-                prompt: Text(model.clicking ? "Type what you see…" : "Search apps and commands, or ask AI…")
+                prompt: Text(fieldPrompt)
                     .foregroundStyle(Theme.tertiary(scheme))
             )
             .textFieldStyle(.plain)
-            .font(.system(size: 19))
+            .font(Theme.font(size: Theme.file.titleFontSize ?? 19))
             .foregroundStyle(Theme.primary(scheme))
             .tint(Theme.accent)
             .focusEffectDisabled()
             .focused($focused)
             .autocorrectionDisabled()
+            if model.dictating {
+                Image(systemName: "mic.fill")
+                    .foregroundStyle(Theme.danger)
+                    .symbolEffect(.pulse)
+                    .help("Listening — Esc to stop")
+            }
             if model.busy {
                 ProgressView()
                     .controlSize(.small)
@@ -129,12 +143,18 @@ struct LauncherView: View {
         .frame(height: 58)
     }
 
+    private var fieldPrompt: String {
+        if model.clicking { return "Type what you see…" }
+        if case .list(let command, _, _) = model.mode { return "\(command.title) — filter…" }
+        return "Search apps and commands, or ask AI…"
+    }
+
     private var list: some View {
         Group {
             if model.rows.isEmpty {
                 Text("No results")
                     .foregroundStyle(Theme.secondary(scheme))
-                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .frame(maxWidth: .infinity, minHeight: model.rowHeight)
                     .padding(.vertical, 6)
             } else {
                 let start = model.listStart
@@ -147,6 +167,64 @@ struct LauncherView: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
             }
+        }
+    }
+
+    /// Script Filter `"view": "grid"`: big icons (emoji, images, colors) in columns.
+    private var grid: some View {
+        let columns = model.listOptions.columns
+        let rows = model.rows
+        return ScrollViewReader { proxy in
+            ScrollView {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: columns), spacing: 8) {
+                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                        gridCell(row, index: index)
+                            .id(index)
+                    }
+                }
+                .padding(10)
+            }
+            .onChange(of: model.selected) { _, i in
+                withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(i) }
+            }
+        }
+    }
+
+    @ViewBuilder private func gridCell(_ row: Model.Row, index: Int) -> some View {
+        if case .command(let command) = row {
+            let on = index == model.selected
+            VStack(spacing: 6) {
+                if let key = command.icon, Model.isImageIcon(key) {
+                    icon(command, size: 64)
+                } else if let glyph = command.icon, !glyph.isEmpty {
+                    Text(glyph).font(.system(size: 40))
+                        .frame(height: 64)
+                } else {
+                    icon(command, size: 40)
+                        .frame(height: 64)
+                }
+                Text(command.title)
+                    .font(.system(size: 11))
+                    .lineLimit(1)
+                    .foregroundStyle(on ? Theme.primary(scheme) : Theme.secondary(scheme))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(on ? Theme.accent.opacity(scheme == .light ? 0.14 : 0.22) : Theme.kbd(scheme).opacity(0.35))
+            }
+            .overlay {
+                if on {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Theme.accent.opacity(0.4), lineWidth: 1)
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                model.selected = index
+                model.activate(index)
+            }
+            .help(command.subtitle ?? command.title)
         }
     }
 
@@ -168,7 +246,7 @@ struct LauncherView: View {
             case .command(let command):
                 icon(command)
                 Text(command.title)
-                    .font(.system(size: 14, weight: .medium))
+                    .font(Theme.font(size: Theme.file.fontSize ?? 14, weight: .medium))
                     .lineLimit(1)
                 if let subtitle = command.subtitle {
                     Text(subtitle)
@@ -192,7 +270,7 @@ struct LauncherView: View {
             }
         }
         .padding(.horizontal, 10)
-        .frame(height: 44)
+        .frame(height: model.rowHeight)
         .background {
             if index == model.selected {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -213,12 +291,33 @@ struct LauncherView: View {
             guard dx * dx + dy * dy > 1 else { return }
             pointer = loc
             model.selected = index
+            model.updatePreview()
         }
         .onTapGesture { model.activate(index) }
     }
 
-    @ViewBuilder private func icon(_ command: Command) -> some View {
-        if command.kind == .clipboard,
+    @ViewBuilder private func icon(_ command: Command, size: CGFloat = 28) -> some View {
+        let _ = model.thumbTick
+        if let swatch = command.icon, swatch.hasPrefix("color:"), let c = Theme.color(hex: String(swatch.dropFirst(6))) {
+            Circle()
+                .fill(c)
+                .overlay(Circle().stroke(Theme.stroke(scheme), lineWidth: 0.5))
+                .frame(width: size * 0.75, height: size * 0.75)
+                .frame(width: size, height: size)
+        } else if let key = command.icon, Model.isImageIcon(key) {
+            if let image = model.imageIcons[key] {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: size, height: size)
+            } else {
+                Color.clear.frame(width: size, height: size)
+            }
+        } else if command.kind == .window, let region = WindowGlyphs.regions[command.id] {
+            WindowGlyph(region: region, size: 24, tint: Theme.primary(scheme).opacity(0.8), portrait: WindowGlyphs.portrait)
+                .frame(width: 28, height: 28)
+        } else if command.kind == .clipboard,
            let image = ClipboardHistory.shared.image(for: command.id)
         {
             Image(nsImage: image)
@@ -262,6 +361,17 @@ struct LauncherView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.tertiary(scheme))
                 }
+            } else if !model.fileBuffer.isEmpty {
+                Text("📎 File Buffer · \(model.fileBuffer.count) · ⌘K acts on all · ⌥← clears")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.secondary(scheme))
+                    .lineLimit(1)
+            } else if FocusController.shared.isActive {
+                let f = FocusController.shared
+                Text("\(f.isPaused ? "⏸ Focus paused" : "🎯 Focus") · \(f.minutesLeft) min left\(f.goal.isEmpty ? "" : " · " + f.goal)")
+                    .lineLimit(1)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.secondary(scheme))
             } else {
                 Text("OpenCast")
                     .font(.system(size: 12))
@@ -278,10 +388,16 @@ struct LauncherView: View {
                 } else {
                     if let verb = model.verb {
                         hint(verb, "Return")
-                        if !model.askSelected { hint("Ask AI", "Tab") }
+                        if model.isListMode {
+                            hint("Back", "Esc")
+                        } else if !model.askSelected {
+                            hint("Ask AI", Theme.keyLabel(model.keymap["ask_ai"], "Tab"))
+                        }
                     }
-                    hint("Actions", "⌘K")
-                    hint("Click", "`")
+                    hint("Actions", Theme.keyLabel(model.keymap["actions"], "⌘K"))
+                    if !model.isListMode {
+                        hint("Click", Theme.keyLabel(model.keymap["click_text"], "`"))
+                    }
                 }
             }
         }
@@ -302,7 +418,10 @@ struct LauncherView: View {
     }
 
     private func selectField() {
-        guard case .search = model.mode else { return }
+        switch model.mode {
+        case .search, .list: break
+        default: return
+        }
         focused = true
         DispatchQueue.main.async {
             let appearance = Theme.nsAppearance(preference: model.themePreference)
@@ -345,18 +464,34 @@ private struct ActionsPane: View {
             }
             .padding(.horizontal, 14)
             .frame(height: 52)
+            ScrollViewReader { proxy in
+            ScrollView {
+            VStack(spacing: 0) {
             ForEach(Array(actions.enumerated()), id: \.element.id) { index, action in
                 let on = index == model.selected
                 HStack {
                     Text(action.title)
                         .font(.system(size: 14))
                     Spacer()
+                    if let key = action.keyLabel {
+                        Text(key)
+                            .font(.system(size: 12))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Theme.kbd(scheme), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .foregroundStyle(Theme.secondary(scheme))
+                    }
                 }
                 .padding(.horizontal, 14)
                 .frame(height: 36)
                 .background(on ? Theme.accent.opacity(0.18) : Color.clear)
                 .contentShape(Rectangle())
                 .onTapGesture { model.runAction(action.id, for: command) }
+                .id(index)
+            }
+            }
+            }
+            .onChange(of: model.selected) { _, i in proxy.scrollTo(i) }
             }
             Spacer(minLength: 0)
             HStack {
@@ -374,7 +509,7 @@ private struct ActionsPane: View {
             .padding(.horizontal, 14)
             .frame(height: 38)
         }
-        .frame(height: 52 + CGFloat(min(actions.count, 8)) * 36 + 38)
+        .frame(height: 52 + CGFloat(min(actions.count, 10)) * 36 + 38)
     }
 }
 
@@ -529,6 +664,7 @@ private struct ArgsForm: View {
 private struct OutputPane: View {
     var title: String
     var text: String
+    var markdown = false
     @Environment(\.colorScheme) private var systemScheme
     @Environment(\.themePreference) private var themePreference
     private var scheme: ColorScheme { Theme.scheme(preference: themePreference, system: systemScheme) }
@@ -548,13 +684,20 @@ private struct OutputPane: View {
                 Rectangle().fill(Theme.stroke(scheme).opacity(0.45)).frame(height: 0.5)
             }
             ScrollView {
-                Text(text.isEmpty ? "(no output)" : text)
-                    .font(.system(size: 13, design: .monospaced))
-                    .foregroundStyle(text.isEmpty ? Theme.tertiary(scheme) : Theme.primary(scheme))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 16)
+                if markdown, !text.isEmpty {
+                    MarkdownText(text: text, scheme: scheme)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 16)
+                } else {
+                    Text(text.isEmpty ? "(no output)" : text)
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundStyle(text.isEmpty ? Theme.tertiary(scheme) : Theme.primary(scheme))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 16)
+                }
             }
             .frame(maxHeight: .infinity)
             HintBar(left: "OpenCast", hints: [("Copy", "↵"), ("Back", "esc")])

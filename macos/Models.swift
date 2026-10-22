@@ -5,6 +5,12 @@ struct Argument: Equatable, Sendable {
     var optional: Bool
     var secure: Bool
 
+    init(placeholder: String, optional: Bool, secure: Bool) {
+        self.placeholder = placeholder
+        self.optional = optional
+        self.secure = secure
+    }
+
     init?(_ raw: [String: Any]) {
         guard let placeholder = raw["placeholder"] as? String else { return nil }
         self.placeholder = placeholder
@@ -23,7 +29,7 @@ struct Command: Identifiable, Equatable, Sendable {
     var hotkey: String?
 
     enum Kind: String, Equatable, Sendable {
-        case builtin, ai, script, quicklink, app, calculator, window, layout, file, snippet, clipboard
+        case builtin, ai, script, quicklink, app, calculator, window, layout, file, snippet, clipboard, shortcut, mcp
 
         var label: String {
             switch self {
@@ -38,6 +44,8 @@ struct Command: Identifiable, Equatable, Sendable {
             case .file: "File"
             case .snippet: "Snippet"
             case .clipboard: "Clipboard"
+            case .shortcut: "Shortcut"
+            case .mcp: "MCP Tool"
             }
         }
     }
@@ -84,8 +92,156 @@ struct Provider: Identifiable, Equatable, Sendable {
 
 struct ChatTurn: Equatable, Sendable {
     var role: String
+    /// What the user typed / what the model answered (shown).
     var content: String
     var error: String?
+    /// Tools the model ran during this answer (`github · create_issue`).
+    var tools: [String] = []
+    /// Attachment text sent with a user turn (not shown inline).
+    var context: String = ""
+    var attachmentNames: [String] = []
+
+    /// What the model sees for this turn.
+    var wireContent: String { context.isEmpty ? content : content + "\n\n" + context }
+}
+
+/// A file, clipboard or screen text attached to the next chat message.
+struct ChatAttachment: Equatable, Sendable, Identifiable {
+    var id = UUID()
+    var name: String
+    var text: String
+}
+
+/// The model wants to call a tool that is not auto-approved.
+struct ToolApproval: Equatable, Sendable {
+    var requestId: String
+    var callId: String
+    var title: String
+    var arguments: String
+}
+
+/// One row from a Script Filter (`@opencast.mode list`).
+/// Extra action on a list row (⌘K or its own shortcut): runs the `run` step with `arg`.
+struct ItemAction: Equatable, Sendable {
+    var title: String
+    var arg: String
+    var key: String?
+}
+
+struct ListItem: Equatable, Sendable {
+    var title: String
+    var subtitle: String?
+    var icon: String?
+    var arg: String
+    var autocomplete: String?
+    /// Detail pane (markdown).
+    var markdown: String?
+    var actions: [ItemAction] = []
+    /// File or URL for Quick Look.
+    var quicklook: String?
+    /// Text for Copy; defaults to `arg`.
+    var copy: String?
+    /// `false`: Return autocompletes instead of running (Alfred).
+    var valid = true
+    /// Passed to the `run` step as environment variables.
+    var variables: [String: String] = [:]
+
+    init(title: String, subtitle: String?, icon: String?, arg: String, autocomplete: String? = nil) {
+        self.title = title
+        self.subtitle = subtitle
+        self.icon = icon
+        self.arg = arg
+        self.autocomplete = autocomplete
+    }
+
+    init?(_ raw: [String: Any]) {
+        guard let title = raw["title"] as? String, !title.isEmpty else { return nil }
+        self.title = title
+        subtitle = raw["subtitle"] as? String
+        icon = raw["icon"] as? String
+        arg = raw["arg"] as? String ?? title
+        autocomplete = raw["autocomplete"] as? String
+        markdown = raw["markdown"] as? String
+        quicklook = raw["quicklook"] as? String
+        copy = raw["copy"] as? String
+        valid = raw["valid"] as? Bool ?? true
+        variables = raw["variables"] as? [String: String] ?? [:]
+        actions = (raw["actions"] as? [[String: Any]] ?? []).compactMap { a in
+            guard let t = a["title"] as? String, let arg = a["arg"] as? String else { return nil }
+            return ItemAction(title: t, arg: arg, key: a["key"] as? String)
+        }
+    }
+}
+
+/// How a Script Filter wants its rows shown.
+struct ListOptions: Equatable, Sendable {
+    /// `list` or `grid`.
+    var view = "list"
+    var columns = 5
+    /// Re-run the list step every N seconds while it is open.
+    var rerun: Double?
+
+    init() {}
+
+    init(_ raw: [String: Any]) {
+        view = raw["view"] as? String ?? "list"
+        columns = min(max(raw["columns"] as? Int ?? 5, 2), 10)
+        rerun = raw["rerun"] as? Double
+    }
+
+    var isGrid: Bool { view == "grid" }
+}
+
+/// `[keys]` binding, pre-parsed by core: lowercase mods and key name.
+struct KeyBinding: Equatable, Sendable {
+    var name: String
+    var mods: Set<String>
+    var key: String
+
+    init?(_ raw: [String: Any]) {
+        guard let name = raw["name"] as? String, let key = raw["key"] as? String else { return nil }
+        self.name = name
+        self.key = key
+        mods = Set(raw["mods"] as? [String] ?? [])
+    }
+}
+
+/// Where an AI command's answer goes (`output` in config).
+enum AiOutput: String, Sendable {
+    case chat, replace, paste, copy
+}
+
+/// Optional `theme_file` values. Nil = keep the built-in default.
+struct ThemeFile: Equatable, Sendable {
+    var accent: String?
+    var panelLight: String?
+    var panelDark: String?
+    var textLight: String?
+    var textDark: String?
+    var radius: Double?
+    var rowHeight: Double?
+    var width: Double?
+    var fontSize: Double?
+    var titleFontSize: Double?
+    var glass: Bool?
+    var font: String?
+
+    init() {}
+
+    init(_ raw: [String: Any]) {
+        accent = raw["accent"] as? String
+        panelLight = raw["panel_light"] as? String
+        panelDark = raw["panel_dark"] as? String
+        textLight = raw["text_light"] as? String
+        textDark = raw["text_dark"] as? String
+        radius = raw["radius"] as? Double
+        rowHeight = raw["row_height"] as? Double
+        width = raw["width"] as? Double
+        fontSize = raw["font_size"] as? Double
+        titleFontSize = raw["title_font_size"] as? Double
+        glass = raw["glass"] as? Bool
+        font = raw["font"] as? String
+    }
 }
 
 enum ExecOutcome: Sendable {
@@ -93,7 +249,18 @@ enum ExecOutcome: Sendable {
     case toast(String)
     case error(String)
     case output(title: String, text: String)
-    case chat(prompt: String?, system: String?, provider: String?, model: String?, autoSend: Bool)
+    case markdown(title: String, text: String)
+    case chat(prompt: String?, system: String?, provider: String?, model: String?, autoSend: Bool,
+              temperature: Double?, maxTokens: Int?, output: AiOutput, preset: String?)
+    /// Snap the front window; `frac` = (x, y, w, h) of the work area or nil for special actions.
+    case window(action: String, frac: [Double]?)
+    /// `capture` → record windows and call layoutSave; `apply` → place `apps`.
+    case layout(op: String, name: String, apps: [WindowManager.AppWindows])
+    case list(command: Command, items: [ListItem], filter: Bool, options: ListOptions)
+    case quit
+    /// Panel-side feature: `settings`, `menu-items`, `dictate`, `schedule`.
+    case ui(String, [String])
+    case resumeChat(id: String, provider: String?, model: String?, system: String?, turns: [ChatTurn])
     case args(Command)
     case failure(String)
     case query(String)
@@ -116,13 +283,52 @@ enum ExecOutcome: Sendable {
             self = .error(raw["message"] as? String ?? "Error")
         case "output":
             self = .output(title: raw["title"] as? String ?? "", text: raw["text"] as? String ?? "")
+        case "markdown":
+            self = .markdown(title: raw["title"] as? String ?? "", text: raw["text"] as? String ?? "")
         case "chat":
             self = .chat(
                 prompt: raw["prompt"] as? String,
                 system: raw["system"] as? String,
                 provider: raw["provider"] as? String,
                 model: raw["model"] as? String,
-                autoSend: raw["autoSend"] as? Bool ?? false
+                autoSend: raw["autoSend"] as? Bool ?? false,
+                temperature: raw["temperature"] as? Double,
+                maxTokens: raw["maxTokens"] as? Int,
+                output: AiOutput(rawValue: raw["output"] as? String ?? "chat") ?? .chat,
+                preset: raw["preset"] as? String
+            )
+        case "window":
+            self = .window(action: raw["action"] as? String ?? "", frac: raw["frac"] as? [Double])
+        case "layout":
+            let apps: [WindowManager.AppWindows] = (raw["apps"] as? [[String: Any]])
+                .flatMap { try? JSONSerialization.data(withJSONObject: $0) }
+                .flatMap { try? JSONDecoder().decode([WindowManager.AppWindows].self, from: $0) } ?? []
+            self = .layout(op: raw["op"] as? String ?? "", name: raw["name"] as? String ?? "", apps: apps)
+        case "list":
+            if let command = (raw["command"] as? [String: Any]).flatMap(Command.init) {
+                let items = (raw["items"] as? [[String: Any]])?.compactMap(ListItem.init) ?? []
+                self = .list(command: command, items: items, filter: raw["filter"] as? Bool ?? true, options: ListOptions(raw))
+            } else {
+                self = .failure("Bad list payload")
+            }
+        case "quit":
+            self = .quit
+        case "ui":
+            self = .ui(raw["action"] as? String ?? "", raw["args"] as? [String] ?? [])
+        case "resumeChat":
+            let chat = raw["chat"] as? [String: Any] ?? [:]
+            let turns: [ChatTurn] = (chat["messages"] as? [[String: Any]] ?? []).compactMap { m in
+                guard let role = m["role"] as? String, role == "user" || role == "assistant" else { return nil }
+                let content = m["content"] as? String ?? ""
+                if role == "assistant", content.isEmpty { return nil }
+                return ChatTurn(role: role, content: content)
+            }
+            self = .resumeChat(
+                id: chat["id"] as? String ?? "chat:\(UUID().uuidString)",
+                provider: chat["provider"] as? String,
+                model: chat["model"] as? String,
+                system: chat["system"] as? String,
+                turns: turns
             )
         case "args":
             if let command = (raw["command"] as? [String: Any]).flatMap(Command.init) {

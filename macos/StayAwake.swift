@@ -1,13 +1,16 @@
 import AppKit
+import IOKit.pwr_mgt
 
-/// Amphetamine-lite: `caffeinate -i` plus a menu-bar state dot.
+/// Amphetamine-lite: an IOKit power assertion (no `caffeinate` child process)
+/// plus a menu-bar state dot.
 @MainActor
 final class StayAwakeController: NSObject {
     static let shared = StayAwakeController()
 
     private(set) var mode = "off"
-    private var process: Process?
+    private var assertion: IOPMAssertionID = 0
     private var endsAt: Date?
+    private var endTimer: Timer?
     private var statusItem: NSStatusItem?
     private var tick: Timer?
 
@@ -22,24 +25,21 @@ final class StayAwakeController: NSObject {
     }
 
     func apply(_ mode: String) {
-        stopProcess()
+        release()
         self.mode = mode
         endsAt = nil
-        switch mode {
-        case "off":
-            break
-        case "indefinite":
-            start(args: ["-i"])
-        case "30m":
-            endsAt = Date().addingTimeInterval(30 * 60)
-            start(args: ["-i", "-t", "1800"])
-        case "1h":
-            endsAt = Date().addingTimeInterval(60 * 60)
-            start(args: ["-i", "-t", "3600"])
-        case "3h":
-            endsAt = Date().addingTimeInterval(3 * 60 * 60)
-            start(args: ["-i", "-t", "10800"])
-        default:
+        let seconds: TimeInterval? = switch mode {
+        case "off": nil
+        case "indefinite": 0
+        case "30m": 30 * 60
+        case "1h": 60 * 60
+        case "3h": 3 * 60 * 60
+        default: nil
+        }
+        if let seconds {
+            if seconds > 0 { endsAt = Date().addingTimeInterval(seconds) }
+            acquire(seconds: seconds)
+        } else {
             self.mode = "off"
         }
         rebuildMenu()
@@ -48,7 +48,7 @@ final class StayAwakeController: NSObject {
     }
 
     func shutdown() {
-        stopProcess()
+        release()
         mode = "off"
         endsAt = nil
         tick?.invalidate()
@@ -59,17 +59,31 @@ final class StayAwakeController: NSObject {
         }
     }
 
-    private func start(args: [String]) {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/caffeinate")
-        p.arguments = args
-        p.standardOutput = FileHandle.nullDevice
-        p.standardError = FileHandle.nullDevice
-        p.terminationHandler = { [weak self] proc in
-            Task { @MainActor in
-                guard let self, self.process == proc else { return }
-                self.process = nil
-                if self.mode != "off" {
+    /// `kIOPMAssertionTypePreventUserIdleSystemSleep` is what `caffeinate -i` takes.
+    private func acquire(seconds: TimeInterval) {
+        var id: IOPMAssertionID = 0
+        let reason = "OpenCast Stay Awake" as CFString
+        let status = seconds > 0
+            ? IOPMAssertionCreateWithDescription(
+                kIOPMAssertionTypePreventUserIdleSystemSleep as CFString, reason, nil, nil, nil, seconds,
+                kIOPMAssertionTimeoutActionRelease as CFString, &id
+            )
+            : IOPMAssertionCreateWithName(
+                kIOPMAssertionTypePreventUserIdleSystemSleep as CFString, IOPMAssertionLevel(kIOPMAssertionLevelOn), reason, &id
+            )
+        guard status == kIOReturnSuccess else {
+            mode = "off"
+            endsAt = nil
+            return
+        }
+        assertion = id
+        endTimer?.invalidate()
+        endTimer = nil
+        if seconds > 0 {
+            endTimer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.mode != "off" else { return }
+                    self.release()
                     self.mode = "off"
                     self.endsAt = nil
                     self.rebuildMenu()
@@ -78,20 +92,14 @@ final class StayAwakeController: NSObject {
                 }
             }
         }
-        do {
-            try p.run()
-            process = p
-        } catch {
-            mode = "off"
-            endsAt = nil
-            process = nil
-        }
     }
 
-    private func stopProcess() {
-        guard let p = process else { return }
-        process = nil
-        if p.isRunning { p.terminate() }
+    private func release() {
+        endTimer?.invalidate()
+        endTimer = nil
+        guard assertion != 0 else { return }
+        IOPMAssertionRelease(assertion)
+        assertion = 0
     }
 
     private func scheduleTick() {

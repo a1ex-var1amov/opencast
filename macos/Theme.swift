@@ -14,8 +14,62 @@ extension EnvironmentValues {
 }
 
 enum Theme {
-    /// Follows System Settings → Accent Color.
-    static var accent: Color { Color(nsColor: .controlAccentColor) }
+    /// `theme_file` values from config; set by `Model.refreshSettings`.
+    static var file = ThemeFile()
+
+    /// Follows System Settings → Accent Color unless the theme file sets one.
+    static var accent: Color {
+        if let hex = file.accent, let c = color(hex: hex) { return c }
+        return Color(nsColor: .controlAccentColor)
+    }
+
+    /// Row/field font: the theme's family when it names one that exists.
+    static func font(size: Double, weight: Font.Weight = .regular) -> Font {
+        if let name = file.font, !name.isEmpty, NSFont(name: name, size: CGFloat(size)) != nil {
+            return .custom(name, size: CGFloat(size)).weight(weight)
+        }
+        return .system(size: CGFloat(size), weight: weight)
+    }
+
+    /// `#rrggbb` / `#rrggbbaa` → Color.
+    static func color(hex: String) -> Color? {
+        var h = hex.trimmingCharacters(in: .whitespaces)
+        if h.hasPrefix("#") { h.removeFirst() }
+        guard h.count == 6 || h.count == 8, let v = UInt64(h, radix: 16) else { return nil }
+        let r, g, b, a: Double
+        if h.count == 8 {
+            r = Double((v >> 24) & 0xff) / 255; g = Double((v >> 16) & 0xff) / 255
+            b = Double((v >> 8) & 0xff) / 255; a = Double(v & 0xff) / 255
+        } else {
+            r = Double((v >> 16) & 0xff) / 255; g = Double((v >> 8) & 0xff) / 255
+            b = Double(v & 0xff) / 255; a = 1
+        }
+        return Color(red: r, green: g, blue: b, opacity: a)
+    }
+
+    /// Footer label for a binding: `⌘⇧P`, `Tab`, `` ` ``.
+    static func keyLabel(_ b: KeyBinding?, _ fallback: String) -> String {
+        guard let b else { return fallback }
+        var out = ""
+        if b.mods.contains("ctrl") { out += "⌃" }
+        if b.mods.contains("alt") { out += "⌥" }
+        if b.mods.contains("shift") { out += "⇧" }
+        if b.mods.contains("cmd") { out += "⌘" }
+        switch b.key {
+        case "tab": out += "Tab"
+        case "return": out += "↩"
+        case "escape": out += "Esc"
+        case "space": out += "Space"
+        case "up": out += "↑"
+        case "down": out += "↓"
+        case "left": out += "←"
+        case "right": out += "→"
+        case "backspace": out += "⌫"
+        case "delete": out += "⌦"
+        default: out += b.key.uppercased()
+        }
+        return out
+    }
 
     /// Accessibility → Display → Reduce transparency.
     static var reduceTransparency: Bool {
@@ -24,7 +78,8 @@ enum Theme {
 
     /// Opaque fallback when glass is off (Reduce transparency or solid toast contrast).
     static func island(_ scheme: ColorScheme) -> Color {
-        scheme == .dark ? rgb(0x1c1c1e) : rgb(0xf5f5f7)
+        if let hex = scheme == .dark ? file.panelDark : file.panelLight, let c = color(hex: hex) { return c }
+        return scheme == .dark ? rgb(0x1c1c1e) : rgb(0xf5f5f7)
     }
 
     static let spotlightRadius: CGFloat = 22
@@ -32,7 +87,8 @@ enum Theme {
 
     /// Semantic ink under aqua / darkAqua so Appearance: Light never keeps dark-mode gray.
     static func primary(_ scheme: ColorScheme) -> Color {
-        Color(nsColor: semanticLabel(.label, scheme: scheme))
+        if let hex = scheme == .dark ? file.textDark : file.textLight, let c = color(hex: hex) { return c }
+        return Color(nsColor: semanticLabel(.label, scheme: scheme))
     }
 
     static func secondary(_ scheme: ColorScheme) -> Color {
@@ -100,6 +156,12 @@ enum Theme {
         if command.id.hasPrefix("note:") {
             return "note.text"
         }
+        // `[[commands]] icon = "safari"`: a bare symbol name (letters, dots) is an SF Symbol.
+        if let icon = command.icon, icon.count > 1,
+           icon.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.contains($0) || $0 == "." })
+        {
+            return icon
+        }
         switch command.kind {
         case .file: return "doc.fill"
         case .snippet: return "text.quote"
@@ -111,6 +173,8 @@ enum Theme {
         case .calculator: return "plus.forwardslash.minus"
         case .window: return "rectangle.split.2x1"
         case .layout: return "square.stack.3d.up.fill"
+        case .shortcut: return "square.2.layers.3d.fill"
+        case .mcp: return "puzzlepiece.extension.fill"
         case .builtin: break
         }
         guard let icon = command.icon else { return nil }
@@ -121,12 +185,17 @@ enum Theme {
         return glyphs[key]
     }
 
+    /// Symbol names already checked against the system; `NSImage(systemSymbolName:)`
+    /// per row per frame was a measurable cost on the search list.
+    private static var symbolExists: [String: Bool] = [:]
+
     /// Resolved SF Symbol name if the system has it; else nil (caller draws emoji).
     static func resolvedSymbol(for command: Command) -> String? {
-        guard let name = symbol(for: command),
-              NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil
-        else { return nil }
-        return name
+        guard let name = symbol(for: command) else { return nil }
+        if let known = symbolExists[name] { return known ? name : nil }
+        let exists = NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil
+        symbolExists[name] = exists
+        return exists ? name : nil
     }
 
     private static func rgb(_ hex: UInt32) -> Color {
