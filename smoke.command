@@ -5,6 +5,8 @@ cd "$(dirname "$0")"
 command -v cargo >/dev/null || { [ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"; }
 unset MACOSX_DEPLOYMENT_TARGET
 fail=0
+echo "== Format =="
+cargo fmt --all -- --check || fail=1
 echo "== Tests =="
 cargo test -p opencast-core --quiet 2>&1 | grep -E "test result|FAILED|panicked|error" || fail=1
 echo "== Lints =="
