@@ -1,6 +1,8 @@
 node_modules/
 .superpowers/
+.handoff/
 dist/
 target/
 .DS_Store
 *.log
+graphify-out/
