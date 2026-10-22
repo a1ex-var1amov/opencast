@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
-use super::{pump, sse::SseEvent, ChatEvent, ChatRequest, Endpoint, Provider, Role, Step};
+use super::{pump, sse::SseEvent, ChatEvent, ChatRequest, Endpoint, Provider, Role, Step, ToolCall};
 use crate::config::ProviderKind;
 
 pub struct Gemini(pub Endpoint);
@@ -26,9 +26,28 @@ pub fn body(req: &ChatRequest) -> Value {
         .messages
         .iter()
         .filter(|m| m.role != Role::System)
-        .map(|m| {
-            let role = if m.role == Role::Assistant { "model" } else { "user" };
-            json!({"role": role, "parts": [{"text": m.content}]})
+        .map(|m| match m.role {
+            Role::Assistant if !m.tool_calls.is_empty() => {
+                let mut parts = Vec::new();
+                if !m.content.is_empty() {
+                    parts.push(json!({"text": m.content}));
+                }
+                for c in &m.tool_calls {
+                    parts.push(json!({"functionCall": {"name": c.name, "args": c.arguments}}));
+                }
+                json!({"role": "model", "parts": parts})
+            }
+            Role::Tool => json!({
+                "role": "user",
+                "parts": [{"functionResponse": {
+                    "name": m.name.clone().unwrap_or_default(),
+                    "response": {"content": m.content},
+                }}],
+            }),
+            _ => {
+                let role = if m.role == Role::Assistant { "model" } else { "user" };
+                json!({"role": role, "parts": [{"text": m.content}]})
+            }
         })
         .collect();
     let mut b = json!({ "contents": contents });
@@ -45,36 +64,97 @@ pub fn body(req: &ChatRequest) -> Value {
     if !generation.is_empty() {
         b["generationConfig"] = Value::Object(generation);
     }
+    if !req.tools.is_empty() {
+        b["tools"] = json!([{ "functionDeclarations": req.tools.iter().map(|t| json!({
+            "name": t.name,
+            "description": t.description,
+            "parameters": gemini_schema(&t.parameters),
+        })).collect::<Vec<_>>() }]);
+    }
     b
 }
 
-pub fn parse(ev: &SseEvent) -> Step {
-    let Ok(v) = serde_json::from_str::<Value>(&ev.data) else {
-        return Step::Continue(None);
-    };
-    if let Some(e) = v.get("error") {
-        return Step::Error(
-            e["message"]
-                .as_str()
-                .map(str::to_string)
-                .unwrap_or_else(|| e.to_string()),
-        );
+/// Gemini accepts an OpenAPI subset of JSON Schema: drop the keywords it rejects.
+pub fn gemini_schema(v: &Value) -> Value {
+    match v {
+        Value::Object(map) => {
+            let mut out = serde_json::Map::new();
+            for (k, val) in map {
+                if matches!(
+                    k.as_str(),
+                    "$schema" | "additionalProperties" | "$id" | "$ref" | "default" | "examples"
+                ) {
+                    continue;
+                }
+                out.insert(k.clone(), gemini_schema(val));
+            }
+            // An object with no properties is rejected; give it an empty map.
+            if out.get("type").and_then(Value::as_str) == Some("object") && !out.contains_key("properties") {
+                out.insert("properties".into(), json!({}));
+            }
+            Value::Object(out)
+        }
+        Value::Array(a) => Value::Array(a.iter().map(gemini_schema).collect()),
+        other => other.clone(),
     }
-    if let Some(reason) = v["promptFeedback"]["blockReason"].as_str() {
-        return Step::Error(format!("blocked by Gemini safety filter: {reason}"));
-    }
-    let text: String = v["candidates"][0]["content"]["parts"]
-        .as_array()
-        .map(|parts| {
-            parts
-                .iter()
+}
+
+/// Gemini sends function calls whole (no fragments); collect them and release
+/// when the candidate finishes.
+#[derive(Default)]
+pub struct Parser {
+    calls: Vec<ToolCall>,
+}
+
+impl Parser {
+    pub fn parse(&mut self, ev: &SseEvent) -> Step {
+        let Ok(v) = serde_json::from_str::<Value>(&ev.data) else {
+            return Step::Continue(None);
+        };
+        if let Some(e) = v.get("error") {
+            return Step::Error(
+                e["message"]
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| e.to_string()),
+            );
+        }
+        if let Some(reason) = v["promptFeedback"]["blockReason"].as_str() {
+            return Step::Error(format!("blocked by Gemini safety filter: {reason}"));
+        }
+        let parts = v["candidates"][0]["content"]["parts"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let mut text = String::new();
+        for p in &parts {
+            if let Some(fc) = p.get("functionCall") {
+                let n = self.calls.len();
+                self.calls.push(ToolCall {
+                    id: format!("gemini_{n}"),
+                    name: fc["name"].as_str().unwrap_or_default().to_string(),
+                    arguments: if fc["args"].is_object() {
+                        fc["args"].clone()
+                    } else {
+                        json!({})
+                    },
+                });
+            } else if p["thought"] != true {
                 // Skip "thought" parts from thinking models.
-                .filter(|p| p["thought"] != true)
-                .filter_map(|p| p["text"].as_str())
-                .collect()
-        })
-        .unwrap_or_default();
-    Step::Continue(Some(text))
+                if let Some(t) = p["text"].as_str() {
+                    text.push_str(t);
+                }
+            }
+        }
+        if !self.calls.is_empty() && v["candidates"][0]["finishReason"].is_string() {
+            return Step::ToolCalls(std::mem::take(&mut self.calls));
+        }
+        Step::Continue(Some(text))
+    }
+}
+
+pub fn parse(ev: &SseEvent) -> Step {
+    Parser::default().parse(ev)
 }
 
 #[async_trait]
@@ -99,7 +179,8 @@ impl Provider for Gemini {
             rb = rb.header("x-goog-api-key", k);
         }
         let resp = rb.send().await?;
-        pump(resp, &tx, parse).await
+        let mut parser = Parser::default();
+        pump(resp, &tx, |ev| parser.parse(ev)).await
     }
 }
 
@@ -128,6 +209,58 @@ mod tests {
         assert_eq!(b["systemInstruction"]["parts"][0]["text"], "sys");
         assert_eq!(b["contents"][1]["role"], "model");
         assert_eq!(b["generationConfig"]["maxOutputTokens"], 100);
+    }
+
+    #[test]
+    fn tools_and_function_turns() {
+        use crate::providers::ToolSpec;
+        let call = ToolCall {
+            id: "gemini_0".into(),
+            name: "w__now".into(),
+            arguments: json!({}),
+        };
+        let req = ChatRequest {
+            model: "g".into(),
+            messages: vec![
+                Message::new(Role::User, "time?"),
+                Message::assistant_tool_calls("", vec![call.clone()]),
+                Message::tool_result(&call, "10:00"),
+            ],
+            tools: vec![ToolSpec {
+                name: "w__now".into(),
+                description: "now".into(),
+                parameters: json!({"type": "object", "additionalProperties": false, "$schema": "x"}),
+            }],
+            ..Default::default()
+        };
+        let b = body(&req);
+        let decl = &b["tools"][0]["functionDeclarations"][0];
+        assert_eq!(decl["name"], "w__now");
+        assert!(decl["parameters"].get("additionalProperties").is_none());
+        assert_eq!(decl["parameters"]["properties"], json!({}));
+        assert_eq!(b["contents"][1]["parts"][0]["functionCall"]["name"], "w__now");
+        assert_eq!(
+            b["contents"][2]["parts"][0]["functionResponse"]["response"]["content"],
+            "10:00"
+        );
+    }
+
+    #[test]
+    fn parse_function_call() {
+        let ev = |d: &str| SseEvent {
+            event: None,
+            data: d.into(),
+        };
+        let mut p = Parser::default();
+        match p.parse(&ev(
+            r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"w__now","args":{"tz":"EST"}}}]},"finishReason":"STOP"}]}"#,
+        )) {
+            Step::ToolCalls(c) => {
+                assert_eq!(c[0].name, "w__now");
+                assert_eq!(c[0].arguments["tz"], "EST");
+            }
+            s => panic!("{s:?}"),
+        }
     }
 
     #[test]

@@ -1,4 +1,7 @@
-//! Local quick notes (`notes.json` in the config dir).
+//! Local quick notes (`notes.json` in the config dir). Newest first.
+//!
+//! The engine keeps the notes in memory (see `Engine::add_note`); this is the
+//! on-disk store plus the pure search over a slice.
 
 use std::fs;
 use std::path::Path;
@@ -24,16 +27,17 @@ fn path(dir: &Path) -> std::path::PathBuf {
     dir.join("notes.json")
 }
 
-fn load_store(dir: &Path) -> Store {
+pub fn load_all(dir: &Path) -> Vec<Note> {
     let Ok(raw) = fs::read_to_string(path(dir)) else {
-        return Store::default();
+        return Vec::new();
     };
-    serde_json::from_str(&raw).unwrap_or_default()
+    serde_json::from_str::<Store>(&raw).map(|s| s.notes).unwrap_or_default()
 }
 
-fn save_store(dir: &Path, store: &Store) {
+pub fn save_all(dir: &Path, notes: &[Note]) {
     let _ = fs::create_dir_all(dir);
-    if let Ok(raw) = serde_json::to_string_pretty(store) {
+    let store = Store { notes: notes.to_vec() };
+    if let Ok(raw) = serde_json::to_string_pretty(&store) {
         let _ = fs::write(path(dir), raw);
     }
 }
@@ -45,43 +49,69 @@ fn now() -> u64 {
         .unwrap_or(0)
 }
 
-pub fn add(dir: &Path, title: &str, body: &str) -> Note {
-    let mut store = load_store(dir);
+/// Prepend a note in memory. Ids are unique even within one second.
+pub fn add_in(notes: &mut Vec<Note>, title: &str, body: &str) -> Note {
+    let stamp = now();
+    let mut id = format!("note:{stamp}");
+    let mut n = 1;
+    while notes.iter().any(|x| x.id == id) {
+        id = format!("note:{stamp}-{n}");
+        n += 1;
+    }
     let note = Note {
-        id: format!("note:{}", now()),
+        id,
         title: title.trim().to_string(),
         body: body.to_string(),
-        updated: now(),
+        updated: stamp,
     };
-    store.notes.insert(0, note.clone());
-    save_store(dir, &store);
+    notes.insert(0, note.clone());
+    note
+}
+
+pub fn add(dir: &Path, title: &str, body: &str) -> Note {
+    let mut notes = load_all(dir);
+    let note = add_in(&mut notes, title, body);
+    save_all(dir, &notes);
     note
 }
 
 pub fn get(dir: &Path, id: &str) -> Option<Note> {
-    load_store(dir).notes.into_iter().find(|n| n.id == id)
+    load_all(dir).into_iter().find(|n| n.id == id)
 }
 
-/// Rows when query looks like notes search.
-pub fn matching(dir: &Path, query: &str, limit: usize) -> Vec<Command> {
+/// The search needle when `query` is a notes query (`note`, `notes x`), else None.
+pub fn needle(query: &str) -> Option<String> {
     let q = query.trim().to_lowercase();
-    let needle = if q == "note" || q == "notes" {
-        ""
-    } else if let Some(rest) = q.strip_prefix("note ") {
-        rest.trim()
-    } else if let Some(rest) = q.strip_prefix("notes ") {
-        rest.trim()
-    } else {
-        return Vec::new();
+    if q == "note" || q == "notes" {
+        return Some(String::new());
+    }
+    if let Some(rest) = q.strip_prefix("note ").or_else(|| q.strip_prefix("notes ")) {
+        return Some(rest.trim().to_string());
+    }
+    None
+}
+
+/// Rows for `query`: every note for `note`/`notes`, notes containing the
+/// rest for `note …`, and a few notes containing a plain query (2+ chars).
+pub fn matching_in(notes: &[Note], query: &str, limit: usize) -> Vec<Command> {
+    let (needle, limit) = match needle(query) {
+        Some(n) => (n, limit),
+        None => {
+            let q = query.trim().to_lowercase();
+            if q.chars().count() < 2 {
+                return Vec::new();
+            }
+            (q, limit.min(5))
+        }
     };
     let mut out = Vec::new();
-    for n in load_store(dir).notes {
+    for n in notes {
         if out.len() >= limit {
             break;
         }
         if !needle.is_empty() {
             let hay = format!("{} {}", n.title, n.body).to_lowercase();
-            if !hay.contains(needle) {
+            if !hay.contains(&needle) {
                 continue;
             }
         }
@@ -94,7 +124,7 @@ pub fn matching(dir: &Path, query: &str, limit: usize) -> Vec<Command> {
                 n.title.clone()
             },
             subtitle: Some(if n.title.is_empty() {
-                "Note · Return to paste".into()
+                "Note".into()
             } else {
                 format!("Note · {preview}")
             }),
@@ -108,6 +138,10 @@ pub fn matching(dir: &Path, query: &str, limit: usize) -> Vec<Command> {
     out
 }
 
+pub fn matching(dir: &Path, query: &str, limit: usize) -> Vec<Command> {
+    matching_in(&load_all(dir), query, limit)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,8 +150,15 @@ mod tests {
     fn add_and_match() {
         let dir = tempfile::tempdir().unwrap();
         add(dir.path(), "Ship", "parity slice");
+        add(dir.path(), "Other", "thing");
         let rows = matching(dir.path(), "note ship", 5);
         assert_eq!(rows.len(), 1);
         assert!(rows[0].title.contains("Ship"));
+        assert_eq!(matching(dir.path(), "notes", 5).len(), 2);
+        assert!(matching(dir.path(), "shipping", 5).is_empty());
+        assert_eq!(matching(dir.path(), "ship", 5).len(), 1);
+        assert!(matching(dir.path(), "s", 5).is_empty());
+        let all = load_all(dir.path());
+        assert_ne!(all[0].id, all[1].id);
     }
 }

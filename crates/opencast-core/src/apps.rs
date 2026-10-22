@@ -36,7 +36,7 @@ pub fn scan() -> Vec<AppEntry> {
     } else {
         Vec::new()
     };
-    apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    apps.sort_by_key(|a| a.name.to_lowercase());
     apps
 }
 
@@ -162,7 +162,7 @@ pub fn filter_mac_apps(hints: Vec<MacAppHint>) -> Vec<AppEntry> {
         }
         out.push(AppEntry { name, path: h.path });
     }
-    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out.sort_by_key(|a| a.name.to_lowercase());
     out
 }
 
@@ -267,7 +267,9 @@ mod tests {
 
     #[test]
     fn nested_app_and_background_are_dropped() {
-        assert!(is_nested_app(Path::new("/Applications/Foo.app/Contents/Helpers/Bar.app")));
+        assert!(is_nested_app(Path::new(
+            "/Applications/Foo.app/Contents/Helpers/Bar.app"
+        )));
         assert!(!is_nested_app(Path::new("/Applications/Foo.app")));
         let apps = filter_mac_apps(vec![
             MacAppHint {

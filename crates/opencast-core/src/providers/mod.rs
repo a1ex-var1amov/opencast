@@ -28,12 +28,44 @@ pub enum Role {
     System,
     User,
     Assistant,
+    /// A tool result (answering an assistant `tool_calls` entry).
+    Tool,
+}
+
+/// A function call the model asked for.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolCall {
+    /// Provider-assigned id (Gemini has none; we make one up).
+    pub id: String,
+    pub name: String,
+    /// Parsed JSON arguments (an object).
+    pub arguments: serde_json::Value,
+}
+
+/// A tool offered to the model.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolSpec {
+    /// `^[a-zA-Z0-9_-]{1,64}$` — every provider accepts this.
+    pub name: String,
+    pub description: String,
+    /// JSON Schema of the arguments object.
+    pub parameters: serde_json::Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
+    #[serde(default)]
     pub content: String,
+    /// Assistant turn that called tools.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ToolCall>,
+    /// Tool turn: which call this answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    /// Tool turn: the tool's name (Gemini matches results by name).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 impl Message {
@@ -41,6 +73,24 @@ impl Message {
         Self {
             role,
             content: content.into(),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+            name: None,
+        }
+    }
+
+    pub fn assistant_tool_calls(content: impl Into<String>, calls: Vec<ToolCall>) -> Self {
+        Self {
+            tool_calls: calls,
+            ..Self::new(Role::Assistant, content)
+        }
+    }
+
+    pub fn tool_result(call: &ToolCall, content: impl Into<String>) -> Self {
+        Self {
+            tool_call_id: Some(call.id.clone()),
+            name: Some(call.name.clone()),
+            ..Self::new(Role::Tool, content)
         }
     }
 }
@@ -51,6 +101,8 @@ pub struct ChatRequest {
     pub messages: Vec<Message>,
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
+    /// Tools the model may call. Empty = plain chat.
+    pub tools: Vec<ToolSpec>,
 }
 
 /// What the UI receives. Provider-specific shapes never leave this module.
@@ -60,6 +112,9 @@ pub enum ChatEvent {
     Delta(String),
     Done,
     Error(String),
+    /// The model stopped to call tools; the caller runs them and continues.
+    #[serde(rename = "toolcalls")]
+    ToolCalls(Vec<ToolCall>),
 }
 
 #[async_trait]
@@ -143,6 +198,59 @@ pub enum Step {
     Continue(Option<String>),
     Done,
     Error(String),
+    /// Stream finished with tool calls instead of (or after) text.
+    ToolCalls(Vec<ToolCall>),
+}
+
+/// Accumulates streamed tool-call fragments (OpenAI and Anthropic send the
+/// arguments JSON in pieces).
+#[derive(Debug, Default)]
+pub struct ToolAccumulator {
+    calls: Vec<(String, String, String)>, // id, name, arguments json text
+}
+
+impl ToolAccumulator {
+    /// Start or extend call `index`.
+    pub fn update(&mut self, index: usize, id: Option<&str>, name: Option<&str>, args: Option<&str>) {
+        while self.calls.len() <= index {
+            self.calls.push(Default::default());
+        }
+        let c = &mut self.calls[index];
+        if let Some(id) = id.filter(|s| !s.is_empty()) {
+            c.0 = id.to_string();
+        }
+        if let Some(n) = name.filter(|s| !s.is_empty()) {
+            c.1.push_str(n);
+        }
+        if let Some(a) = args {
+            c.2.push_str(a);
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.calls.iter().all(|c| c.1.is_empty())
+    }
+
+    pub fn take(&mut self) -> Vec<ToolCall> {
+        std::mem::take(&mut self.calls)
+            .into_iter()
+            .filter(|c| !c.1.is_empty())
+            .enumerate()
+            .map(|(i, (id, name, args))| ToolCall {
+                id: if id.is_empty() { format!("call_{i}") } else { id },
+                name,
+                arguments: parse_args(&args),
+            })
+            .collect()
+    }
+}
+
+/// Tool arguments as an object; empty or broken JSON becomes `{}`.
+pub fn parse_args(text: &str) -> serde_json::Value {
+    match serde_json::from_str::<serde_json::Value>(text.trim()) {
+        Ok(v @ serde_json::Value::Object(_)) => v,
+        _ => serde_json::json!({}),
+    }
 }
 
 /// Shared response loop: HTTP errors, SSE framing, forwarding deltas.
@@ -193,6 +301,10 @@ async fn forward(step: Step, tx: &mpsc::Sender<ChatEvent>) -> bool {
         }
         Step::Error(e) => {
             let _ = tx.send(ChatEvent::Error(e)).await;
+            true
+        }
+        Step::ToolCalls(calls) => {
+            let _ = tx.send(ChatEvent::ToolCalls(calls)).await;
             true
         }
     }
@@ -312,6 +424,7 @@ pub async fn complete(p: &dyn Provider, req: ChatRequest) -> Result<String> {
                 ChatEvent::Delta(t) => out.push_str(&t),
                 ChatEvent::Done => return Ok(out),
                 ChatEvent::Error(e) => return Err(anyhow::anyhow!(e)),
+                ChatEvent::ToolCalls(_) => return Ok(out),
             }
         }
         Ok(out)

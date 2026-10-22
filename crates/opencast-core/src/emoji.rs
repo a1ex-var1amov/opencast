@@ -398,52 +398,189 @@ const EMOJI: &[(&str, &str, &str, &[&str])] = &[
     ("electric_plug", "🔌", "Electric Plug", &[]),
 ];
 
+/// The needle when `query` asks for emoji (`emoji`, `emo smile`), else None.
+pub fn needle(query: &str) -> Option<String> {
+    let q = query.trim().to_lowercase();
+    if q == "emoji" || q == "emo" || q == "emojis" {
+        return Some(String::new());
+    }
+    for p in ["emojis ", "emoji ", "emo "] {
+        if let Some(rest) = q.strip_prefix(p) {
+            return Some(rest.trim().to_string());
+        }
+    }
+    None
+}
+
+/// Codepoints that take a skin-tone modifier (Unicode Emoji_Modifier_Base).
+const MODIFIER_BASES: &[(u32, u32)] = &[
+    (0x261D, 0x261D),
+    (0x26F9, 0x26F9),
+    (0x270A, 0x270D),
+    (0x1F385, 0x1F385),
+    (0x1F3C2, 0x1F3C4),
+    (0x1F3C7, 0x1F3C7),
+    (0x1F3CA, 0x1F3CC),
+    (0x1F442, 0x1F443),
+    (0x1F446, 0x1F450),
+    (0x1F466, 0x1F478),
+    (0x1F47C, 0x1F47C),
+    (0x1F481, 0x1F483),
+    (0x1F485, 0x1F487),
+    (0x1F48F, 0x1F48F),
+    (0x1F491, 0x1F491),
+    (0x1F4AA, 0x1F4AA),
+    (0x1F574, 0x1F575),
+    (0x1F57A, 0x1F57A),
+    (0x1F590, 0x1F590),
+    (0x1F595, 0x1F596),
+    (0x1F645, 0x1F647),
+    (0x1F64B, 0x1F64F),
+    (0x1F6A3, 0x1F6A3),
+    (0x1F6B4, 0x1F6B6),
+    (0x1F6C0, 0x1F6C0),
+    (0x1F6CC, 0x1F6CC),
+    (0x1F90C, 0x1F90C),
+    (0x1F90F, 0x1F90F),
+    (0x1F918, 0x1F91F),
+    (0x1F926, 0x1F926),
+    (0x1F930, 0x1F939),
+    (0x1F93C, 0x1F93E),
+    (0x1F977, 0x1F977),
+    (0x1F9B5, 0x1F9B6),
+    (0x1F9B8, 0x1F9B9),
+    (0x1F9BB, 0x1F9BB),
+    (0x1F9CD, 0x1F9CF),
+    (0x1F9D1, 0x1F9DD),
+    (0x1FAC3, 0x1FAC5),
+    (0x1FAF0, 0x1FAF8),
+];
+
+/// `light` … `dark` → the Fitzpatrick modifier.
+fn tone_modifier(tone: &str) -> Option<char> {
+    let cp = match tone.trim().to_lowercase().replace(' ', "-").as_str() {
+        "light" => 0x1F3FB,
+        "medium-light" => 0x1F3FC,
+        "medium" => 0x1F3FD,
+        "medium-dark" => 0x1F3FE,
+        "dark" => 0x1F3FF,
+        _ => return None,
+    };
+    char::from_u32(cp)
+}
+
+/// Apply a skin tone to a single-person emoji (others are returned as is).
+pub fn with_tone(glyph: &str, tone: &str) -> String {
+    let Some(m) = tone_modifier(tone) else {
+        return glyph.to_string();
+    };
+    let mut chars = glyph.chars().filter(|c| *c != '\u{FE0F}');
+    let Some(first) = chars.next() else {
+        return glyph.to_string();
+    };
+    if chars.next().is_some() {
+        return glyph.to_string();
+    }
+    let cp = first as u32;
+    if MODIFIER_BASES.iter().any(|(a, b)| (*a..=*b).contains(&cp)) {
+        format!("{first}{m}")
+    } else {
+        glyph.to_string()
+    }
+}
+
+fn row(id: String, glyph: &str, title: &str, kw: Vec<String>, tone: &str) -> Command {
+    let g = with_tone(glyph, tone);
+    Command {
+        id,
+        title: format!("{g}  {title}"),
+        subtitle: Some("Emoji · Return to paste".into()),
+        icon: Some(g),
+        kind: CommandKind::Snippet,
+        arguments: vec![],
+        hotkey: None,
+        keywords: kw,
+    }
+}
+
 /// Rows when the user is searching emoji (`emoji`, `emo`, or `emoji smile`).
 pub fn matching(query: &str, limit: usize) -> Vec<Command> {
-    let q = query.trim().to_lowercase();
-    let needle = if q == "emoji" || q == "emo" || q == "emojis" {
-        ""
-    } else if let Some(rest) = q.strip_prefix("emoji ") {
-        rest.trim()
-    } else if let Some(rest) = q.strip_prefix("emo ") {
-        rest.trim()
-    } else if q.starts_with("emoji") || q.starts_with("emo") {
-        q.trim_start_matches("emojis")
-            .trim_start_matches("emoji")
-            .trim_start_matches("emo")
-            .trim()
-    } else {
+    matching_with(query, limit, &[], "")
+}
+
+/// Like [`matching`], with recently used emoji ids first and a skin tone.
+pub fn matching_with(query: &str, limit: usize, recent: &[String], tone: &str) -> Vec<Command> {
+    let Some(needle) = needle(query) else {
         return Vec::new();
     };
-
-    let mut out = Vec::new();
+    let mut out: Vec<Command> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let words: Vec<&str> = needle.split_whitespace().collect();
+    let hit = |hay: &str| words.iter().all(|w| hay.contains(w));
+    // Recents first (only when browsing or when they match).
+    for id in recent {
+        if let Some((g, title)) = lookup(id) {
+            if hit(&title.to_lowercase()) || needle.is_empty() {
+                seen.insert(g.trim_end_matches('\u{FE0F}').to_string());
+                out.push(row(id.clone(), g, &title, vec!["recent".into()], tone));
+            }
+        }
+    }
     for (id, glyph, title, kw) in EMOJI {
+        if out.len() >= limit {
+            return out;
+        }
+        let hay = format!("{id} {title} {}", kw.join(" ")).to_lowercase();
+        if !needle.is_empty() && !hit(&hay) {
+            continue;
+        }
+        if !seen.insert(glyph.trim_end_matches('\u{FE0F}').to_string()) {
+            continue;
+        }
+        out.push(row(
+            format!("emoji:{id}"),
+            glyph,
+            title,
+            kw.iter().map(|s| (*s).into()).collect(),
+            tone,
+        ));
+    }
+    if needle.is_empty() {
+        return out;
+    }
+    for (glyph, name) in crate::emoji_data::ALL {
         if out.len() >= limit {
             break;
         }
-        if !needle.is_empty() {
-            let hay = format!("{id} {title} {}", kw.join(" ")).to_lowercase();
-            if !hay.contains(needle) {
-                continue;
-            }
+        if !hit(&name.to_lowercase()) || !seen.insert(glyph.trim_end_matches('\u{FE0F}').to_string()) {
+            continue;
         }
-        out.push(Command {
-            id: format!("emoji:{id}"),
-            title: format!("{glyph}  {title}"),
-            subtitle: Some("Emoji · Return to paste".into()),
-            icon: Some((*glyph).into()),
-            kind: CommandKind::Snippet,
-            arguments: vec![],
-            hotkey: None,
-            keywords: kw.iter().map(|s| (*s).into()).collect(),
-        });
+        let cp = glyph.chars().next().map(|c| c as u32).unwrap_or(0);
+        out.push(row(format!("emoji:u{cp:x}"), glyph, name, vec![], tone));
     }
     out
 }
 
-pub fn glyph(id: &str) -> Option<&'static str> {
+/// (glyph, title) for an emoji id from either table.
+fn lookup(id: &str) -> Option<(&'static str, String)> {
     let key = id.strip_prefix("emoji:")?;
-    EMOJI.iter().find(|(k, ..)| *k == key).map(|(_, g, ..)| *g)
+    if let Some((_, g, t, _)) = EMOJI.iter().find(|(k, ..)| *k == key) {
+        return Some((g, t.to_string()));
+    }
+    let cp = u32::from_str_radix(key.strip_prefix('u')?, 16).ok()?;
+    crate::emoji_data::ALL
+        .iter()
+        .find(|(g, _)| g.chars().next().map(|c| c as u32) == Some(cp))
+        .map(|(g, n)| (*g, n.to_string()))
+}
+
+pub fn glyph(id: &str) -> Option<&'static str> {
+    lookup(id).map(|(g, _)| g)
+}
+
+/// The glyph with the configured skin tone (what Return pastes).
+pub fn glyph_with_tone(id: &str, tone: &str) -> Option<String> {
+    glyph(id).map(|g| with_tone(g, tone))
 }
 
 #[cfg(test)]
@@ -454,5 +591,22 @@ mod tests {
     fn finds_grin() {
         let rows = matching("emoji grin", 10);
         assert!(rows.iter().any(|c| c.id.contains("grin")));
+    }
+
+    #[test]
+    fn full_table_recents_and_tones() {
+        // Not in the curated table, found by Unicode name.
+        let rows = matching("emoji pretzel", 10);
+        assert!(rows.iter().any(|c| c.title.contains("🥨")), "{rows:?}");
+        assert_eq!(glyph(&rows[0].id), Some("🥨"));
+        // Recents first when browsing.
+        let rows = matching_with("emoji", 30, &["emoji:u1f968".into()], "");
+        assert!(rows[0].title.contains("🥨"));
+        // Skin tones only on modifier bases.
+        assert_eq!(with_tone("👍", "medium"), "👍🏽");
+        assert_eq!(with_tone("✌️", "dark"), "✌🏿");
+        assert_eq!(with_tone("🥨", "dark"), "🥨");
+        assert_eq!(with_tone("👍", ""), "👍");
+        assert!(matching("hello", 5).is_empty());
     }
 }

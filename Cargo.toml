@@ -5,7 +5,7 @@ members = ["crates/opencast-core", "crates/opencast-ffi"]
 default-members = ["crates/opencast-core"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/your-name/opencast"
@@ -14,4 +14,5 @@ repository = "https://github.com/your-name/opencast"
 codegen-units = 1
 lto = true
 opt-level = "s"
-strip = true
+# No `strip`: the Rust output is a static library; build-app.command strips
+# the final app binary instead.

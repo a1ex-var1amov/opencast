@@ -1,4 +1,7 @@
-//! Pinned command ids (`pinned.json` in the config dir).
+//! Pinned command ids (`pinned.json` in the config dir). Newest pin first.
+//!
+//! The engine keeps the list in memory (see `Engine::toggle_pin`); this is
+//! the on-disk store.
 
 use std::collections::HashSet;
 use std::fs;
@@ -15,39 +18,51 @@ fn path(dir: &Path) -> std::path::PathBuf {
     dir.join("pinned.json")
 }
 
-fn load_store(dir: &Path) -> Store {
+pub fn load_list(dir: &Path) -> Vec<String> {
     let Ok(raw) = fs::read_to_string(path(dir)) else {
-        return Store::default();
+        return Vec::new();
     };
-    serde_json::from_str(&raw).unwrap_or_default()
+    serde_json::from_str::<Store>(&raw).map(|s| s.ids).unwrap_or_default()
 }
 
-fn save_store(dir: &Path, store: &Store) {
+pub fn save_list(dir: &Path, ids: &[String]) {
     let _ = fs::create_dir_all(dir);
-    if let Ok(raw) = serde_json::to_string_pretty(store) {
+    let store = Store { ids: ids.to_vec() };
+    if let Ok(raw) = serde_json::to_string_pretty(&store) {
         let _ = fs::write(path(dir), raw);
     }
 }
 
 pub fn load(dir: &Path) -> HashSet<String> {
-    load_store(dir).ids.into_iter().collect()
+    load_list(dir).into_iter().collect()
 }
 
-/// Toggle pin. Returns whether the id is pinned after the toggle.
-pub fn toggle(dir: &Path, id: &str) -> bool {
-    if id.is_empty() || id.starts_with("calc:") || id.starts_with("clip:") || id.starts_with("emoji:") {
+pub fn pinnable(id: &str) -> bool {
+    crate::usage::tracked(id)
+}
+
+/// Toggle in memory. Returns whether the id is pinned after the toggle.
+pub fn toggle_in(ids: &mut Vec<String>, id: &str) -> bool {
+    if !pinnable(id) {
         return false;
     }
-    let mut store = load_store(dir);
-    if let Some(i) = store.ids.iter().position(|x| x == id) {
-        store.ids.remove(i);
-        save_store(dir, &store);
+    if let Some(i) = ids.iter().position(|x| x == id) {
+        ids.remove(i);
         false
     } else {
-        store.ids.insert(0, id.to_string());
-        save_store(dir, &store);
+        ids.insert(0, id.to_string());
         true
     }
+}
+
+/// Toggle pin on disk. Returns whether the id is pinned after the toggle.
+pub fn toggle(dir: &Path, id: &str) -> bool {
+    let mut ids = load_list(dir);
+    let pinned = toggle_in(&mut ids, id);
+    if pinnable(id) {
+        save_list(dir, &ids);
+    }
+    pinned
 }
 
 pub fn boost(pins: &HashSet<String>, id: &str) -> i64 {
@@ -69,5 +84,6 @@ mod tests {
         assert!(load(dir.path()).contains("window:left-half"));
         assert!(!toggle(dir.path(), "window:left-half"));
         assert!(!load(dir.path()).contains("window:left-half"));
+        assert!(!toggle(dir.path(), "calc:1"));
     }
 }

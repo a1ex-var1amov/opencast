@@ -1,16 +1,19 @@
 //! Engine: config + registry + providers, and the decision of what a
 //! command does. The shell only carries out the returned [`Plan`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 use std::time::Duration;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 
 use crate::apps::{self, AppEntry};
-use crate::commands::{Argument, Command, CommandKind, Registry};
-use crate::config::{AiCommandConfig, Config, QuicklinkConfig};
+use crate::commands::{Argument, Command, CommandKind, Override, Registry};
+use crate::config::{AiCommandConfig, AiOutput, Config, QuicklinkConfig, ThemeFile};
+use crate::keymap::KeyBinding;
 use crate::layouts;
+use crate::notes::Note;
 use crate::providers::Router;
 use crate::scripts::{self, ScriptMeta};
 
@@ -51,6 +54,57 @@ pub enum Builtin {
     EmojiPicker,
     NewNote,
     Notes,
+    /// The panel searches the front app's menu bar (Swift, AX).
+    MenuItems,
+    ChatHistory,
+    /// Start on-device dictation into the search field (Swift).
+    Dictate,
+    /// Today's calendar (Swift, EventKit).
+    MySchedule,
+    SyncICloud,
+    CheckUpdates,
+    RefreshMcp,
+    InstallExtension,
+    UpdateExtensions,
+    ManageExtensions,
+    BrowseExtensions,
+    ImportAlfredWorkflow,
+    Doctor,
+    /// Panel-side (Swift): Contacts, Reminders, dictionary, Large Type, media keys…
+    Contacts,
+    Reminders,
+    NewReminder,
+    DefineWord,
+    LargeType,
+    MediaPlayPause,
+    MediaNext,
+    MediaPrevious,
+    ActOnSelection,
+    StartFocus,
+    StopFocus,
+    PauseFocus,
+    SearchBookmarks,
+    EditNote,
+    Restart,
+    ShutDown,
+    LogOut,
+    ToggleHiddenFiles,
+    QuitAllApps,
+    HideOthers,
+    ShowDesktop,
+    Spell,
+    ArrangeWindow,
+    Translate,
+    AskPage,
+    SummarizePage,
+    CompareModels,
+    DictateAnywhere,
+    CheatSheet,
+    StickyNote,
+    SaveSnippet,
+    Stats,
+    EditProfile,
+    BrowseFiles,
 }
 
 const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
@@ -195,19 +249,362 @@ const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
         "😀",
         &["emoji", "emo", "emojis", "glyph"],
     ),
-    (
-        Builtin::Notes,
-        "notes",
-        "Notes",
-        "📝",
-        &["note", "notes", "memo"],
-    ),
+    (Builtin::Notes, "notes", "Notes", "📝", &["note", "notes", "memo"]),
     (
         Builtin::NewNote,
         "new-note",
         "New Note",
         "📝",
         &["note", "notes", "memo", "write"],
+    ),
+    (
+        Builtin::MenuItems,
+        "menu-items",
+        "Search Menu Items",
+        "☰",
+        &["menu", "menus", "menubar", "command palette"],
+    ),
+    (
+        Builtin::ChatHistory,
+        "chat-history",
+        "Chat History",
+        "🗂",
+        &["chats", "history", "ai", "conversations"],
+    ),
+    (
+        Builtin::Dictate,
+        "dictate",
+        "Dictate",
+        "🎙",
+        &["dictation", "voice", "speak", "microphone", "speech"],
+    ),
+    (
+        Builtin::MySchedule,
+        "schedule",
+        "My Schedule",
+        "📅",
+        &["calendar", "events", "meetings", "today", "agenda", "join"],
+    ),
+    (
+        Builtin::SyncICloud,
+        "sync-icloud",
+        "Sync Config with iCloud Drive",
+        "☁️",
+        &["sync", "icloud", "backup", "settings", "macs"],
+    ),
+    (
+        Builtin::CheckUpdates,
+        "check-updates",
+        "Check for Updates",
+        "⬆️",
+        &["update", "upgrade", "version", "release"],
+    ),
+    (
+        Builtin::RefreshMcp,
+        "mcp-refresh",
+        "Refresh MCP Tools",
+        "🔌",
+        &["mcp", "tools", "servers", "reload"],
+    ),
+    (
+        Builtin::InstallExtension,
+        "install-extension",
+        "Install Extension",
+        "🧩",
+        &[
+            "extension",
+            "plugin",
+            "add",
+            "github",
+            "git",
+            "script commands",
+            "store",
+        ],
+    ),
+    (
+        Builtin::UpdateExtensions,
+        "update-extensions",
+        "Update Extensions",
+        "🧩",
+        &["extension", "plugin", "upgrade", "pull"],
+    ),
+    (
+        Builtin::ManageExtensions,
+        "manage-extensions",
+        "Manage Extensions",
+        "🧩",
+        &["extension", "plugin", "remove", "uninstall", "installed"],
+    ),
+    (
+        Builtin::BrowseExtensions,
+        "browse-extensions",
+        "Browse Extensions",
+        "🧩",
+        &["extension", "plugin", "store", "discover", "raycast", "script commands"],
+    ),
+    (
+        Builtin::ImportAlfredWorkflow,
+        "import-alfred",
+        "Import Alfred Workflow or Snippets",
+        "🎩",
+        &[
+            "alfred",
+            "workflow",
+            "alfredworkflow",
+            "alfredsnippets",
+            "snippets",
+            "extension",
+            "import",
+        ],
+    ),
+    (
+        Builtin::Doctor,
+        "doctor",
+        "OpenCast Doctor",
+        "🩺",
+        &[
+            "health",
+            "diagnose",
+            "check",
+            "slow",
+            "problem",
+            "debug",
+            "troubleshoot",
+        ],
+    ),
+    (
+        Builtin::Contacts,
+        "contacts",
+        "Search Contacts",
+        "👤",
+        &["people", "phone", "email", "address book", "call", "message"],
+    ),
+    (
+        Builtin::Reminders,
+        "reminders",
+        "Reminders",
+        "☑️",
+        &["todo", "tasks", "to-do", "due"],
+    ),
+    (
+        Builtin::NewReminder,
+        "new-reminder",
+        "New Reminder",
+        "☑️",
+        &["todo", "task", "remind me", "add"],
+    ),
+    (
+        Builtin::DefineWord,
+        "define",
+        "Define Word",
+        "📖",
+        &["dictionary", "meaning", "definition", "thesaurus"],
+    ),
+    (
+        Builtin::LargeType,
+        "large-type",
+        "Large Type",
+        "🔠",
+        &["big text", "show", "display", "fullscreen"],
+    ),
+    (
+        Builtin::MediaPlayPause,
+        "media-play",
+        "Play / Pause",
+        "⏯",
+        &["music", "spotify", "pause", "resume", "media"],
+    ),
+    (
+        Builtin::MediaNext,
+        "media-next",
+        "Next Track",
+        "⏭",
+        &["music", "skip", "song", "media"],
+    ),
+    (
+        Builtin::MediaPrevious,
+        "media-previous",
+        "Previous Track",
+        "⏮",
+        &["music", "back", "song", "media"],
+    ),
+    (
+        Builtin::ActOnSelection,
+        "selection",
+        "Act on Selection",
+        "✳️",
+        &["selected text", "universal actions", "selection", "files"],
+    ),
+    (
+        Builtin::StartFocus,
+        "focus-start",
+        "Start Focus",
+        "🎯",
+        &["focus", "pomodoro", "deep work", "block", "distraction"],
+    ),
+    (
+        Builtin::PauseFocus,
+        "focus-pause",
+        "Pause / Resume Focus",
+        "⏸",
+        &["focus", "pause", "resume", "break"],
+    ),
+    (
+        Builtin::StopFocus,
+        "focus-stop",
+        "Stop Focus",
+        "🎯",
+        &["focus", "end", "unblock"],
+    ),
+    (
+        Builtin::SearchBookmarks,
+        "bookmarks",
+        "Search Bookmarks",
+        "🔖",
+        &["bm", "browser", "safari", "chrome", "arc", "favorites"],
+    ),
+    (
+        Builtin::EditNote,
+        "edit-note",
+        "Notes Editor",
+        "📝",
+        &["note", "notes", "write", "editor", "scratchpad"],
+    ),
+    (Builtin::Restart, "restart", "Restart", "🔁", &["reboot", "system"]),
+    (
+        Builtin::ShutDown,
+        "shut-down",
+        "Shut Down",
+        "⏻",
+        &["shutdown", "power off", "turn off", "system"],
+    ),
+    (
+        Builtin::LogOut,
+        "log-out",
+        "Log Out",
+        "🚪",
+        &["logout", "sign out", "system"],
+    ),
+    (
+        Builtin::ToggleHiddenFiles,
+        "hidden-files",
+        "Toggle Hidden Files",
+        "👁",
+        &["finder", "dotfiles", "show hidden", "system"],
+    ),
+    (
+        Builtin::QuitAllApps,
+        "quit-all",
+        "Quit All Apps",
+        "✕",
+        &["close all", "quit everything", "system"],
+    ),
+    (
+        Builtin::HideOthers,
+        "hide-others",
+        "Hide All Apps Except Front",
+        "🙈",
+        &["hide others", "focus", "system"],
+    ),
+    (
+        Builtin::ShowDesktop,
+        "show-desktop",
+        "Show Desktop",
+        "🖥",
+        &["desktop", "clear", "system"],
+    ),
+    (
+        Builtin::ArrangeWindow,
+        "arrange-window",
+        "Arrange Window",
+        "🪟",
+        &["window", "snap", "tile", "layout", "resize", "move"],
+    ),
+    (
+        Builtin::Translate,
+        "translate",
+        "Translate",
+        "🌐",
+        &["translate", "translation", "language", "tr"],
+    ),
+    (
+        Builtin::AskPage,
+        "ask-page",
+        "Ask About This Page",
+        "🧭",
+        &[
+            "browser", "page", "web", "tab", "safari", "chrome", "arc", "ai", "context",
+        ],
+    ),
+    (
+        Builtin::SummarizePage,
+        "summarize-page",
+        "Summarize This Page",
+        "📰",
+        &["browser", "page", "web", "tab", "tldr", "summary", "ai"],
+    ),
+    (
+        Builtin::CompareModels,
+        "compare-models",
+        "Compare Models",
+        "⚖️",
+        &["ai", "llm", "side by side", "benchmark", "models", "providers"],
+    ),
+    (
+        Builtin::DictateAnywhere,
+        "dictate-anywhere",
+        "Dictate Anywhere",
+        "🎙",
+        &["dictation", "speech", "voice", "talk", "transcribe", "speak"],
+    ),
+    (
+        Builtin::CheatSheet,
+        "cheat-sheet",
+        "Keyboard Shortcuts",
+        "⌨️",
+        &["cheat sheet", "cheatsheet", "shortcuts", "hotkeys", "menu", "keys"],
+    ),
+    (
+        Builtin::StickyNote,
+        "sticky-note",
+        "New Sticky Note",
+        "🗒",
+        &["note", "sticky", "floating", "scratch", "post-it"],
+    ),
+    (
+        Builtin::Spell,
+        "spell",
+        "Spell Word",
+        "🔤",
+        &["spelling", "spellcheck", "how to spell"],
+    ),
+    (
+        Builtin::SaveSnippet,
+        "save-snippet",
+        "Save as Snippet",
+        "📎",
+        &["snippet", "new snippet", "text expansion"],
+    ),
+    (
+        Builtin::Stats,
+        "stats",
+        "OpenCast Stats",
+        "📊",
+        &["usage", "statistics", "most used"],
+    ),
+    (
+        Builtin::EditProfile,
+        "ai-profile",
+        "Edit AI Profile",
+        "🪪",
+        &["profile", "memory", "about me", "ai", "remember"],
+    ),
+    (
+        Builtin::BrowseFiles,
+        "browse-files",
+        "Browse Files",
+        "📂",
+        &["finder", "folders", "path", "navigate", "files"],
     ),
     (
         Builtin::ToggleDarkMode,
@@ -265,13 +662,7 @@ const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
         "🔒",
         &["lock", "screensaver", "system"],
     ),
-    (
-        Builtin::Sleep,
-        "sleep",
-        "Sleep",
-        "😴",
-        &["sleep", "suspend", "system"],
-    ),
+    (Builtin::Sleep, "sleep", "Sleep", "😴", &["sleep", "suspend", "system"]),
     (
         Builtin::EjectAll,
         "eject-all",
@@ -297,11 +688,26 @@ const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
 
 /// In-app key rows. Searchable via the Shortcuts command (`query` = `shortcut`).
 const SHORTCUT_ROWS: &[(&str, &str, &str, &[&str])] = &[
-    ("shortcut:return", "Return — Run selected", "↩", &["return", "enter", "shortcut"]),
+    (
+        "shortcut:return",
+        "Return — Run selected",
+        "↩",
+        &["return", "enter", "shortcut"],
+    ),
     ("shortcut:tab", "Tab — Ask AI", "⇥", &["tab", "ask", "shortcut"]),
-    ("shortcut:backtick", "Backtick — Click Text", "`", &["`", "click", "seek", "shortcut"]),
+    (
+        "shortcut:backtick",
+        "Backtick — Click Text",
+        "`",
+        &["`", "click", "seek", "shortcut"],
+    ),
     ("shortcut:esc", "Esc — Back / hide", "⎋", &["escape", "esc", "shortcut"]),
-    ("shortcut:arrows", "Arrows — Move selection", "↑↓", &["up", "down", "arrows", "shortcut"]),
+    (
+        "shortcut:arrows",
+        "Arrows — Move selection",
+        "↑↓",
+        &["up", "down", "arrows", "shortcut"],
+    ),
 ];
 
 /// Rectangle-style window actions on the frontmost window.
@@ -311,6 +717,7 @@ pub enum WindowAction {
     RightHalf,
     TopHalf,
     BottomHalf,
+    CenterHalf,
     TopLeft,
     TopRight,
     BottomLeft,
@@ -318,12 +725,39 @@ pub enum WindowAction {
     FirstThird,
     CenterThird,
     LastThird,
+    FirstTwoThirds,
+    LastTwoThirds,
+    TopThird,
+    MiddleThird,
+    BottomThird,
+    TopTwoThirds,
+    BottomTwoThirds,
+    MiddleHalf,
+    TopLeftSixth,
+    TopCenterSixth,
+    TopRightSixth,
+    BottomLeftSixth,
+    BottomCenterSixth,
+    BottomRightSixth,
+    MiddleLeftSixth,
+    MiddleRightSixth,
     Maximize,
-    Center,
     AlmostMaximize,
+    MaximizeHeight,
+    MaximizeWidth,
+    ReasonableSize,
+    MakeLarger,
+    MakeSmaller,
+    Center,
+    MoveLeft,
+    MoveRight,
+    MoveUp,
+    MoveDown,
     NextDisplay,
     PreviousDisplay,
+    ToggleFullscreen,
     RestoreSize,
+    Undo,
 }
 
 pub const WINDOW_ACTIONS: &[(WindowAction, &str, &str, &str)] = &[
@@ -335,14 +769,87 @@ pub const WINDOW_ACTIONS: &[(WindowAction, &str, &str, &str)] = &[
     (WindowAction::TopRight, "top-right", "Top Right Quarter", "◳"),
     (WindowAction::BottomLeft, "bottom-left", "Bottom Left Quarter", "◱"),
     (WindowAction::BottomRight, "bottom-right", "Bottom Right Quarter", "◲"),
+    (WindowAction::CenterHalf, "center-half", "Center Half", "◫"),
     (WindowAction::FirstThird, "first-third", "First Third", "⅓"),
     (WindowAction::CenterThird, "center-third", "Center Third", "⅓"),
     (WindowAction::LastThird, "last-third", "Last Third", "⅓"),
+    (
+        WindowAction::FirstTwoThirds,
+        "first-two-thirds",
+        "First Two Thirds",
+        "⅔",
+    ),
+    (WindowAction::LastTwoThirds, "last-two-thirds", "Last Two Thirds", "⅔"),
+    (WindowAction::TopThird, "top-third", "Top Third", "⅓"),
+    (WindowAction::MiddleThird, "middle-third", "Middle Third", "⅓"),
+    (WindowAction::BottomThird, "bottom-third", "Bottom Third", "⅓"),
+    (WindowAction::TopTwoThirds, "top-two-thirds", "Top Two Thirds", "⅔"),
+    (
+        WindowAction::BottomTwoThirds,
+        "bottom-two-thirds",
+        "Bottom Two Thirds",
+        "⅔",
+    ),
+    (WindowAction::MiddleHalf, "middle-half", "Middle Half", "⊟"),
+    (WindowAction::TopLeftSixth, "top-left-sixth", "Top Left Sixth", "▦"),
+    (
+        WindowAction::TopCenterSixth,
+        "top-center-sixth",
+        "Top Center Sixth",
+        "▦",
+    ),
+    (WindowAction::TopRightSixth, "top-right-sixth", "Top Right Sixth", "▦"),
+    (
+        WindowAction::BottomLeftSixth,
+        "bottom-left-sixth",
+        "Bottom Left Sixth",
+        "▦",
+    ),
+    (
+        WindowAction::BottomCenterSixth,
+        "bottom-center-sixth",
+        "Bottom Center Sixth",
+        "▦",
+    ),
+    (
+        WindowAction::BottomRightSixth,
+        "bottom-right-sixth",
+        "Bottom Right Sixth",
+        "▦",
+    ),
+    (
+        WindowAction::MiddleLeftSixth,
+        "middle-left-sixth",
+        "Middle Left Sixth",
+        "▦",
+    ),
+    (
+        WindowAction::MiddleRightSixth,
+        "middle-right-sixth",
+        "Middle Right Sixth",
+        "▦",
+    ),
     (WindowAction::Maximize, "maximize", "Maximize", "⛶"),
     (WindowAction::AlmostMaximize, "almost-maximize", "Almost Maximize", "❐"),
+    (WindowAction::MaximizeHeight, "maximize-height", "Maximize Height", "↕"),
+    (WindowAction::MaximizeWidth, "maximize-width", "Maximize Width", "↔"),
+    (WindowAction::ReasonableSize, "reasonable-size", "Reasonable Size", "▢"),
+    (WindowAction::MakeLarger, "make-larger", "Make Larger", "⊕"),
+    (WindowAction::MakeSmaller, "make-smaller", "Make Smaller", "⊖"),
     (WindowAction::Center, "center", "Center", "◎"),
+    (WindowAction::MoveLeft, "move-left", "Move Left", "⇤"),
+    (WindowAction::MoveRight, "move-right", "Move Right", "⇥"),
+    (WindowAction::MoveUp, "move-up", "Move Up", "⤒"),
+    (WindowAction::MoveDown, "move-down", "Move Down", "⤓"),
+    (WindowAction::ToggleFullscreen, "fullscreen", "Toggle Fullscreen", "⤢"),
+    (WindowAction::Undo, "undo", "Undo Window Move", "↶"),
     (WindowAction::NextDisplay, "next-display", "Next Display", "→"),
-    (WindowAction::PreviousDisplay, "previous-display", "Previous Display", "←"),
+    (
+        WindowAction::PreviousDisplay,
+        "previous-display",
+        "Previous Display",
+        "←",
+    ),
     (WindowAction::RestoreSize, "restore", "Restore Window Size", "↩"),
 ];
 
@@ -355,28 +862,14 @@ impl WindowAction {
         WINDOW_ACTIONS.iter().find(|(a, ..)| *a == self).unwrap().2
     }
 
-    /// Target rectangle as fractions `(x, y, w, h)` of the work area, or
-    /// `None` for [`WindowAction::Center`], which keeps the window's size.
+    /// Target rectangle as fractions `(x, y, w, h)` of the work area for
+    /// tiling commands (first cycle step), or `None` for the rest.
     pub fn frac(self) -> Option<(f64, f64, f64, f64)> {
-        let third = 1.0 / 3.0;
-        Some(match self {
-            Self::LeftHalf => (0.0, 0.0, 0.5, 1.0),
-            Self::RightHalf => (0.5, 0.0, 0.5, 1.0),
-            Self::TopHalf => (0.0, 0.0, 1.0, 0.5),
-            Self::BottomHalf => (0.0, 0.5, 1.0, 0.5),
-            Self::TopLeft => (0.0, 0.0, 0.5, 0.5),
-            Self::TopRight => (0.5, 0.0, 0.5, 0.5),
-            Self::BottomLeft => (0.0, 0.5, 0.5, 0.5),
-            Self::BottomRight => (0.5, 0.5, 0.5, 0.5),
-            Self::FirstThird => (0.0, 0.0, third, 1.0),
-            Self::CenterThird => (third, 0.0, third, 1.0),
-            Self::LastThird => (2.0 * third, 0.0, third, 1.0),
-            Self::Maximize => (0.0, 0.0, 1.0, 1.0),
-            Self::AlmostMaximize => (0.05, 0.05, 0.9, 0.9),
-            Self::Center | Self::NextDisplay | Self::PreviousDisplay | Self::RestoreSize => {
-                return None
-            }
-        })
+        crate::window::frac(self, 0, 0.9)
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        WINDOW_ACTIONS.iter().find(|(_, k, ..)| *k == key).map(|(a, ..)| *a)
     }
 
     pub fn is_display_move(self) -> bool {
@@ -408,13 +901,18 @@ pub enum Plan {
     OpenUrl(String),
     Copy(String),
     /// Open AI chat. When `needs_selection`, the shell grabs the frontmost
-    /// app's selected text and calls [`fill_selection`] on the prompt first.
+    /// app's selected text and calls [`fill_placeholders`] on the prompt first.
     Chat {
         prompt: Option<String>,
         system: Option<String>,
         provider: Option<String>,
         model: Option<String>,
         needs_selection: bool,
+        temperature: Option<f32>,
+        max_tokens: Option<u32>,
+        output: AiOutput,
+        /// `[[ai_presets]]` id: tool filter and profile applied when streaming.
+        preset: Option<String>,
     },
     Builtin(Builtin),
     /// Write `theme` to config and tell the panel to apply it.
@@ -431,8 +929,25 @@ pub enum Plan {
     SystemShell(&'static str),
     /// Quit an app by display name (AppleScript).
     QuitApp(String),
+    /// Show text in the panel (Return there copies it).
+    ShowText {
+        title: String,
+        text: String,
+    },
     /// Persist a quick note and toast.
-    SaveNote { title: String, body: String },
+    SaveNote {
+        title: String,
+        body: String,
+    },
+    /// Run text through several steps (`[[pipelines]]`).
+    Pipeline {
+        title: String,
+        input: crate::pipeline::Input,
+        /// The typed argument (input = "query").
+        query: Option<String>,
+        steps: Vec<crate::pipeline::Step>,
+        output: crate::pipeline::Output,
+    },
     /// Activate the current selection (Return).
     RunSelected,
     /// Esc behavior in the panel.
@@ -445,11 +960,132 @@ pub enum Plan {
     Layout(LayoutOp),
     /// Superkey's Seek: OCR the screen, let the user pick text, click it.
     Seek,
+    /// Run a Shortcuts.app shortcut, optionally with text input.
+    RunShortcut {
+        name: String,
+        input: Option<String>,
+    },
+    /// Call an MCP tool and show its output.
+    McpCall {
+        server: String,
+        tool: String,
+        arguments: serde_json::Value,
+    },
+    /// Reopen a saved chat.
+    ResumeChat(Box<crate::chats::SavedChat>),
+    /// Panel-side feature (menu search, dictation, schedule, settings window…).
+    Ui(&'static str),
+    /// Extensions: install / update / manage / browse.
+    Extensions(ExtensionOp),
+    /// Import an Alfred workflow file or folder.
+    ImportAlfred(String),
+    /// Health report for the config folder.
+    Doctor,
+    /// Window command the panel resolves through `window::target` (custom, display-N).
+    WindowKey(String),
+    /// Append a `[[snippets]]` entry and reload.
+    AddSnippet {
+        keyword: String,
+        text: String,
+    },
+    /// Panel-side feature that takes input (define, large type, new reminder…).
+    UiArgs {
+        action: &'static str,
+        args: Vec<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExtensionOp {
+    Install(String),
+    Update,
+    /// List installed ones (`run` step: `open:`/`remove:`/`update` arg).
+    Manage,
+    /// Curated + GitHub listings (`run` step installs the arg).
+    Browse,
 }
 
 impl PartialEq for ScriptMeta {
     fn eq(&self, other: &Self) -> bool {
         self.path == other.path
+    }
+}
+
+/// Command sources the platform shell discovers (and caches) on its own.
+#[derive(Debug, Clone, Default)]
+pub struct Extras {
+    /// Shortcuts.app shortcut names.
+    pub shortcuts: Vec<String>,
+    /// MCP tools by server (from `mcp-tools.json`).
+    pub mcp_tools: crate::mcp::ToolCache,
+    /// Browser bookmarks (`bookmarks.json`).
+    pub bookmarks: Vec<crate::bookmarks::Bookmark>,
+    /// Exchange rates (`rates.json`).
+    pub rates: Option<crate::currency::Rates>,
+}
+
+impl Extras {
+    /// Read the caches the shell wrote last time.
+    pub fn load_cached(config_dir: &Path) -> Self {
+        let shortcuts = std::fs::read_to_string(config_dir.join("shortcuts.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+            .unwrap_or_default();
+        Self {
+            shortcuts,
+            mcp_tools: crate::mcp::load_cache(config_dir),
+            bookmarks: crate::bookmarks::load_cache(config_dir),
+            rates: crate::currency::load(config_dir),
+        }
+    }
+}
+
+/// What the preview pane shows for a row (text or a file).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Preview {
+    pub title: String,
+    /// Markdown-ish text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// A file the panel can render (image, text, Quick Look).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Small key/value facts shown under the body.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub facts: Vec<(String, String)>,
+}
+
+/// An MCP tool offered to the AI chat.
+#[derive(Debug, Clone)]
+pub struct ChatTool {
+    pub spec: crate::providers::ToolSpec,
+    pub server: String,
+    pub tool: String,
+    /// The AI may call it without asking.
+    pub auto_approve: bool,
+}
+
+/// Small per-user state files, held in memory so search never touches disk.
+#[derive(Default)]
+struct Sidecars {
+    chats: Vec<crate::chats::SavedChat>,
+    usage: crate::usage::Usage,
+    /// Newest first (the on-disk order).
+    pins: Vec<String>,
+    pin_set: HashSet<String>,
+    notes: Vec<Note>,
+}
+
+impl Sidecars {
+    fn load(dir: &Path) -> Self {
+        let pins = crate::pins::load_list(dir);
+        Self {
+            usage: crate::usage::Usage::load(dir),
+            pin_set: pins.iter().cloned().collect(),
+            pins,
+            notes: crate::notes::load_all(dir),
+            chats: crate::chats::load_all(dir),
+        }
     }
 }
 
@@ -459,13 +1095,26 @@ pub struct Engine {
     pub registry: Registry,
     pub router: Router,
     pub warnings: Vec<String>,
-    apps: HashMap<String, PathBuf>,
+    /// Parsed `theme_file`, when one is configured and valid.
+    pub theme: Option<ThemeFile>,
+    pub keymap: Vec<KeyBinding>,
+    /// `app:<path>` id → path, sorted by name for stable listings.
+    apps: Vec<(String, PathBuf, String)>,
+    app_index: HashMap<String, usize>,
     scripts: HashMap<String, ScriptMeta>,
     ai: HashMap<String, AiCommandConfig>,
     links: HashMap<String, QuicklinkConfig>,
     snippets: HashMap<String, String>,
     /// `layout:restore:<slug>` command id → layout slug.
     restore_ids: HashMap<String, String>,
+    /// `mcp:<server>:<tool>` → tool.
+    mcp_tools: HashMap<String, crate::mcp::McpTool>,
+    extras: Extras,
+    sidecars: RwLock<Sidecars>,
+    /// This Mac's time zone (`America/New_York`).
+    local_tz: String,
+    /// Parsed tz files, loaded on first use (search never re-reads them).
+    zones: std::sync::Mutex<HashMap<String, Option<std::sync::Arc<crate::tz::Zone>>>>,
 }
 
 impl Engine {
@@ -482,10 +1131,22 @@ impl Engine {
             warnings.push(format!("{e:#}"));
             Config::default()
         });
-        let (scripts, script_warnings) = scripts::discover(&config.scripts_dir(config_dir));
+        let (mut scripts, script_warnings) = scripts::discover(&config.scripts_dir(config_dir));
         warnings.extend(script_warnings);
+        let (ext_scripts, ext_warnings) = crate::extensions::discover_all(config_dir);
+        scripts.extend(ext_scripts);
+        warnings.extend(ext_warnings);
         let saved_layouts = layouts::list(config_dir);
-        Self::assemble(config, config_dir.to_path_buf(), apps, scripts, saved_layouts, warnings)
+        let extras = Extras::load_cached(config_dir);
+        Self::assemble_with(
+            config,
+            config_dir.to_path_buf(),
+            apps,
+            scripts,
+            saved_layouts,
+            warnings,
+            extras,
+        )
     }
 
     /// Build an engine from already-gathered parts (used by tests).
@@ -495,13 +1156,59 @@ impl Engine {
         app_list: Vec<AppEntry>,
         script_list: Vec<ScriptMeta>,
         saved_layouts: Vec<(String, String, usize)>,
-        mut warnings: Vec<String>,
+        warnings: Vec<String>,
     ) -> Self {
+        Self::assemble_with(
+            config,
+            config_dir,
+            app_list,
+            script_list,
+            saved_layouts,
+            warnings,
+            Extras::default(),
+        )
+    }
+
+    pub fn assemble_with(
+        mut config: Config,
+        config_dir: PathBuf,
+        app_list: Vec<AppEntry>,
+        script_list: Vec<ScriptMeta>,
+        saved_layouts: Vec<(String, String, usize)>,
+        mut warnings: Vec<String>,
+        extras: Extras,
+    ) -> Self {
+        // `@opencast.hotkey` in a script header (e.g. an imported Alfred hotkey)
+        // acts like a `[[hotkeys]]` entry unless you bound that command yourself.
+        for s in &script_list {
+            let Some(key) = s.hotkey.as_ref().filter(|k| !k.trim().is_empty()) else {
+                continue;
+            };
+            let id = format!("script:{}", s.path.display());
+            let mine = |c: &str| c == id || c.eq_ignore_ascii_case(&s.title);
+            let bound = config.hotkeys.iter().any(|h| mine(&h.command))
+                || config.commands.iter().any(|c| c.hotkey.is_some() && mine(&c.match_));
+            if !bound {
+                config.hotkeys.push(crate::config::HotkeyBinding {
+                    key: key.trim().to_string(),
+                    command: id,
+                });
+            }
+        }
         let (router, router_warnings) = Router::from_config(&config);
         warnings.extend(router_warnings);
+        let theme = match config.load_theme(&config_dir) {
+            Ok(t) => t,
+            Err(e) => {
+                warnings.push(format!("{e:#}"));
+                None
+            }
+        };
+        let (keymap, key_warnings) = crate::keymap::bindings(&config.keys);
+        warnings.extend(key_warnings);
 
         let mut commands = Vec::new();
-        let mut apps = HashMap::new();
+        let mut apps: Vec<(String, PathBuf, String)> = Vec::new();
         let mut scripts = HashMap::new();
         let mut ai = HashMap::new();
         let mut links = HashMap::new();
@@ -519,6 +1226,43 @@ impl Engine {
                 keywords: kw.iter().map(|s| s.to_string()).collect(),
             });
         }
+        for (id, args) in [
+            (
+                "builtin:install-extension",
+                &[("owner/repo, owner/repo/folder or git URL", false)][..],
+            ),
+            (
+                "builtin:import-alfred",
+                &[("path to .alfredworkflow, .alfredsnippets or a workflow folder", false)],
+            ),
+            (
+                "builtin:new-reminder",
+                &[("Remind me to…", false), ("when (tomorrow 9am)", true)],
+            ),
+            ("builtin:define", &[("word", false)]),
+            ("builtin:large-type", &[("text", false)]),
+            ("builtin:focus-start", &[("minutes", true), ("goal (optional)", true)]),
+            ("builtin:spell", &[("word", false)]),
+            (
+                "builtin:translate",
+                &[("text (empty: the selection)", true), ("to language", true)],
+            ),
+            ("builtin:ask-page", &[("question (optional)", true)]),
+            ("builtin:compare-models", &[("prompt (optional)", true)]),
+            ("builtin:save-snippet", &[("keyword (;sig)", false), ("text", false)]),
+        ] {
+            if let Some(c) = commands.iter_mut().find(|c| c.id == id) {
+                c.arguments = args
+                    .iter()
+                    .map(|(placeholder, optional)| Argument {
+                        placeholder: (*placeholder).into(),
+                        optional: *optional,
+                        secure: false,
+                    })
+                    .collect();
+            }
+        }
+        commands.extend(crate::panes::commands());
         if let Some(c) = commands.iter_mut().find(|c| c.id == "builtin:new-note") {
             c.arguments = vec![
                 Argument {
@@ -547,6 +1291,31 @@ impl Engine {
             });
         }
 
+        for n in 1..=3 {
+            commands.push(Command {
+                id: format!("window:display-{n}"),
+                title: format!("Move to Display {n}"),
+                subtitle: None,
+                icon: Some(format!("{n}")),
+                kind: CommandKind::Window,
+                arguments: vec![],
+                hotkey: None,
+                keywords: vec!["window".into(), "screen".into(), "monitor".into(), "display".into()],
+            });
+        }
+        for c in &config.window_commands {
+            commands.push(Command {
+                id: format!("window:custom:{}", c.id),
+                title: c.title.clone(),
+                subtitle: Some("Window".into()),
+                icon: c.icon.clone().or(Some("▣".into())),
+                kind: CommandKind::Window,
+                arguments: vec![],
+                hotkey: None,
+                keywords: vec!["window".into(), "snap".into(), "tile".into()],
+            });
+        }
+
         commands.push(Command {
             id: "seek".into(),
             title: "Click Text".into(),
@@ -555,7 +1324,13 @@ impl Engine {
             kind: CommandKind::Builtin,
             arguments: vec![],
             hotkey: None,
-                keywords: vec!["seek".into(), "click".into(), "ocr".into(), "mouse".into(), "superkey".into()],
+            keywords: vec![
+                "seek".into(),
+                "click".into(),
+                "ocr".into(),
+                "mouse".into(),
+                "superkey".into(),
+            ],
         });
 
         commands.push(Command {
@@ -570,7 +1345,7 @@ impl Engine {
                 secure: false,
             }],
             hotkey: None,
-                keywords: vec!["window".into(), "workspace".into(), "arrangement".into(), "save".into()],
+            keywords: vec!["window".into(), "workspace".into(), "arrangement".into(), "save".into()],
         });
         for (slug, name, n) in &saved_layouts {
             let id = format!("layout:restore:{slug}");
@@ -633,6 +1408,55 @@ impl Engine {
             ai.insert(id, c.clone());
         }
 
+        for p in &config.pipelines {
+            let input = crate::pipeline::Input::parse(p.input.as_deref());
+            commands.push(Command {
+                id: format!("pipe:{}", p.id),
+                title: p.title.clone(),
+                subtitle: Some(
+                    p.description
+                        .clone()
+                        .unwrap_or_else(|| format!("Pipeline · {}", crate::pipeline::describe(&p.steps))),
+                ),
+                icon: p.icon.clone().or(Some("⛓".into())),
+                kind: CommandKind::Script,
+                arguments: if input == crate::pipeline::Input::Query {
+                    vec![Argument {
+                        placeholder: "Input".into(),
+                        optional: false,
+                        secure: false,
+                    }]
+                } else {
+                    vec![]
+                },
+                hotkey: None,
+                keywords: p.keywords.iter().cloned().chain(["pipeline".into()]).collect(),
+            });
+        }
+
+        for p in &config.ai_presets {
+            let provider = p.provider.as_deref().or(config.default_provider_id());
+            commands.push(Command {
+                id: format!("preset:{}", p.id),
+                title: p.title.clone(),
+                subtitle: Some(match (provider, &p.model) {
+                    (Some(pr), Some(m)) => format!("AI preset · {pr} · {m}"),
+                    (Some(pr), None) => format!("AI preset · {pr}"),
+                    _ => "AI preset".into(),
+                }),
+                icon: p.icon.clone().or(Some("🧑‍💻".into())),
+                kind: CommandKind::Ai,
+                arguments: vec![],
+                hotkey: None,
+                keywords: p
+                    .keywords
+                    .iter()
+                    .cloned()
+                    .chain(["chat".into(), "ask".into(), "preset".into()])
+                    .collect(),
+            });
+        }
+
         for s in script_list {
             let id = format!("script:{}", s.path.display());
             commands.push(Command {
@@ -648,7 +1472,7 @@ impl Engine {
                 kind: CommandKind::Script,
                 arguments: s.arguments.clone(),
                 hotkey: None,
-                keywords: s.package.iter().cloned().collect(),
+                keywords: s.package.iter().chain(&s.keywords).cloned().collect(),
             });
             scripts.insert(id, s);
         }
@@ -703,7 +1527,7 @@ impl Engine {
             let id = format!("app:{}", a.path.display());
             commands.push(Command {
                 id: id.clone(),
-                title: a.name,
+                title: a.name.clone(),
                 subtitle: None,
                 icon: None,
                 kind: CommandKind::App,
@@ -711,7 +1535,68 @@ impl Engine {
                 hotkey: None,
                 keywords: vec![],
             });
-            apps.insert(id, a.path);
+            apps.push((id, a.path, a.name));
+        }
+        apps.sort_by_key(|a| a.2.to_lowercase());
+        let app_index: HashMap<String, usize> = apps.iter().enumerate().map(|(i, a)| (a.0.clone(), i)).collect();
+
+        if config.general.shortcuts {
+            for name in &extras.shortcuts {
+                commands.push(Command {
+                    id: format!("sc:{name}"),
+                    title: name.clone(),
+                    subtitle: Some("Shortcut".into()),
+                    icon: Some("⚡️".into()),
+                    kind: CommandKind::Shortcut,
+                    arguments: vec![],
+                    hotkey: None,
+                    keywords: vec!["shortcut".into(), "shortcuts".into()],
+                });
+            }
+        }
+
+        let mut mcp_tools = HashMap::new();
+        for server in &config.mcp_servers {
+            let Some(tools) = extras.mcp_tools.get(&server.id) else {
+                continue;
+            };
+            for t in tools.iter().filter(|t| server.allows(&t.name)) {
+                let id = t.command_id();
+                if server.in_launcher {
+                    let arguments = if t.simple_form() {
+                        t.params()
+                            .into_iter()
+                            .take(3)
+                            .map(|(name, _, required, _)| Argument {
+                                placeholder: name,
+                                optional: !required,
+                                secure: false,
+                            })
+                            .collect()
+                    } else {
+                        vec![Argument {
+                            placeholder: "Arguments (JSON)".into(),
+                            optional: t.params().iter().all(|p| !p.2),
+                            secure: false,
+                        }]
+                    };
+                    let mut desc: String = t.description.lines().next().unwrap_or("").chars().take(70).collect();
+                    if desc.is_empty() {
+                        desc = "MCP tool".into();
+                    }
+                    commands.push(Command {
+                        id: id.clone(),
+                        title: t.display_title(),
+                        subtitle: Some(format!("{} · {desc}", server.id)),
+                        icon: Some("🔌".into()),
+                        kind: CommandKind::Mcp,
+                        arguments,
+                        hotkey: None,
+                        keywords: vec![server.id.clone(), t.name.clone(), "mcp".into()],
+                    });
+                }
+                mcp_tools.insert(id, t.clone());
+            }
         }
 
         for (id, title, icon, kw) in SHORTCUT_ROWS {
@@ -729,27 +1614,65 @@ impl Engine {
 
         match config.general.theme.as_str() {
             "system" | "light" | "dark" => {}
-            other => warnings.push(format!(
-                "theme `{other}` is unknown; use system, light, or dark"
-            )),
+            other => warnings.push(format!("theme `{other}` is unknown; use system, light, or dark")),
         }
         match config.general.presentation.as_str() {
             "island" | "spotlight" => {}
-            other => warnings.push(format!(
-                "presentation `{other}` is unknown; use island or spotlight"
-            )),
+            other => warnings.push(format!("presentation `{other}` is unknown; use island or spotlight")),
         }
 
-        // Attach [[hotkeys]] to matching commands (by id or title).
-        let mut key_for: HashMap<String, String> = HashMap::new();
-        for h in &config.hotkeys {
-            let wanted = h.command.trim();
-            let id = commands
+        // Resolve "id or title" references the way [[hotkeys]] and [[commands]] use them.
+        let find = |commands: &[Command], wanted: &str| -> Option<usize> {
+            let wanted = wanted.trim();
+            commands
                 .iter()
-                .find(|c| c.id == wanted || c.title.eq_ignore_ascii_case(wanted))
-                .map(|c| c.id.clone());
-            if let Some(id) = id {
-                key_for.insert(id, h.key.trim().to_string());
+                .position(|c| c.id == wanted)
+                .or_else(|| commands.iter().position(|c| c.title.eq_ignore_ascii_case(wanted)))
+        };
+
+        // [[commands]] overrides: rename / re-icon first so hotkeys can match the new title too.
+        let mut overrides: HashMap<String, Override> = HashMap::new();
+        for o in &config.commands {
+            let Some(i) = find(&commands, &o.match_) else {
+                warnings.push(format!("[[commands]] `{}`: no command with that id or title", o.match_));
+                continue;
+            };
+            if let Some(t) = &o.title {
+                if !t.trim().is_empty() {
+                    commands[i].title = t.trim().to_string();
+                }
+            }
+            if let Some(icon) = &o.icon {
+                if !icon.trim().is_empty() {
+                    commands[i].icon = Some(icon.trim().to_string());
+                }
+            }
+            let entry = overrides.entry(commands[i].id.clone()).or_default();
+            entry.aliases.extend(o.all_aliases());
+            entry.boost += o.boost;
+            entry.hidden |= o.hidden;
+        }
+
+        warnings.extend(config.include_warnings.iter().cloned());
+        // Attach [[hotkeys]] and `[[commands]] hotkey` to matching commands (by id or title).
+        let mut key_for: HashMap<String, String> = HashMap::new();
+        let mut seen_keys: HashMap<String, String> = HashMap::new();
+        if let Some(k) = crate::keymap::normalize_hotkey(&config.general.hotkey) {
+            seen_keys.insert(k, "the OpenCast hotkey".into());
+        }
+        for h in config.all_hotkeys() {
+            if let Some(k) = crate::keymap::normalize_hotkey(&h.key) {
+                if let Some(other) = seen_keys.get(&k) {
+                    warnings.push(format!(
+                        "hotkey `{}` for `{}` is already used by {other}",
+                        h.key, h.command
+                    ));
+                    continue;
+                }
+                seen_keys.insert(k, format!("`{}`", h.command));
+            }
+            if let Some(i) = find(&commands, &h.command) {
+                key_for.insert(commands[i].id.clone(), h.key.trim().to_string());
             } else {
                 warnings.push(format!(
                     "hotkey `{}`: no command named `{}` (use a command title or id)",
@@ -764,36 +1687,598 @@ impl Engine {
             }
         }
 
-        Self {
+        let sidecars = RwLock::new(Sidecars::load(&config_dir));
+        let mut engine = Self {
             config,
             config_dir,
-            registry: Registry::new(commands),
+            registry: Registry::with_overrides(commands, &overrides),
             router,
             warnings,
+            theme,
+            keymap,
             apps,
+            app_index,
             scripts,
             ai,
             links,
             snippets,
             restore_ids,
+            mcp_tools,
+            extras,
+            sidecars,
+            local_tz: crate::tz::local_zone_name(),
+            zones: Default::default(),
+        };
+        // Report broken pipeline steps at load time, not on first run.
+        let bad: Vec<String> = engine
+            .config
+            .pipelines
+            .iter()
+            .flat_map(|p| {
+                p.steps
+                    .iter()
+                    .filter_map(|s| engine.pipeline_step(s).err())
+                    .map(|e| format!("{e:#}"))
+            })
+            .collect();
+        engine.warnings.extend(bad);
+        engine
+    }
+
+    // ---- sidecar state: usage, pins, notes ---------------------------------
+
+    /// Count a run of `id`, chosen after typing `query` (empty for hotkeys and
+    /// deep links). Writes `usage.json` when the id is tracked.
+    pub fn bump_usage(&self, id: &str, query: &str) {
+        let mut s = self.sidecars.write().unwrap();
+        if s.usage.record(id, query, crate::usage::now()) {
+            s.usage.save(&self.config_dir);
         }
     }
 
-    pub fn search(&self, query: &str, limit: usize) -> Vec<Command> {
-        let usage = crate::usage::counts(&self.config_dir);
-        let pins = crate::pins::load(&self.config_dir);
-        let mut out = self.registry.search_with_usage(query, limit, &usage, &pins);
-        let q = query.trim();
-        let ql = q.to_lowercase();
+    /// Toggle a pin. Returns whether the id is pinned afterwards.
+    pub fn toggle_pin(&self, id: &str) -> bool {
+        let mut s = self.sidecars.write().unwrap();
+        let pinned = crate::pins::toggle_in(&mut s.pins, id);
+        if crate::pins::pinnable(id) {
+            s.pin_set = s.pins.iter().cloned().collect();
+            crate::pins::save_list(&self.config_dir, &s.pins);
+        }
+        pinned
+    }
 
-        // Emoji overlay (not in the permanent registry).
-        for row in crate::emoji::matching(q, 20) {
-            if !out.iter().any(|c| c.id == row.id) {
-                out.push(row);
+    pub fn is_pinned(&self, id: &str) -> bool {
+        self.sidecars.read().unwrap().pin_set.contains(id)
+    }
+
+    pub fn add_note(&self, title: &str, body: &str) -> Note {
+        let mut s = self.sidecars.write().unwrap();
+        let note = crate::notes::add_in(&mut s.notes, title, body);
+        crate::notes::save_all(&self.config_dir, &s.notes);
+        note
+    }
+
+    pub fn note(&self, id: &str) -> Option<Note> {
+        self.sidecars.read().unwrap().notes.iter().find(|n| n.id == id).cloned()
+    }
+
+    pub fn delete_note(&self, id: &str) -> bool {
+        let mut s = self.sidecars.write().unwrap();
+        let before = s.notes.len();
+        s.notes.retain(|n| n.id != id);
+        let removed = s.notes.len() != before;
+        if removed {
+            crate::notes::save_all(&self.config_dir, &s.notes);
+        }
+        removed
+    }
+
+    // ---- saved chats ---------------------------------------------------------
+
+    pub fn save_chat(&self, chat: crate::chats::SavedChat) {
+        let mut s = self.sidecars.write().unwrap();
+        crate::chats::upsert(&mut s.chats, chat);
+        crate::chats::save_all(&self.config_dir, &s.chats);
+    }
+
+    pub fn delete_chat(&self, id: &str) -> bool {
+        let mut s = self.sidecars.write().unwrap();
+        let removed = crate::chats::remove(&mut s.chats, id);
+        if removed {
+            crate::chats::save_all(&self.config_dir, &s.chats);
+        }
+        removed
+    }
+
+    pub fn chat(&self, id: &str) -> Option<crate::chats::SavedChat> {
+        self.sidecars.read().unwrap().chats.iter().find(|c| c.id == id).cloned()
+    }
+
+    // ---- extras: snippets, MCP, shortcuts -----------------------------------
+
+    /// `(keyword, text)` for snippets that expand while typing in other apps.
+    pub fn expanding_snippets(&self) -> Vec<(String, String)> {
+        if !self.config.general.snippet_expansion {
+            return Vec::new();
+        }
+        self.config
+            .snippets
+            .iter()
+            .filter(|s| !s.keyword.trim().is_empty() && !s.text.is_empty() && s.expands_while_typing())
+            .map(|s| (s.keyword.trim().to_string(), s.text.clone()))
+            .collect()
+    }
+
+    pub fn mcp_servers(&self) -> &[crate::mcp::McpServerConfig] {
+        &self.config.mcp_servers
+    }
+
+    /// MCP tools offered to the AI chat (servers with `in_chat`).
+    pub fn chat_tools(&self) -> Vec<ChatTool> {
+        let mut out = Vec::new();
+        for server in self.config.mcp_servers.iter().filter(|s| s.in_chat) {
+            let Some(tools) = self.extras.mcp_tools.get(&server.id) else {
+                continue;
+            };
+            for t in tools.iter().filter(|t| server.allows(&t.name)) {
+                out.push(ChatTool {
+                    spec: crate::providers::ToolSpec {
+                        name: t.llm_name(),
+                        description: if t.description.is_empty() {
+                            t.display_title()
+                        } else {
+                            t.description.clone()
+                        },
+                        parameters: t.input_schema.clone(),
+                    },
+                    server: server.id.clone(),
+                    tool: t.name.clone(),
+                    auto_approve: server.auto_approves(&t.name),
+                });
             }
         }
+        out
+    }
 
-        for row in crate::notes::matching(&self.config_dir, q, 20) {
+    pub fn shortcut_names(&self) -> &[String] {
+        &self.extras.shortcuts
+    }
+
+    // ---- preview pane --------------------------------------------------------
+
+    /// What the preview pane shows for `id`, when core knows (the panel handles
+    /// clipboard rows and plain files itself).
+    pub fn preview(&self, id: &str) -> Option<Preview> {
+        let p = |title: &str, text: Option<String>, path: Option<String>, facts: Vec<(&str, String)>| Preview {
+            title: title.to_string(),
+            text,
+            path,
+            facts: facts.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+        };
+        if id.starts_with("note:") {
+            let n = self.note(id)?;
+            return Some(p(
+                if n.title.is_empty() { "Note" } else { &n.title },
+                Some(n.body),
+                None,
+                vec![],
+            ));
+        }
+        if id.starts_with("chat:") {
+            let c = self.chat(id)?;
+            let text = c
+                .messages
+                .iter()
+                .filter(|m| matches!(m.role, crate::providers::Role::User | crate::providers::Role::Assistant))
+                .filter(|m| !m.content.trim().is_empty())
+                .map(|m| {
+                    let who = if m.role == crate::providers::Role::User {
+                        "**You**"
+                    } else {
+                        "**AI**"
+                    };
+                    format!("{who}\n{}", m.content.trim())
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            return Some(p(
+                &c.title,
+                Some(text),
+                None,
+                vec![("Model", c.model.unwrap_or_default())],
+            ));
+        }
+        if let Some(text) = self.snippets.get(id) {
+            return Some(p("Snippet", Some(text.clone()), None, vec![]));
+        }
+        if let Some(meta) = self.scripts.get(id) {
+            let src = std::fs::read_to_string(&meta.path)
+                .map(|s| s.chars().take(4000).collect::<String>())
+                .ok();
+            return Some(p(
+                &meta.title,
+                src.map(|s| format!("```\n{s}\n```")),
+                Some(meta.path.display().to_string()),
+                vec![("Mode", format!("{:?}", meta.mode))],
+            ));
+        }
+        if let Some(c) = self.ai.get(id) {
+            let mut facts = vec![];
+            if let Some(m) = &c.model {
+                facts.push(("Model", m.clone()));
+            }
+            facts.push(("Output", format!("{:?}", c.output).to_lowercase()));
+            let mut text = c.prompt.clone();
+            if let Some(sys) = &c.system {
+                text = format!("*System:* {sys}\n\n{text}");
+            }
+            return Some(p(&c.title, Some(text), None, facts));
+        }
+        if let Some(l) = self.links.get(id) {
+            return Some(p(&l.title, Some(l.url.clone()), None, vec![]));
+        }
+        if let Some(t) = self.mcp_tools.get(id) {
+            let params = t
+                .params()
+                .into_iter()
+                .map(|(n, ty, req, d)| {
+                    format!(
+                        "- `{n}` ({ty}{}){}",
+                        if req { ", required" } else { "" },
+                        if d.is_empty() { String::new() } else { format!(": {d}") }
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            return Some(p(
+                &t.display_title(),
+                Some(format!("{}\n\n{params}", t.description)),
+                None,
+                vec![("Server", t.server.clone()), ("Tool", t.name.clone())],
+            ));
+        }
+        if let Some(path) = self.app_path(id) {
+            return Some(p(
+                self.registry.get(id).map(|c| c.title.as_str()).unwrap_or("App"),
+                None,
+                Some(path.display().to_string()),
+                vec![],
+            ));
+        }
+        None
+    }
+
+    /// Re-read the sidecar files (another process or a sync tool changed them).
+    pub fn reload_sidecars(&self) {
+        *self.sidecars.write().unwrap() = Sidecars::load(&self.config_dir);
+    }
+
+    /// Fallback entries that are not special tokens, resolved to commands.
+    fn fallback_commands(&self) -> Vec<Command> {
+        let mut out = Vec::new();
+        for f in &self.config.general.fallbacks {
+            match f.trim().to_lowercase().as_str() {
+                "files" => {}
+                "quicklinks" => {
+                    for link in &self.config.quicklinks {
+                        if link.url.contains("{query}") {
+                            if let Some(c) = self.registry.get(&format!("link:{}", link.key())) {
+                                out.push(c.clone());
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    if let Some(c) = self.registry.resolve(f) {
+                        out.push(c.clone());
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Whether `files` is one of the fallbacks (the panel expands to Spotlight).
+    pub fn fallback_files(&self) -> bool {
+        self.config
+            .general
+            .fallbacks
+            .iter()
+            .any(|f| f.trim().eq_ignore_ascii_case("files"))
+    }
+
+    /// Currency and time-zone answers for the top of the list.
+    fn conversions(&self, q: &str) -> Vec<Command> {
+        let mut out = Vec::new();
+        if q.len() < 4 {
+            return out;
+        }
+        let row = |id: String, title: String, subtitle: String, icon: &str| Command {
+            id,
+            title,
+            subtitle: Some(subtitle),
+            icon: Some(icon.into()),
+            kind: CommandKind::Calculator,
+            arguments: vec![],
+            hotkey: None,
+            keywords: vec![],
+        };
+        if let Some(rates) = self.extras.rates.as_ref().filter(|_| self.config.general.currency) {
+            if let Some(c) = crate::currency::convert(q, rates) {
+                let value = crate::currency::format_money(c.value).replace(',', "");
+                out.push(row(format!("calc:{value}"), c.title(), c.subtitle(rates), "💱"));
+            }
+        }
+        let load = |name: &str| -> Option<std::sync::Arc<crate::tz::Zone>> {
+            let mut cache = self.zones.lock().unwrap();
+            cache
+                .entry(name.to_string())
+                .or_insert_with(|| crate::tz::Zone::load(name).map(std::sync::Arc::new))
+                .clone()
+        };
+        if let Some(t) = crate::tz::answer_with(q, crate::usage::now() as i64, &self.local_tz, &load) {
+            out.push(row(format!("calc:{}", t.copy), t.title, t.subtitle, "🕒"));
+        }
+        out
+    }
+
+    pub fn update_note(&self, id: &str, title: &str, body: &str) -> bool {
+        let mut s = self.sidecars.write().unwrap();
+        let Some(n) = s.notes.iter_mut().find(|n| n.id == id) else {
+            return false;
+        };
+        n.title = title.trim().to_string();
+        n.body = body.to_string();
+        n.updated = crate::usage::now();
+        // Most recently edited first.
+        let i = s.notes.iter().position(|n| n.id == id).unwrap_or(0);
+        let note = s.notes.remove(i);
+        s.notes.insert(0, note);
+        crate::notes::save_all(&self.config_dir, &s.notes);
+        true
+    }
+
+    /// `profile.md`, created with a short header when missing (Edit AI Profile).
+    pub fn profile_path_created(&self) -> PathBuf {
+        let p = self.config_dir.join(PROFILE_FILE);
+        if !p.exists() {
+            let _ = std::fs::write(
+                &p,
+                "# About me\n\n<!-- OpenCast adds this file to AI chats (ai_profile = true). One fact per line. -->\n",
+            );
+        }
+        p
+    }
+
+    /// "OpenCast Stats": totals, top commands and learned queries, from `usage.json`.
+    pub fn stats_markdown(&self) -> String {
+        let s = self.sidecars.read().unwrap();
+        let usage = &s.usage;
+        let total: u64 = usage.commands.values().map(|e| e.count as u64).sum();
+        let mut top: Vec<(&String, &crate::usage::Entry)> = usage.commands.iter().collect();
+        top.sort_by(|a, b| b.1.count.cmp(&a.1.count).then(a.0.cmp(b.0)));
+        let title = |id: &str| {
+            self.registry.get(id).map(|c| c.title.clone()).unwrap_or_else(|| {
+                id.split_once(':')
+                    .map(|(_, t)| t.to_string())
+                    .unwrap_or_else(|| id.to_string())
+            })
+        };
+        let mut md = format!(
+            "# OpenCast Stats\n\n**{total}** runs of **{}** different commands.\n\n## Most used\n\n",
+            usage.commands.len()
+        );
+        for (id, e) in top.iter().take(15) {
+            md.push_str(&format!("- {} — {}×\n", title(id), e.count));
+        }
+        let mut picks: Vec<(&String, u32)> = usage
+            .picks
+            .iter()
+            .map(|(q, p)| (q, p.ids.values().sum::<u32>()))
+            .filter(|(q, _)| !q.is_empty())
+            .collect();
+        picks.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+        if !picks.is_empty() {
+            md.push_str("\n## What you type most\n\n");
+            for (q, n) in picks.iter().take(10) {
+                let best = usage.picks[*q]
+                    .ids
+                    .iter()
+                    .max_by_key(|(_, c)| **c)
+                    .map(|(id, _)| title(id));
+                md.push_str(&format!("- `{q}` → {} ({n}×)\n", best.unwrap_or_default()));
+            }
+        }
+        md.push_str(&format!(
+            "\n## Library\n\n- {} commands, {} snippets, {} notes, {} saved chats\n",
+            self.registry.len(),
+            self.config.snippets.len(),
+            s.notes.len(),
+            s.chats.len()
+        ));
+        md
+    }
+
+    /// Scripts and AI commands that declare they act on `kind` (`text`, `url`, `file`).
+    pub fn accepting(&self, kind: &str) -> Vec<Command> {
+        let mut out: Vec<Command> = self
+            .registry
+            .iter()
+            .filter(|c| {
+                let declared = match c.kind {
+                    CommandKind::Script => self
+                        .scripts
+                        .get(&c.id)
+                        .is_some_and(|m| m.accepts.iter().any(|a| a == kind)),
+                    CommandKind::Ai => self.ai.get(&c.id).is_some_and(|a| a.accepts(kind)),
+                    _ => false,
+                };
+                // Pipelines that start from the selection take text.
+                let pipe = kind == "text"
+                    && c.id.strip_prefix("pipe:").is_some_and(|pid| {
+                        self.config.pipelines.iter().any(|p| {
+                            p.id == pid
+                                && crate::pipeline::Input::parse(p.input.as_deref())
+                                    == crate::pipeline::Input::Selection
+                        })
+                    });
+                declared || pipe || (kind == "text" && c.id == "builtin:translate")
+            })
+            .cloned()
+            .collect();
+        out.sort_by_key(|c| c.title.to_lowercase());
+        out
+    }
+
+    /// Order action ids by what was picked for `query` before (`ua:text`…), then by use.
+    pub fn rank_ids(&self, query: &str, ids: &[String]) -> Vec<String> {
+        let s = self.sidecars.read().unwrap();
+        let learned = s.usage.learned_all(&query.to_lowercase());
+        let now = crate::usage::now();
+        let mut scored: Vec<(i64, usize, &String)> = ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (learned.get(id).copied().unwrap_or(0) + s.usage.frecency(id, now), i, id))
+            .collect();
+        // Stable: equal scores keep the given (sensible default) order.
+        scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        scored.into_iter().map(|(_, _, id)| id.clone()).collect()
+    }
+
+    pub fn preset(&self, id: &str) -> Option<&crate::config::AiPreset> {
+        self.config.ai_presets.iter().find(|p| p.id == id)
+    }
+
+    /// What a chat stream adds on top of its request: the profile text (when
+    /// enabled globally or by the preset) and the preset's tool globs.
+    pub fn chat_context(&self, preset: Option<&str>, profile_wanted: bool) -> (Option<String>, Option<Vec<String>>) {
+        let p = preset.and_then(|id| self.preset(id));
+        let use_profile = profile_wanted && p.and_then(|p| p.profile).unwrap_or(self.config.general.ai_profile);
+        let profile = use_profile
+            .then(|| std::fs::read_to_string(self.config_dir.join(PROFILE_FILE)).ok())
+            .flatten()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        (profile, p.and_then(|p| p.tools.clone()))
+    }
+
+    /// "Remember this": append a line to `profile.md`.
+    pub fn profile_append(&self, line: &str) -> Result<()> {
+        use std::io::Write;
+        let line = line.trim().replace('\n', " ");
+        anyhow::ensure!(!line.is_empty(), "nothing to remember");
+        let path = self.config_dir.join(PROFILE_FILE);
+        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
+        writeln!(f, "- {line}")?;
+        Ok(())
+    }
+
+    pub fn notes(&self) -> Vec<Note> {
+        self.sidecars.read().unwrap().notes.clone()
+    }
+
+    pub fn search(&self, query: &str, limit: usize) -> Vec<Command> {
+        let q = query.trim();
+        let ql = q.to_lowercase();
+        let mut out = {
+            let s = self.sidecars.read().unwrap();
+            let mut out = self.registry.search_with_usage(query, limit, &s.usage, &s.pin_set);
+            for (i, row) in self.conversions(q).into_iter().enumerate() {
+                out.insert(i, row);
+            }
+            if let Some(word) = ql.strip_prefix("spell ").map(str::trim).filter(|w| !w.is_empty()) {
+                out.insert(
+                    0,
+                    Command {
+                        id: format!("spell:{word}"),
+                        title: format!("Spell “{word}”"),
+                        subtitle: Some("Spelling suggestions".into()),
+                        icon: Some("🔤".into()),
+                        kind: CommandKind::Builtin,
+                        arguments: vec![],
+                        hotkey: None,
+                        keywords: vec![],
+                    },
+                );
+            }
+            if let Some((text, lang)) = parse_translate(q) {
+                let to = lang.clone().unwrap_or_else(|| self.config.general.translate_to.clone());
+                out.insert(
+                    0,
+                    Command {
+                        id: format!("translate:{}\u{1f}{text}", lang.unwrap_or_default()),
+                        title: format!("Translate “{text}”"),
+                        subtitle: Some(format!("to {to} · AI")),
+                        icon: Some("🌐".into()),
+                        kind: CommandKind::Builtin,
+                        arguments: vec![],
+                        hotkey: None,
+                        keywords: vec![],
+                    },
+                );
+            }
+            if let Some(word) = ql.strip_prefix("define ").map(str::trim).filter(|w| !w.is_empty()) {
+                out.insert(
+                    0,
+                    Command {
+                        id: format!("define:{word}"),
+                        title: format!("Define “{word}”"),
+                        subtitle: Some("Dictionary".into()),
+                        icon: Some("📖".into()),
+                        kind: CommandKind::Builtin,
+                        arguments: vec![],
+                        hotkey: None,
+                        keywords: vec![],
+                    },
+                );
+            }
+            for row in crate::notes::matching_in(&s.notes, q, 20) {
+                if !out.iter().any(|c| c.id == row.id) {
+                    out.push(row);
+                }
+            }
+            let bm = crate::bookmarks::matching(&self.extras.bookmarks, q);
+            if crate::bookmarks::needle(q).1 {
+                // `bm …`: bookmarks only, first.
+                out.retain(|c| c.kind != CommandKind::Calculator);
+                let rest = std::mem::take(&mut out);
+                out = bm;
+                out.extend(rest);
+            } else {
+                for row in bm {
+                    if !out.iter().any(|c| c.id == row.id) {
+                        out.push(row);
+                    }
+                }
+            }
+            // `chats …` lists saved chats first.
+            let chat_rows = crate::chats::matching_in(&s.chats, q, 30);
+            if !chat_rows.is_empty() {
+                out.retain(|c| !chat_rows.iter().any(|r| r.id == c.id));
+                let rest = std::mem::take(&mut out);
+                out = chat_rows;
+                out.extend(rest);
+            }
+            out
+        };
+
+        // Emoji overlay (not in the permanent registry): recent ones first.
+        let recent_emoji: Vec<String> = if crate::emoji::needle(q).is_some() {
+            let s = self.sidecars.read().unwrap();
+            let now = crate::usage::now();
+            let mut ids: Vec<(&String, i64)> = s
+                .usage
+                .commands
+                .keys()
+                .filter(|k| k.starts_with("emoji:"))
+                .map(|k| (k, s.usage.frecency(k, now)))
+                .collect();
+            ids.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+            ids.into_iter().take(8).map(|(k, _)| k.clone()).collect()
+        } else {
+            Vec::new()
+        };
+        for row in crate::emoji::matching_with(q, 40, &recent_emoji, &self.config.general.emoji_skin_tone) {
             if !out.iter().any(|c| c.id == row.id) {
                 out.push(row);
             }
@@ -801,15 +2286,8 @@ impl Engine {
 
         // Quit-by-name: only when the query looks like a quit.
         if ql == "quit" || ql.starts_with("quit ") || ql.starts_with("kill ") {
-            let needle = ql
-                .trim_start_matches("quit")
-                .trim_start_matches("kill")
-                .trim();
-            for (id, path) in &self.apps {
-                let name = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("App");
+            let needle = ql.trim_start_matches("quit").trim_start_matches("kill").trim();
+            for (id, _, name) in &self.apps {
                 if !needle.is_empty() && !name.to_lowercase().contains(needle) {
                     continue;
                 }
@@ -833,23 +2311,13 @@ impl Engine {
             }
         }
 
-        // Fallback quicklinks when hits are thin.
+        // Fallbacks when hits are thin.
         if !q.is_empty() {
-            let strong = out
-                .iter()
-                .filter(|c| c.kind != CommandKind::Calculator)
-                .count();
-            if strong < 3 {
-                for link in &self.config.quicklinks {
-                    if !link.url.contains("{query}") {
-                        continue;
-                    }
-                    let id = format!("link:{}", link.key());
-                    if out.iter().any(|c| c.id == id) {
-                        continue;
-                    }
-                    if let Some(c) = self.registry.get(&id) {
-                        out.push(c.clone());
+            let strong = out.iter().filter(|c| c.kind != CommandKind::Calculator).count();
+            if strong < self.config.general.fallback_threshold {
+                for c in self.fallback_commands() {
+                    if !out.iter().any(|x| x.id == c.id) {
+                        out.push(c);
                     }
                 }
             }
@@ -859,6 +2327,16 @@ impl Engine {
             out.truncate(limit);
         }
         out
+    }
+
+    /// Resolve the app path behind an `app:` or `quit:app:` id.
+    pub fn app_path(&self, id: &str) -> Option<&Path> {
+        self.app_index.get(id).map(|&i| self.apps[i].1.as_path())
+    }
+
+    /// Every indexed app bundle, sorted by name (icon prefetch).
+    pub fn app_paths(&self) -> Vec<&Path> {
+        self.apps.iter().map(|a| a.1.as_path()).collect()
     }
 
     pub fn scripts_dir(&self) -> PathBuf {
@@ -875,17 +2353,8 @@ impl Engine {
     pub fn hotkey_bindings(&self) -> (Vec<(String, String)>, Vec<String>) {
         let mut out = Vec::new();
         let mut warnings = Vec::new();
-        for h in &self.config.hotkeys {
-            let wanted = h.command.trim();
-            let id = if self.registry.get(wanted).is_some() {
-                Some(wanted.to_string())
-            } else {
-                let lower = wanted.to_lowercase();
-                self.registry
-                    .iter()
-                    .find(|c| c.title.to_lowercase() == lower)
-                    .map(|c| c.id.clone())
-            };
+        for h in self.config.all_hotkeys() {
+            let id = self.registry.resolve(&h.command).map(|c| c.id.clone());
             match id {
                 Some(id) => out.push((h.key.trim().to_string(), id)),
                 None => warnings.push(format!(
@@ -895,6 +2364,98 @@ impl Engine {
             }
         }
         (out, warnings)
+    }
+
+    /// Translate `text` (empty: the selection) into `lang` or `translate_to`.
+    pub fn translate_plan(&self, text: &str, lang: Option<&str>) -> Plan {
+        let g = &self.config.general;
+        let to = lang.map(str::to_string).unwrap_or_else(|| g.translate_to.clone());
+        let alt = g
+            .translate_alt
+            .clone()
+            .filter(|a| !a.trim().is_empty())
+            .unwrap_or_else(|| {
+                if to.eq_ignore_ascii_case("english") {
+                    "Spanish".into()
+                } else {
+                    "English".into()
+                }
+            });
+        let system = format!(
+            "You are a translator. Translate the user's text into {to}. If it is already in {to}, \
+             translate it into {alt} instead. Keep the meaning, tone and formatting. Reply with the \
+             translation only, no notes or quotes."
+        );
+        let selection = text.trim().is_empty();
+        Plan::Chat {
+            prompt: Some(if selection {
+                "{selection}".into()
+            } else {
+                text.trim().to_string()
+            }),
+            system: Some(system),
+            provider: None,
+            model: None,
+            needs_selection: selection,
+            temperature: Some(0.2),
+            max_tokens: None,
+            output: AiOutput::Chat,
+            preset: None,
+        }
+    }
+
+    /// Resolve one `[[pipelines]]` step string.
+    pub fn pipeline_step(&self, spec: &str) -> Result<crate::pipeline::Step> {
+        use crate::pipeline::{Step, Transform};
+        let spec = spec.trim();
+        let ai_step = |c: &AiCommandConfig| Step::Ai {
+            label: c.title.clone(),
+            prompt: c.prompt.clone(),
+            system: c.system.clone(),
+            provider: c.provider.clone(),
+            model: c.model.clone(),
+            temperature: c.temperature,
+            max_tokens: c.max_tokens,
+        };
+        let script = |key: &str| -> Option<Step> {
+            let path = crate::config::expand_tilde(Path::new(key));
+            self.scripts
+                .get(&format!("script:{}", path.display()))
+                .or_else(|| self.scripts.values().find(|m| m.title.eq_ignore_ascii_case(key)))
+                .map(|m| Step::Script(Box::new(m.clone())))
+        };
+        let ai = |id: &str| self.ai.get(&format!("ai:{id}")).or_else(|| self.ai.get(id));
+        let (kind, rest) = spec.split_once(':').unwrap_or(("", spec));
+        Ok(match kind.trim() {
+            "ai" => {
+                ai_step(ai(rest.trim()).with_context(|| format!("pipeline step `{spec}`: no AI command `{rest}`"))?)
+            }
+            "prompt" => Step::Ai {
+                label: "AI prompt".into(),
+                prompt: rest.trim().to_string(),
+                system: None,
+                provider: None,
+                model: None,
+                temperature: None,
+                max_tokens: None,
+            },
+            "shell" => Step::Shell(rest.trim().to_string()),
+            "transform" => Step::Transform(
+                Transform::parse(rest).with_context(|| format!("pipeline step `{spec}`: unknown transform"))?,
+            ),
+            "script" => script(rest.trim()).with_context(|| format!("pipeline step `{spec}`: no such script"))?,
+            _ => {
+                if let Some(t) = Transform::parse(spec) {
+                    Step::Transform(t)
+                } else if let Some(c) = ai(spec) {
+                    ai_step(c)
+                } else if let Some(s) = script(spec) {
+                    s
+                } else {
+                    bail!("pipeline step `{spec}`: use ai:, prompt:, script:, shell: or transform:")
+                }
+            }
+        })
     }
 
     /// Decide what running `id` with `args` means.
@@ -917,7 +2478,104 @@ impl Engine {
                     Builtin::StayAwake30m => Plan::StayAwake("30m"),
                     Builtin::StayAwake1h => Plan::StayAwake("1h"),
                     Builtin::StayAwake3h => Plan::StayAwake("3h"),
-                    Builtin::Settings => Plan::FillQuery("settings".into()),
+                    Builtin::Settings => Plan::Ui("settings"),
+                    Builtin::InstallExtension => {
+                        Plan::Extensions(ExtensionOp::Install(args.first().cloned().unwrap_or_default()))
+                    }
+                    Builtin::UpdateExtensions => Plan::Extensions(ExtensionOp::Update),
+                    Builtin::ManageExtensions => Plan::Extensions(ExtensionOp::Manage),
+                    Builtin::BrowseExtensions => Plan::Extensions(ExtensionOp::Browse),
+                    Builtin::ImportAlfredWorkflow => Plan::ImportAlfred(args.first().cloned().unwrap_or_default()),
+                    Builtin::Doctor => Plan::Doctor,
+                    Builtin::Contacts => Plan::Ui("contacts"),
+                    Builtin::Reminders => Plan::Ui("reminders"),
+                    Builtin::NewReminder => Plan::UiArgs {
+                        action: "new-reminder",
+                        args: args.to_vec(),
+                    },
+                    Builtin::DefineWord => Plan::UiArgs {
+                        action: "define",
+                        args: args.to_vec(),
+                    },
+                    Builtin::LargeType => Plan::UiArgs {
+                        action: "large-type",
+                        args: args.to_vec(),
+                    },
+                    Builtin::MediaPlayPause => Plan::Ui("media-play"),
+                    Builtin::MediaNext => Plan::Ui("media-next"),
+                    Builtin::MediaPrevious => Plan::Ui("media-previous"),
+                    Builtin::ActOnSelection => Plan::Ui("selection"),
+                    Builtin::StartFocus => Plan::UiArgs {
+                        action: "focus-start",
+                        args: args.to_vec(),
+                    },
+                    Builtin::StopFocus => Plan::Ui("focus-stop"),
+                    Builtin::PauseFocus => Plan::Ui("focus-pause"),
+                    Builtin::SearchBookmarks => Plan::FillQuery("bm ".into()),
+                    Builtin::EditNote => Plan::UiArgs {
+                        action: "note-editor",
+                        args: vec![],
+                    },
+                    Builtin::Restart => {
+                        Plan::SystemShell("osascript -e 'tell application \"System Events\" to restart'")
+                    }
+                    Builtin::ShutDown => {
+                        Plan::SystemShell("osascript -e 'tell application \"System Events\" to shut down'")
+                    }
+                    Builtin::LogOut => {
+                        Plan::SystemShell("osascript -e 'tell application \"System Events\" to log out'")
+                    }
+                    Builtin::ToggleHiddenFiles => Plan::SystemShell(
+                        "v=$(defaults read com.apple.finder AppleShowAllFiles 2>/dev/null); \
+                         if [ \"$v\" = 1 ] || [ \"$v\" = TRUE ] || [ \"$v\" = true ]; then n=false; else n=true; fi; \
+                         defaults write com.apple.finder AppleShowAllFiles -bool $n && killall Finder",
+                    ),
+                    Builtin::QuitAllApps => Plan::SystemShell(
+                        "osascript -e 'tell application \"System Events\" to set names to name of every application process whose background only is false and name is not \"Finder\" and name is not \"OpenCast\"' -e 'repeat with n in names' -e 'try' -e 'tell application (contents of n) to quit' -e 'end try' -e 'end repeat'",
+                    ),
+                    Builtin::HideOthers => Plan::Ui("hide-others"),
+                    Builtin::BrowseFiles => Plan::Ui("browse-files"),
+                    Builtin::ArrangeWindow => Plan::Ui("arrange-window"),
+                    Builtin::Translate => {
+                        let text = args.first().map(|s| s.trim()).unwrap_or("");
+                        let lang = args.get(1).map(|s| s.trim()).filter(|s| !s.is_empty());
+                        self.translate_plan(text, lang)
+                    }
+                    Builtin::AskPage => Plan::UiArgs {
+                        action: "page",
+                        args: vec!["ask".into(), args.first().cloned().unwrap_or_default()],
+                    },
+                    Builtin::SummarizePage => Plan::UiArgs {
+                        action: "page",
+                        args: vec!["summarize".into()],
+                    },
+                    Builtin::DictateAnywhere => Plan::Ui("dictate-anywhere"),
+                    Builtin::CheatSheet => Plan::Ui("cheat-sheet"),
+                    Builtin::StickyNote => Plan::Ui("sticky-note"),
+                    Builtin::CompareModels => Plan::UiArgs {
+                        action: "compare",
+                        args: args.to_vec(),
+                    },
+                    Builtin::ShowDesktop => Plan::SystemShell(
+                        "'/System/Applications/Mission Control.app/Contents/MacOS/Mission Control' 1",
+                    ),
+                    Builtin::Spell => Plan::UiArgs {
+                        action: "spell",
+                        args: args.to_vec(),
+                    },
+                    Builtin::SaveSnippet => Plan::AddSnippet {
+                        keyword: args.first().cloned().unwrap_or_default(),
+                        text: args.get(1).cloned().unwrap_or_default(),
+                    },
+                    Builtin::Stats => Plan::ShowText {
+                        title: "OpenCast Stats".into(),
+                        text: self.stats_markdown(),
+                    },
+                    Builtin::EditProfile => Plan::OpenUrl(self.profile_path_created().to_string_lossy().into_owned()),
+                    Builtin::MenuItems => Plan::Ui("menu-items"),
+                    Builtin::ChatHistory => Plan::FillQuery("chats".into()),
+                    Builtin::Dictate => Plan::Ui("dictate"),
+                    Builtin::MySchedule => Plan::Ui("schedule"),
                     Builtin::Shortcuts => Plan::FillQuery("shortcut".into()),
                     Builtin::ClipboardHistory => Plan::FillQuery("clip".into()),
                     Builtin::SearchScreenshots => Plan::FillQuery("shots".into()),
@@ -981,18 +2639,68 @@ impl Engine {
         if let Some(path) = id.strip_prefix("file:") {
             return Ok(Plan::OpenUrl(path.to_string()));
         }
-        if let Some(glyph) = crate::emoji::glyph(id) {
-            return Ok(Plan::PasteText(glyph.to_string()));
+        if let Some(pane) = id.strip_prefix("pane:") {
+            return crate::panes::url(pane)
+                .map(Plan::OpenUrl)
+                .ok_or_else(|| anyhow::anyhow!("unknown settings pane `{pane}`"));
+        }
+        if let Some(url) = id.strip_prefix("bm:") {
+            return Ok(Plan::OpenUrl(url.to_string()));
+        }
+        if let Some(word) = id.strip_prefix("spell:") {
+            return Ok(Plan::UiArgs {
+                action: "spell",
+                args: vec![word.to_string()],
+            });
+        }
+        if let Some(rest) = id.strip_prefix("translate:") {
+            let (lang, text) = rest.split_once('\u{1f}').unwrap_or(("", rest));
+            return Ok(self.translate_plan(text, Some(lang).filter(|l| !l.is_empty())));
+        }
+        if let Some(word) = id.strip_prefix("define:") {
+            return Ok(Plan::UiArgs {
+                action: "define",
+                args: vec![word.to_string()],
+            });
+        }
+        if let Some(name) = id.strip_prefix("sc:") {
+            let input = args.first().filter(|s| !s.trim().is_empty()).cloned();
+            return Ok(Plan::RunShortcut {
+                name: name.to_string(),
+                input,
+            });
+        }
+        if let Some(t) = self.mcp_tools.get(id) {
+            return Ok(Plan::McpCall {
+                server: t.server.clone(),
+                tool: t.name.clone(),
+                arguments: t.arguments_from(args)?,
+            });
+        }
+        if id.starts_with("chat:") {
+            return self
+                .chat(id)
+                .map(|c| Plan::ResumeChat(Box::new(c)))
+                .ok_or_else(|| anyhow::anyhow!("chat not found"));
+        }
+        if let Some(glyph) = crate::emoji::glyph_with_tone(id, &self.config.general.emoji_skin_tone) {
+            return Ok(Plan::PasteText(glyph));
         }
         if id.starts_with("note:") {
-            if let Some(n) = crate::notes::get(&self.config_dir, id) {
-                return Ok(Plan::PasteText(n.body));
+            if self.note(id).is_some() {
+                // Return opens the note in the Notes editor window.
+                return Ok(Plan::UiArgs {
+                    action: "note-editor",
+                    args: vec![id.to_string()],
+                });
             }
             bail!("note not found");
         }
         if let Some(app_id) = id.strip_prefix("quit:") {
-            if let Some(path) = self.apps.get(app_id) {
-                let name = path
+            if let Some(&i) = self.app_index.get(app_id) {
+                // AppleScript addresses apps by their bundle name, not the display name.
+                let name = self.apps[i]
+                    .1
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("Unknown")
@@ -1017,6 +2725,9 @@ impl Engine {
             _ => {}
         }
         if let Some(key) = id.strip_prefix("window:") {
+            if key.starts_with("custom:") || key.starts_with("display-") {
+                return Ok(Plan::WindowKey(key.to_string()));
+            }
             return WINDOW_ACTIONS
                 .iter()
                 .find(|(_, k, ..)| *k == key)
@@ -1040,8 +2751,8 @@ impl Engine {
         if let Some(slug) = self.restore_ids.get(id) {
             return Ok(Plan::Layout(LayoutOp::Restore(slug.clone())));
         }
-        if let Some(path) = self.apps.get(id) {
-            return Ok(Plan::LaunchApp(path.clone()));
+        if let Some(path) = self.app_path(id) {
+            return Ok(Plan::LaunchApp(path.to_path_buf()));
         }
         if let Some(meta) = self.scripts.get(id) {
             for (i, a) in meta.arguments.iter().enumerate() {
@@ -1073,15 +2784,177 @@ impl Engine {
                 provider: c.provider.clone(),
                 model: c.model.clone(),
                 needs_selection,
+                temperature: c.temperature,
+                max_tokens: c.max_tokens,
+                output: c.output,
+                preset: None,
+            });
+        }
+        if let Some(pid) = id.strip_prefix("pipe:") {
+            let p = self
+                .config
+                .pipelines
+                .iter()
+                .find(|p| p.id == pid)
+                .context("pipeline not found — try Reload Commands")?;
+            anyhow::ensure!(!p.steps.is_empty(), "pipeline `{}` has no steps", p.id);
+            let steps = p
+                .steps
+                .iter()
+                .map(|s| self.pipeline_step(s))
+                .collect::<Result<Vec<_>>>()?;
+            return Ok(Plan::Pipeline {
+                title: p.title.clone(),
+                input: crate::pipeline::Input::parse(p.input.as_deref()),
+                query: args.first().cloned(),
+                steps,
+                output: crate::pipeline::Output::parse(p.output.as_deref()),
+            });
+        }
+        if let Some(p) = id.strip_prefix("preset:").and_then(|pid| self.preset(pid)) {
+            let prompt = args.first().filter(|a| !a.trim().is_empty()).cloned();
+            return Ok(Plan::Chat {
+                prompt,
+                system: p.system.clone(),
+                provider: p.provider.clone(),
+                model: p.model.clone(),
+                needs_selection: false,
+                temperature: p.temperature,
+                max_tokens: p.max_tokens,
+                output: AiOutput::Chat,
+                preset: Some(p.id.clone()),
             });
         }
         bail!("command not found — try Reload Commands")
     }
 }
 
+/// Languages recognised after "to" in `translate … to <language>`.
+const LANGUAGES: &[&str] = &[
+    "english",
+    "spanish",
+    "french",
+    "german",
+    "italian",
+    "portuguese",
+    "dutch",
+    "swedish",
+    "norwegian",
+    "danish",
+    "finnish",
+    "polish",
+    "czech",
+    "slovak",
+    "ukrainian",
+    "russian",
+    "belarusian",
+    "bulgarian",
+    "serbian",
+    "croatian",
+    "romanian",
+    "hungarian",
+    "greek",
+    "turkish",
+    "arabic",
+    "hebrew",
+    "persian",
+    "hindi",
+    "bengali",
+    "urdu",
+    "thai",
+    "vietnamese",
+    "indonesian",
+    "malay",
+    "filipino",
+    "chinese",
+    "mandarin",
+    "cantonese",
+    "japanese",
+    "korean",
+    "georgian",
+    "armenian",
+    "lithuanian",
+    "latvian",
+    "estonian",
+    "slovenian",
+    "catalan",
+    "basque",
+    "irish",
+    "welsh",
+    "swahili",
+    "latin",
+];
+
+/// `translate hola` / `tr hello to german` / `translate to french: hi` →
+/// (text, language). The language is only split off when it is a known one,
+/// so "translate how to cook" keeps its words.
+pub fn parse_translate(q: &str) -> Option<(String, Option<String>)> {
+    let lower = q.to_lowercase();
+    let rest = ["translate ", "tr ", "tl "]
+        .iter()
+        .find(|p| lower.starts_with(*p))
+        .map(|p| q[p.len()..].trim())?;
+    if rest.is_empty() {
+        return None;
+    }
+    let title = |l: &str| {
+        let mut c = l.chars();
+        c.next()
+            .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
+            .unwrap_or_default()
+    };
+    // "to french: text"
+    if let Some(after) = rest.strip_prefix("to ").or_else(|| rest.strip_prefix("into ")) {
+        if let Some((lang, text)) = after.split_once(':') {
+            let l = lang.trim().to_lowercase();
+            if LANGUAGES.contains(&l.as_str()) && !text.trim().is_empty() {
+                return Some((text.trim().to_string(), Some(title(&l))));
+            }
+        }
+    }
+    // "text to french"
+    let rl = rest.to_lowercase();
+    for sep in [" to ", " into ", " in "] {
+        if let Some(i) = rl.rfind(sep) {
+            let lang = rl[i + sep.len()..].trim();
+            if LANGUAGES.contains(&lang) && !rest[..i].trim().is_empty() {
+                return Some((rest[..i].trim().to_string(), Some(title(lang))));
+            }
+        }
+    }
+    Some((rest.to_string(), None))
+}
+
+/// Plain-text notes about the user, prepended to AI chats (`ai_profile`).
+pub const PROFILE_FILE: &str = "profile.md";
+
+/// Wrap the profile and a chat's own system prompt into one system message.
+pub fn system_with_profile(profile: Option<&str>, system: Option<&str>) -> Option<String> {
+    let system = system.map(str::trim).filter(|s| !s.is_empty());
+    match (profile, system) {
+        (None, s) => s.map(str::to_string),
+        (Some(p), None) => Some(format!("About the user (from their profile):\n{p}")),
+        (Some(p), Some(s)) => Some(format!("{s}\n\nAbout the user (from their profile):\n{p}")),
+    }
+}
+
 /// Insert the selected text into an AI command prompt.
 pub fn fill_selection(prompt: &str, selection: &str) -> String {
     prompt.replace("{selection}", selection)
+}
+
+/// Fill every runtime placeholder: `{selection}`, `{clipboard}`, `{app}`.
+/// Missing values become empty strings.
+pub fn fill_placeholders(prompt: &str, selection: &str, clipboard: &str, app: &str) -> String {
+    prompt
+        .replace("{selection}", selection)
+        .replace("{clipboard}", clipboard)
+        .replace("{app}", app)
+}
+
+/// True when the prompt wants the clipboard text (so the shell reads it).
+pub fn needs_clipboard(prompt: &str) -> bool {
+    prompt.contains("{clipboard}")
 }
 
 fn host_of(url: &str) -> String {
@@ -1126,6 +2999,98 @@ mod tests {
 
     fn engine() -> Engine {
         engine_with(vec![], "")
+    }
+
+    #[test]
+    fn translate_queries() {
+        let p = |q: &str| parse_translate(q);
+        assert_eq!(p("translate hola amigo"), Some(("hola amigo".into(), None)));
+        assert_eq!(
+            p("tr good morning to German"),
+            Some(("good morning".into(), Some("German".into())))
+        );
+        assert_eq!(
+            p("translate to french: see you"),
+            Some(("see you".into(), Some("French".into())))
+        );
+        assert_eq!(p("translate how to cook"), Some(("how to cook".into(), None)));
+        assert_eq!(p("translate "), None);
+        assert_eq!(p("trash"), None);
+        let e = engine();
+        let row = &e.search("tr bonjour to english", 10)[0];
+        assert!(row.id.starts_with("translate:English"));
+        match e.plan(&row.id, &[]).unwrap() {
+            Plan::Chat {
+                prompt,
+                system,
+                needs_selection,
+                ..
+            } => {
+                assert_eq!(prompt.as_deref(), Some("bonjour"));
+                assert!(system.unwrap().contains("into English"));
+                assert!(!needs_selection);
+            }
+            p => panic!("{p:?}"),
+        }
+        // No text: translate the selection, offered by Act on Selection.
+        assert!(matches!(
+            e.plan("builtin:translate", &[]).unwrap(),
+            Plan::Chat {
+                needs_selection: true,
+                ..
+            }
+        ));
+        assert!(e.accepting("text").iter().any(|c| c.id == "builtin:translate"));
+    }
+
+    #[test]
+    fn pipelines_resolve_steps() {
+        let e = engine_with(
+            vec![],
+            r#"
+[[pipelines]]
+id = "tidy"
+title = "Tidy and Fix"
+steps = ["trim", "ai:fix-grammar", "prompt:Make it shorter: {input}", "shell:wc -w", "script:/s/uuid.sh", "transform:upper"]
+output = "copy"
+hotkey = "Ctrl+Alt+P"
+
+[[pipelines]]
+id = "q"
+title = "Shout Typed Text"
+input = "query"
+steps = ["upper"]
+
+[[pipelines]]
+id = "bad"
+title = "Bad"
+steps = ["ai:nope"]
+"#,
+        );
+        let c = e.registry.resolve("Tidy and Fix").unwrap();
+        assert_eq!(c.id, "pipe:tidy");
+        assert_eq!(c.hotkey.as_deref(), Some("Ctrl+Alt+P"));
+        assert!(c.subtitle.as_deref().unwrap().contains("trim → fix-grammar"));
+        match e.plan("pipe:tidy", &[]).unwrap() {
+            Plan::Pipeline {
+                steps, output, input, ..
+            } => {
+                assert_eq!(steps.len(), 6);
+                assert!(
+                    matches!(&steps[1], crate::pipeline::Step::Ai { prompt, .. } if prompt.contains("{selection}"))
+                );
+                assert!(matches!(&steps[4], crate::pipeline::Step::Script(m) if m.path == Path::new("/s/uuid.sh")));
+                assert_eq!(output, crate::pipeline::Output::Copy);
+                assert_eq!(input, crate::pipeline::Input::Selection);
+            }
+            p => panic!("{p:?}"),
+        }
+        // Typed input → an argument; selection pipelines show up in Act on Selection.
+        assert_eq!(e.registry.resolve("pipe:q").unwrap().arguments.len(), 1);
+        assert!(e.accepting("text").iter().any(|c| c.id == "pipe:tidy"));
+        assert!(!e.accepting("text").iter().any(|c| c.id == "pipe:q"));
+        let err = format!("{:#}", e.plan("pipe:bad", &[]).unwrap_err());
+        assert!(err.contains("no AI command `nope`"), "{err}");
     }
 
     #[test]
@@ -1215,6 +3180,8 @@ mod tests {
                 ("Ctrl+Alt+Left".to_string(), "window:left-half".to_string()),
                 ("Cmd+Alt+S".to_string(), "app:/Applications/Safari.app".to_string()),
                 ("Cmd+Alt+G".to_string(), "ai:fix-grammar".to_string()),
+                // The default Act on Selection hotkey.
+                ("Hyper+Space".to_string(), "builtin:selection".to_string()),
             ]
         );
         assert_eq!(warnings.len(), 1);
@@ -1253,6 +3220,396 @@ mod tests {
         let shell = e.registry.get("ai:shell").unwrap();
         assert_eq!(shell.arguments.len(), 1);
         assert_eq!(shell.subtitle.as_deref(), Some("AI · ollama"));
+    }
+
+    #[test]
+    fn command_overrides_alias_rename_hide() {
+        let e = engine_with(
+            vec![],
+            r#"
+            [[commands]]
+            match = "Safari"
+            alias = "sf"
+            title = "Safari (web)"
+            icon = "safari"
+            boost = 10
+
+            [[commands]]
+            match = "builtin:shortcuts"
+            hidden = true
+
+            [[commands]]
+            match = "No Such Command"
+            alias = "x"
+            "#,
+        );
+        assert!(e.warnings.iter().any(|w| w.contains("No Such Command")));
+        let safari = e.registry.get("app:/Applications/Safari.app").unwrap();
+        assert_eq!(safari.title, "Safari (web)");
+        assert_eq!(safari.icon.as_deref(), Some("safari"));
+        assert_eq!(e.search("sf", 5)[0].id, "app:/Applications/Safari.app");
+        assert!(e.search("shortcuts", 20).iter().all(|c| c.id != "builtin:shortcuts"));
+        assert!(e.search("", 200).iter().all(|c| c.id != "builtin:shortcuts"));
+    }
+
+    #[test]
+    fn fallbacks_follow_config_order() {
+        // The default config already has [general]; edit its fallbacks line rather than add a second table.
+        let src = DEFAULT_CONFIG.replace(
+            "fallbacks = [\"quicklinks\", \"files\"]",
+            "fallbacks = [\"Search Kagi\", \"builtin:chat\", \"files\"]",
+        );
+        assert_ne!(
+            src, DEFAULT_CONFIG,
+            "default config fallbacks line changed; update this test"
+        );
+        let cfg = Config::parse(&src).unwrap();
+        let e = Engine::assemble(cfg, "/cfg".into(), vec![], vec![], vec![], vec![]);
+        assert!(e.fallback_files());
+        let rows = e.search("zzqqxx", 10);
+        assert_eq!(rows[0].id, "link:search-kagi");
+        assert_eq!(rows[1].id, "builtin:chat");
+        assert_eq!(rows.len(), 2);
+        // Default config: every {query} quicklink.
+        let d = engine();
+        let rows = d.search("zzqqxx", 10);
+        assert!(rows.iter().any(|c| c.id == "link:search-github"));
+        assert!(rows.iter().any(|c| c.id == "link:search-kagi"));
+    }
+
+    #[test]
+    fn sidecars_live_in_memory_and_persist() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Config::parse(DEFAULT_CONFIG).unwrap();
+        let apps = vec![AppEntry {
+            name: "Safari".into(),
+            path: "/Applications/Safari.app".into(),
+        }];
+        let e = Engine::assemble(cfg, dir.path().to_path_buf(), apps, vec![], vec![], vec![]);
+        assert!(e.toggle_pin("window:left-half"));
+        assert!(e.is_pinned("window:left-half"));
+        assert_eq!(e.search("", 5)[0].id, "window:left-half");
+        e.bump_usage("window:maximize", "max");
+        e.bump_usage("window:maximize", "max");
+        let note = e.add_note("Todo", "ship it");
+        assert!(e.search("note ship", 20).iter().any(|c| c.id == note.id));
+        assert_eq!(
+            e.plan(&note.id, &[]).unwrap(),
+            Plan::UiArgs {
+                action: "note-editor",
+                args: vec![note.id.clone()]
+            }
+        );
+        // Plain words find notes too, after the commands.
+        assert!(e.search("ship", 20).iter().any(|c| c.id == note.id));
+        // A fresh engine reads the same state back from disk.
+        let cfg = Config::parse(DEFAULT_CONFIG).unwrap();
+        let e2 = Engine::assemble(cfg, dir.path().to_path_buf(), vec![], vec![], vec![], vec![]);
+        assert!(e2.is_pinned("window:left-half"));
+        assert_eq!(crate::usage::counts(dir.path()).get("window:maximize"), Some(&2));
+        assert!(e2.search("notes", 20).iter().any(|c| c.id == note.id));
+    }
+
+    #[test]
+    fn ai_options_and_placeholders() {
+        let e = engine_with(
+            vec![],
+            r#"
+            [[ai_commands]]
+            id = "clip"
+            title = "Tidy Clipboard"
+            prompt = "Tidy this from {app}:\n{clipboard}"
+            temperature = 0.3
+            max_tokens = 200
+            output = "paste"
+            "#,
+        );
+        match e.plan("ai:clip", &[]).unwrap() {
+            Plan::Chat {
+                prompt,
+                needs_selection,
+                temperature,
+                max_tokens,
+                output,
+                ..
+            } => {
+                assert!(!needs_selection);
+                assert_eq!(temperature, Some(0.3));
+                assert_eq!(max_tokens, Some(200));
+                assert_eq!(output, AiOutput::Paste);
+                let p = prompt.unwrap();
+                assert!(needs_clipboard(&p));
+                assert_eq!(
+                    fill_placeholders(&p, "", "x = 1", "Xcode"),
+                    "Tidy this from Xcode:\nx = 1"
+                );
+            }
+            p => panic!("unexpected {p:?}"),
+        }
+        assert_eq!(e.keymap.iter().find(|k| k.name == "actions").unwrap().key, "k");
+    }
+
+    #[test]
+    fn quit_rows_are_sorted_and_resolve() {
+        let cfg = Config::parse(DEFAULT_CONFIG).unwrap();
+        let apps = vec![
+            AppEntry {
+                name: "Zed".into(),
+                path: "/Applications/Zed.app".into(),
+            },
+            AppEntry {
+                name: "Arc".into(),
+                path: "/Applications/Arc.app".into(),
+            },
+        ];
+        let e = Engine::assemble(cfg, "/cfg".into(), apps, vec![], vec![], vec![]);
+        let rows: Vec<String> = e
+            .search("quit", 20)
+            .into_iter()
+            .filter(|c| c.id.starts_with("quit:"))
+            .map(|c| c.title)
+            .collect();
+        assert_eq!(rows, vec!["Quit Arc", "Quit Zed"]);
+        assert_eq!(
+            e.plan("quit:app:/Applications/Arc.app", &[]).unwrap(),
+            Plan::QuitApp("Arc".into())
+        );
+    }
+
+    fn mcp_extras() -> Extras {
+        let mut mcp_tools = crate::mcp::ToolCache::new();
+        mcp_tools.insert(
+            "gh".into(),
+            vec![
+                crate::mcp::McpTool {
+                    server: "gh".into(),
+                    name: "create_issue".into(),
+                    title: None,
+                    description: "Create a GitHub issue".into(),
+                    input_schema: serde_json::json!({
+                        "type": "object",
+                        "properties": {"repo": {"type": "string"}, "title": {"type": "string"}},
+                        "required": ["repo", "title"]
+                    }),
+                    read_only: false,
+                },
+                crate::mcp::McpTool {
+                    server: "gh".into(),
+                    name: "get_me".into(),
+                    title: None,
+                    description: "".into(),
+                    input_schema: serde_json::json!({"type": "object"}),
+                    read_only: true,
+                },
+            ],
+        );
+        Extras {
+            shortcuts: vec!["Send Arrival Message".into(), "Resize Image".into()],
+            mcp_tools,
+            bookmarks: vec![crate::bookmarks::Bookmark {
+                title: "Grafana Prod".into(),
+                url: "https://grafana.example.com".into(),
+                source: "Chrome".into(),
+                folder: String::new(),
+            }],
+            rates: Some(crate::currency::Rates {
+                base: "USD".into(),
+                rates: [("EUR".to_string(), 0.5)].into_iter().collect(),
+                fetched: 1,
+                date: String::new(),
+            }),
+        }
+    }
+
+    #[test]
+    fn accepting_commands_and_action_ranking() {
+        let e = engine_with_extras(
+            r#"
+            [[ai_commands]]
+            id = "summarize-url"
+            title = "Summarize Page"
+            prompt = "Summarize {input}"
+            accepts = ["url"]
+            "#,
+        );
+        let text: Vec<String> = e.accepting("text").into_iter().map(|c| c.id).collect();
+        assert!(
+            text.contains(&"ai:fix-grammar".to_string()),
+            "{{selection}} prompts accept text"
+        );
+        assert!(!text.contains(&"ai:summarize-url".to_string()));
+        assert_eq!(e.accepting("url")[0].id, "ai:summarize-url");
+        // Ranking writes usage.json: use a throwaway config dir.
+        let dir = tempfile::tempdir().unwrap();
+        let e = Engine::load_with_apps(dir.path(), vec![]);
+        let ids: Vec<String> = ["ua:copy", "ua:open", "ua:reveal"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(e.rank_ids("ua:file", &ids), ids, "no history keeps the default order");
+        e.bump_usage("ua:reveal", "ua:file");
+        e.bump_usage("ua:reveal", "ua:file");
+        assert_eq!(e.rank_ids("ua:file", &ids)[0], "ua:reveal");
+    }
+
+    #[test]
+    fn conversions_panes_bookmarks_and_define() {
+        let e = engine_with_extras("");
+        let top = &e.search("10 usd to eur", 5)[0];
+        assert_eq!(top.title, "5.00 EUR");
+        assert_eq!(e.plan(&top.id, &[]).unwrap(), Plan::Copy("5.00".into()));
+        assert_eq!(e.search("bluetooth", 5)[0].id, "pane:bluetooth");
+        assert_eq!(
+            e.plan("pane:bluetooth", &[]).unwrap(),
+            Plan::OpenUrl("x-apple.systempreferences:com.apple.BluetoothSettings".into())
+        );
+        let bm = e.search("bm graf", 10);
+        assert_eq!(bm[0].id, "bm:https://grafana.example.com");
+        assert!(e.search("grafana", 10).iter().any(|c| c.id.starts_with("bm:")));
+        let d = &e.search("define serendipity", 5)[0];
+        assert_eq!(
+            e.plan(&d.id, &[]).unwrap(),
+            Plan::UiArgs {
+                action: "define",
+                args: vec!["serendipity".into()]
+            }
+        );
+        if std::path::Path::new("/usr/share/zoneinfo/Asia/Tokyo").exists() {
+            assert!(e.search("time in tokyo", 5)[0].title.contains("Tokyo"));
+        }
+    }
+
+    fn engine_with_extras(extra_toml: &str) -> Engine {
+        let mut cfg = Config::parse(&format!("{DEFAULT_CONFIG}\n{extra_toml}")).unwrap();
+        cfg.general.currency = true;
+        Engine::assemble_with(cfg, "/cfg".into(), vec![], vec![], vec![], vec![], mcp_extras())
+    }
+
+    const GH: &str = r#"
+        [[mcp_servers]]
+        id = "gh"
+        command = "npx"
+        args = ["-y", "@modelcontextprotocol/server-github"]
+        auto_approve = ["get_*"]
+    "#;
+
+    #[test]
+    fn shortcuts_become_commands() {
+        let e = engine_with_extras("");
+        let hit = &e.search("arrival", 5)[0];
+        assert_eq!(hit.id, "sc:Send Arrival Message");
+        assert_eq!(hit.kind, CommandKind::Shortcut);
+        assert_eq!(
+            e.plan("sc:Resize Image", &["/tmp/a.png".into()]).unwrap(),
+            Plan::RunShortcut {
+                name: "Resize Image".into(),
+                input: Some("/tmp/a.png".into())
+            }
+        );
+        // Turned off in config: gone.
+        let cfg = Config::parse(&DEFAULT_CONFIG.replacen("shortcuts = true", "shortcuts = false", 1)).unwrap();
+        let off = Engine::assemble_with(cfg, "/cfg".into(), vec![], vec![], vec![], vec![], mcp_extras());
+        assert!(off.registry.get("sc:Resize Image").is_none());
+    }
+
+    #[test]
+    fn mcp_tools_become_commands_and_chat_tools() {
+        // Tools of servers that are not configured are ignored.
+        assert!(engine_with_extras("").registry.get("mcp:gh:create_issue").is_none());
+        let e = engine_with_extras(GH);
+        let c = e.registry.get("mcp:gh:create_issue").unwrap();
+        assert_eq!(c.title, "Create Issue");
+        assert_eq!(c.kind, CommandKind::Mcp);
+        assert_eq!(c.arguments.len(), 2);
+        assert_eq!(c.arguments[0].placeholder, "repo");
+        assert_eq!(e.search("create issue", 5)[0].id, "mcp:gh:create_issue");
+        match e.plan("mcp:gh:create_issue", &["me/x".into(), "Bug".into()]).unwrap() {
+            Plan::McpCall {
+                server,
+                tool,
+                arguments,
+            } => {
+                assert_eq!(server, "gh");
+                assert_eq!(tool, "create_issue");
+                assert_eq!(arguments["title"], "Bug");
+            }
+            p => panic!("{p:?}"),
+        }
+        assert!(e.plan("mcp:gh:create_issue", &["me/x".into()]).is_err());
+        let tools = e.chat_tools();
+        assert_eq!(tools.len(), 2);
+        let me = tools.iter().find(|t| t.tool == "get_me").unwrap();
+        assert!(me.auto_approve);
+        assert_eq!(me.spec.name, "gh__get_me");
+        assert!(!tools.iter().find(|t| t.tool == "create_issue").unwrap().auto_approve);
+        assert!(e
+            .preview("mcp:gh:create_issue")
+            .unwrap()
+            .text
+            .unwrap()
+            .contains("`repo`"));
+    }
+
+    #[test]
+    fn saved_chats_search_resume_and_delete() {
+        use crate::providers::{Message, Role};
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Config::parse(DEFAULT_CONFIG).unwrap();
+        let e = Engine::assemble(cfg, dir.path().to_path_buf(), vec![], vec![], vec![], vec![]);
+        e.save_chat(crate::chats::SavedChat {
+            id: "chat:1".into(),
+            title: String::new(),
+            updated: 1,
+            provider: Some("ollama".into()),
+            model: Some("llama3.2".into()),
+            system: None,
+            messages: vec![
+                Message::new(Role::User, "explain borrow checker"),
+                Message::new(Role::Assistant, "…"),
+            ],
+        });
+        let rows = e.search("chats borrow", 10);
+        assert_eq!(rows[0].id, "chat:1");
+        assert_eq!(rows[0].title, "explain borrow checker");
+        match e.plan("chat:1", &[]).unwrap() {
+            Plan::ResumeChat(c) => assert_eq!(c.model.as_deref(), Some("llama3.2")),
+            p => panic!("{p:?}"),
+        }
+        assert!(e.preview("chat:1").unwrap().text.unwrap().contains("**You**"));
+        assert_eq!(
+            e.plan("builtin:chat-history", &[]).unwrap(),
+            Plan::FillQuery("chats".into())
+        );
+        assert!(e.delete_chat("chat:1"));
+        assert!(e.plan("chat:1", &[]).is_err());
+    }
+
+    #[test]
+    fn ui_builtins_and_snippet_expansion() {
+        let e = engine_with(
+            vec![],
+            r#"
+            [[snippets]]
+            keyword = ";addr"
+            text = "1 Main St"
+            [[snippets]]
+            keyword = "plain"
+            text = "never auto"
+            [[snippets]]
+            keyword = "forced"
+            text = "yes"
+            auto_expand = true
+            "#,
+        );
+        assert_eq!(e.plan("builtin:menu-items", &[]).unwrap(), Plan::Ui("menu-items"));
+        assert_eq!(e.plan("builtin:settings", &[]).unwrap(), Plan::Ui("settings"));
+        assert_eq!(e.plan("builtin:dictate", &[]).unwrap(), Plan::Ui("dictate"));
+        assert_eq!(e.plan("builtin:schedule", &[]).unwrap(), Plan::Ui("schedule"));
+        let exp = e.expanding_snippets();
+        let keys: Vec<&str> = exp.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(keys.contains(&";addr") && keys.contains(&"forced"));
+        assert!(!keys.contains(&"plain") && !keys.contains(&"sig"));
+        assert_eq!(e.preview("snippet:;addr").unwrap().text.as_deref(), Some("1 Main St"));
     }
 
     #[test]

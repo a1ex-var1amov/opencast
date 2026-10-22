@@ -5,19 +5,35 @@
 //! commands, app discovery, the calculator and the AI provider adapters, so
 //! all of it can be unit-tested on any machine.
 
+pub mod alfred;
 pub mod apps;
+pub mod bookmarks;
 pub mod calc;
+pub mod chats;
 pub mod commands;
 pub mod config;
+pub mod currency;
+pub mod doctor;
 pub mod emoji;
+mod emoji_data;
 pub mod engine;
+pub mod extensions;
 pub mod files;
+pub mod keymap;
 pub mod layouts;
+pub mod mcp;
 pub mod notes;
+pub mod panes;
 pub mod pins;
+pub mod pipeline;
 pub mod providers;
 pub mod scripts;
+pub mod sync;
+pub mod tz;
+pub mod updates;
 pub mod usage;
+pub mod webtext;
+pub mod window;
 
 pub use commands::{Argument, Command, CommandKind, Registry};
 pub use config::Config;
