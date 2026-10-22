@@ -1,5 +1,9 @@
 #!/bin/zsh -l
 # Builds a release OpenCast.app and installs it to ~/Applications, then launches it.
+#
+# Arch: this Mac's by default (fastest, reuses target/release). Build both slices
+# with `OC_ARCH=universal ./build-app.command` — or OC_ARCH="arm64 x86_64" — which
+# is what ./release.command does for the dmg.
 cd "$(dirname "$0")"
 command -v cargo >/dev/null || { [ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"; }
 echo "== Stopping OpenCast (if any) =="
@@ -12,42 +16,28 @@ if [ -z "$APPLE_SIGNING_IDENTITY" ]; then
   ID=$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(.*\)".*/\1/p' | head -1)
   [ -n "$ID" ] && export APPLE_SIGNING_IDENTITY="$ID" && echo "== Signing as $ID =="
 fi
-echo "== Building release bundle =="
-# Do NOT export MACOSX_DEPLOYMENT_TARGET for cargo: with Rust 1.91 it makes release
-# builds reject their own proc-macro dylibs ("can't find crate for `zerocopy_derive`").
-# Rust's default (macOS 11) links fine into the app; swiftc's -target sets the app's minimum.
-unset MACOSX_DEPLOYMENT_TARGET
-# C/asm in dependencies (ring) still needs a minimum, or ld warns "built for newer macOS".
-export CFLAGS_aarch64_apple_darwin="-mmacosx-version-min=14.0"
-# One cargo invocation: build and print the native libs the Swift link needs.
-# (A second `cargo rustc` used to rebuild the crate; this does not.)
-cargo rustc --release -p opencast-ffi -- --print native-static-libs 2>&1 | tee build-app.log | grep -v '^note: native-static-libs' | tail -15
-BUILD_OK=${pipestatus[1]}
-if [ "$BUILD_OK" != 0 ]; then
-  echo "== Build failed, see build-app.log ==" | tee -a build-app.log
-  if grep -q "can't find crate for .*_derive\|can't find crate for .*_impl\|can't find crate for .*_macro" build-app.log; then
-    echo "   rustc could not load proc-macro crates. Is MACOSX_DEPLOYMENT_TARGET set? Unset it, run" | tee -a build-app.log
-    echo "   cargo clean --release, and retry (./diagnose-build.command narrows it down)." | tee -a build-app.log
-  fi
-  exit 1
-fi
-FLAGS=$(awk -F'native-static-libs: ' '/native-static-libs:/ { print $2; exit }' build-app.log)
+ARCHS=(${(s: :)${OC_ARCH:-$(uname -m)}})
+[ "$ARCHS[1]" = "universal" ] && ARCHS=(arm64 x86_64)
+echo "== Building $ARCHS =="
+SLICES=()
+for a in "${ARCHS[@]}"; do
+  # cargo/swiftc output goes to build-app-<arch>.log; failures print their tail.
+  ./packaging/build-arch.zsh "$a" "build-app-$a.log" "target/slices-$a/OpenCast" || exit 1
+  SLICES+=("target/slices-$a/OpenCast")
+done
 APP=target/release/OpenCast.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp macos/Info.plist "$APP/Contents/Info.plist"
 cp macos/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
-eval swiftc -parse-as-library -O -target arm64-apple-macos14.0 \
-  -import-objc-header macos/opencast.h \
-  -framework AppKit -framework SwiftUI -framework IOKit -framework ApplicationServices \
-  macos/*.swift \
-  -L target/release -lopencast_ffi $FLAGS \
-  -o "$APP/Contents/MacOS/OpenCast" 2>&1 | tee -a build-app.log | tail -15
-BUILD_OK=${pipestatus[1]}
-if [ "$BUILD_OK" != 0 ]; then
-  echo "== Build failed, see build-app.log ==" | tee -a build-app.log
-  exit 1
+if [ "${#SLICES[@]}" -gt 1 ]; then
+  lipo -create "${SLICES[@]}" -output "$APP/Contents/MacOS/OpenCast" || exit 1
+  rm -rf target/slices-*
+else
+  cp "${SLICES[1]}" "$APP/Contents/MacOS/OpenCast"
 fi
+# A dmg that says "universal" must contain both slices; check instead of trusting.
+echo "== Binary archs: $(lipo -archs "$APP/Contents/MacOS/OpenCast") =="
 # Strip local symbols from the final binary (what `strip = true` was meant to do).
 strip -x "$APP/Contents/MacOS/OpenCast" 2>/dev/null
 if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
@@ -55,5 +45,4 @@ if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
 fi
 rm -rf "$HOME/Applications/OpenCast.app"
 ditto "$APP" "$HOME/Applications/OpenCast.app" || exit 1
-echo "== Installed to ~/Applications/OpenCast.app ==" | tee -a build-app.log
-open "$HOME/Applications/OpenCast.app"
+echo "== Installed to ~/Applications/OpenCast.app =="

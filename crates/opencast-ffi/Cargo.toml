@@ -4,6 +4,8 @@ description = "macOS C ABI in front of the OpenCast engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# This app's internals, not a library for others to take.
+publish = false
 
 [lib]
 crate-type = ["staticlib", "rlib"]

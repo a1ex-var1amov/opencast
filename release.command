@@ -23,12 +23,10 @@ fi
 [ -n "$DEVELOPER_ID" ] || { echo "No 'Developer ID Application' certificate found. Set DEVELOPER_ID."; exit 1; }
 echo "== OpenCast $VERSION, signing as: $DEVELOPER_ID =="
 
-# Same settings as build-app.command (see the notes there).
-unset MACOSX_DEPLOYMENT_TARGET
-export CFLAGS_aarch64_apple_darwin="-mmacosx-version-min=14.0"
-cargo rustc --release -p opencast-ffi -- --print native-static-libs 2>&1 | tee build-release.log | grep -E "^(error|warning: unused)" || true
-FLAGS=$(awk -F'native-static-libs: ' '/native-static-libs:/ { print $2; exit }' build-release.log)
-[ -f target/release/libopencast_ffi.a ] || { echo "Rust build failed, see build-release.log"; exit 1; }
+# Arch: both slices by default, so an Intel Mac gets the same dmg. Set
+# OC_ARCH=arm64 for a single-slice build (faster; nothing else changes).
+ARCHS=(${(s: :)${OC_ARCH:-arm64 x86_64}})
+[ "$ARCHS[1]" = "universal" ] && ARCHS=(arm64 x86_64)
 
 DIST=dist/$VERSION
 APP=$DIST/OpenCast.app
@@ -37,12 +35,21 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp macos/Info.plist "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" -c "Set :CFBundleVersion $VERSION" "$APP/Contents/Info.plist"
 cp macos/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
-eval swiftc -parse-as-library -O -target arm64-apple-macos14.0 \
-  -import-objc-header macos/opencast.h \
-  -framework AppKit -framework SwiftUI -framework IOKit -framework ApplicationServices \
-  macos/*.swift \
-  -L target/release -lopencast_ffi $FLAGS \
-  -o "$APP/Contents/MacOS/OpenCast"
+
+SLICES=()
+for a in "${ARCHS[@]}"; do
+  ./packaging/build-arch.zsh "$a" "build-release-$a.log" "target/slices-$a/OpenCast"
+  SLICES+=("target/slices-$a/OpenCast")
+done
+if [ "${#SLICES[@]}" -gt 1 ]; then
+  lipo -create "${SLICES[@]}" -output "$APP/Contents/MacOS/OpenCast"
+  rm -rf target/slices-*
+else
+  cp "${SLICES[1]}" "$APP/Contents/MacOS/OpenCast"
+fi
+# Notarization and the cask sha256 mean nothing for the wrong arches, so check
+# the finished binary rather than trust the loop.
+echo "== Binary archs: $(lipo -archs "$APP/Contents/MacOS/OpenCast") =="
 strip -x "$APP/Contents/MacOS/OpenCast"
 
 echo "== Signing (hardened runtime) =="
@@ -80,8 +87,32 @@ echo
 echo "== Done: $DIST =="
 ls -lh "$DIST"
 echo
-echo "Homebrew cask (packaging/homebrew/opencast.rb):"
-echo "  version \"$VERSION\""
-echo "  sha256 \"$(shasum -a 256 "$DMG" | cut -d' ' -f1)\""
-echo
+SHA=$(shasum -a 256 "$DMG" | cut -d' ' -f1)
 echo "Publish: gh release create v$VERSION \"$DMG\" \"$ZIP\" --title \"OpenCast $VERSION\" --generate-notes"
+echo
+# Print the cask with the three things only a real release knows filled in, so
+# the copy that gets pasted cannot be stale or half a placeholder.
+REMOTE=$(git remote get-url origin 2>/dev/null || true)
+REPO=""
+case "$REMOTE" in
+  *github.com*)
+    REPO=${REMOTE#*github.com}
+    REPO=${REPO#:}
+    REPO=${REPO#/}
+    REPO=${REPO%.git}
+    ;;
+esac
+case "$REPO" in
+  */*) ;;
+  *) REPO="" ;;
+esac
+if [ -n "$REPO" ]; then
+  echo "Homebrew cask — paste this into your tap as Casks/opencast.rb (remote $REPO):"
+  sed -e "s#^  version \".*\"#  version \"$VERSION\"#" \
+      -e "s#^  sha256 \".*\"#  sha256 \"$SHA\"#" \
+      -e "s#OWNER#$REPO#g" \
+      packaging/homebrew/opencast.rb
+else
+  echo "Homebrew cask (packaging/homebrew/opencast.rb): set version \"$VERSION\","
+  echo "sha256 \"$SHA\" and OWNER by hand — this checkout has no github.com remote to fill them from."
+fi

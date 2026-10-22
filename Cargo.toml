@@ -8,6 +8,7 @@ default-members = ["crates/opencast-core"]
 version = "0.2.0"
 edition = "2021"
 license = "MIT"
+# Placeholder until the repo is public — no crate inherits it today.
 repository = "https://github.com/your-name/opencast"
 
 [profile.release]

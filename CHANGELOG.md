@@ -16,6 +16,8 @@ first tag is in `git log`.
   `script_timeout_secs`?”.
 - OpenCast refuses to start a second time: a lock file in the config folder, and
   an alert explaining why the new copy quit.
+- The Homebrew cask is printed ready to paste (version, sha256 and owner/repo
+  from your git remote) instead of a template full of `OWNER` placeholders.
 
 ### Changed
 - An empty launcher shows a mix of kinds instead of one wall of window commands:
@@ -24,6 +26,11 @@ first tag is in `git log`.
 - AI requests are dropped after 120 s without a single byte (a wedged local
   server or tunnel no longer holds the panel open forever). Long answers that
   keep streaming are unaffected.
+- The app is built universal: `./release.command` now produces one dmg that runs
+  on Intel and Apple Silicon Macs (`OC_ARCH=arm64` for a single slice),
+  `OC_ARCH=universal ./build-app.command` does the same locally, and CI compiles
+  the Intel slice so it cannot rot unnoticed. The two build scripts now share
+  `packaging/build-arch.zsh`.
 - CI runs `cargo fmt --all -- --check`, and the Swift type check now passes the
   engine header (`macos/opencast.h`), so `opencast_call` is actually checked.
 

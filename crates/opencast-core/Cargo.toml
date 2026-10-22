@@ -4,6 +4,9 @@ description = "Portable core of OpenCast: commands, scripts, apps and AI provide
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# This app's internals, not a library for others to take (and the workspace
+# repository URL is still a placeholder).
+publish = false
 
 [dependencies]
 anyhow = "1"

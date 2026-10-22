@@ -497,12 +497,16 @@ as is):
 
 ## Releasing
 
-`./release.command` builds, signs with your Developer ID (hardened runtime),
-notarizes, staples and packages a `.dmg` and `.zip`, then prints the
-Homebrew cask `sha256`. One-time setup and the cask template are in
-`release.command` and `packaging/`. **Check for Updates** looks at the latest
-GitHub release of `update_repo`; set `check_updates = true` for a quiet weekly
-check.
+`./release.command` builds **both arch slices** (arm64 + x86_64, lipo'd into one
+universal binary, so a single dmg runs on any Mac), signs with your Developer ID
+(hardened runtime), notarizes, staples and packages a `.dmg` and `.zip`, then
+prints the Homebrew cask with version, `sha256` and owner/repo filled in from
+your git remote. One-time setup and the cask template are in `release.command`
+and `packaging/`; `packaging/build-arch.zsh` builds one slice, which is also what
+CI runs for the Intel arch. `OC_ARCH=arm64` builds a single slice, and
+`OC_ARCH=universal ./build-app.command` does the same for your local install.
+**Check for Updates** looks at the latest GitHub release of `update_repo`; set
+`check_updates = true` for a quiet weekly check.
 
 ## Layout
 
@@ -513,7 +517,8 @@ crates/opencast-ffi/    macOS C ABI: hotkeys, clipboard, paste, Seek OCR, app in
                           Shortcuts, MCP hub + AI tool loop (agent.rs)
 macos/                  SwiftUI panel, settings window, window manager (AX),
                           menu search, dictation, calendar, snippet expansion
-packaging/              entitlements and the Homebrew cask template
+packaging/              entitlements, the Homebrew cask template, build-arch.zsh
+                        (one arch slice: Rust engine + Swift panel)
 examples/               default config.toml and example scripts
 ```
 

@@ -44,8 +44,12 @@ macOS first; `crates/opencast-core` must stay portable (no platform UI deps).
 - The FFI crate only compiles for macOS (Linux builds a stub), so FFI and Swift
   changes are verified by `./build-app.command` on a Mac
 - `./build-app.command` — builds and installs the app to ~/Applications/OpenCast.app
+  (this arch; `OC_ARCH=universal` builds arm64 + x86_64 and lipo's them)
 - `./run-opencast.command` — debug app at target/debug/OpenCast.app
-- `./release.command` — signed + notarized dmg/zip (Developer ID needed)
+- `./release.command` — signed + notarized universal dmg/zip (Developer ID needed);
+  prints the Homebrew cask filled in from the git remote
+- `packaging/build-arch.zsh <arm64|x86_64> <log> <out>` — one arch slice (Rust
+  staticlib + swiftc link); CI runs it for x86_64 so the Intel build cannot rot
 - Do NOT export MACOSX_DEPLOYMENT_TARGET for cargo (Rust 1.91 release builds
   then cannot load proc macros); swiftc `-target` sets the app minimum
 - User config lives in ~/.config/opencast/config.toml (NOT in this repo);
