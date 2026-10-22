@@ -6,7 +6,9 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
-use super::{pump, sse::SseEvent, ChatEvent, ChatRequest, Endpoint, Provider, Role, Step, ToolAccumulator};
+use super::{
+    pump, sse::SseEvent, usable_images, ChatEvent, ChatRequest, Endpoint, Provider, Role, Step, ToolAccumulator,
+};
 use crate::config::ProviderKind;
 
 pub struct OpenAi(pub Endpoint);
@@ -33,6 +35,16 @@ pub fn body(req: &ChatRequest) -> Value {
                 "role": "tool",
                 "tool_call_id": m.tool_call_id.clone().unwrap_or_default(),
                 "content": m.content,
+            }),
+            // A turn with images becomes content parts (a data URL per image).
+            _ if m.has_images() => json!({
+                "role": m.role,
+                "content": std::iter::once(json!({ "type": "text", "text": m.content }))
+                    .chain(usable_images(m).map(|i| json!({
+                        "type": "image_url",
+                        "image_url": { "url": format!("data:{};base64,{}", i.mime, i.b64) },
+                    })))
+                    .collect::<Vec<_>>(),
             }),
             _ => json!({"role": m.role, "content": m.content}),
         })
@@ -136,6 +148,10 @@ impl Provider for OpenAi {
         self.0.models.clone()
     }
 
+    fn supports_vision(&self, model: &str) -> bool {
+        self.0.vision_for(model)
+    }
+
     async fn stream(&self, req: ChatRequest, tx: mpsc::Sender<ChatEvent>) -> Result<()> {
         let req = self.0.apply_defaults(req);
         let mut rb = self.0.post(&url(&self.0.base_url)).json(&body(&req));
@@ -151,7 +167,7 @@ impl Provider for OpenAi {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::{Message, Role, ToolCall, ToolSpec};
+    use crate::providers::{Image, Message, Role, ToolCall, ToolSpec};
 
     #[test]
     fn body_shape() {
@@ -246,5 +262,30 @@ mod tests {
         }
         // Nothing left over for [DONE].
         assert_eq!(p.parse(&ev("[DONE]")), Step::Done);
+    }
+
+    #[test]
+    fn images_travel_as_data_urls() {
+        let req = ChatRequest {
+            model: "gpt-4o".into(),
+            messages: vec![
+                Message::new(Role::User, "what is in this chart?").with_images(vec![Image {
+                    mime: "image/png".into(),
+                    b64: "aW1hZ2U=".into(),
+                }]),
+            ],
+            ..Default::default()
+        };
+        let parts = body(&req)["messages"][0]["content"].as_array().unwrap().clone();
+        assert_eq!(parts.len(), 2, "text part + image part");
+        assert_eq!(parts[0]["type"], "text");
+        assert_eq!(parts[1]["image_url"]["url"], "data:image/png;base64,aW1hZ2U=");
+        // Text-only turns stay plain strings: older proxies choke on content arrays.
+        let plain = body(&ChatRequest {
+            model: "m".into(),
+            messages: vec![Message::new(Role::User, "hi")],
+            ..Default::default()
+        });
+        assert!(plain["messages"][0]["content"].is_string());
     }
 }

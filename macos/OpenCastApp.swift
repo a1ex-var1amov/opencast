@@ -2878,9 +2878,22 @@ final class Model {
         }
         let attached = chatAttachments
         chatAttachments = []
-        let context = attached.map { "<attachment name=\"\($0.name)\">\n\($0.text)\n</attachment>" }.joined(separator: "\n\n")
-        let userTurn = ChatTurn(role: "user", content: content, context: context, attachmentNames: attached.map(\.name))
-        let messages = (history + [userTurn]).map { ["role": $0.role, "content": $0.wireContent] }
+        let context = attached.filter { !$0.text.isEmpty }
+            .map { "<attachment name=\"\($0.name)\">\n\($0.text)\n</attachment>" }.joined(separator: "\n\n")
+        let images = attached.compactMap { a -> [String: String]? in
+            guard let b64 = a.imageB64, let mime = a.imageMime else { return nil }
+            return ["mime": mime, "b64": b64]
+        }
+        let userTurn = ChatTurn(
+            role: "user", content: content, context: context,
+            attachmentNames: attached.map(\.name), images: images)
+        // Images ride along on every later turn too: "what about the box in the
+        // top-left?" only makes sense if the model can still see the shot.
+        let messages: [[String: Any]] = (history + [userTurn]).map { turn in
+            var m: [String: Any] = ["role": turn.role, "content": turn.wireContent]
+            if !turn.images.isEmpty { m["images"] = turn.images }
+            return m
+        }
         let id = UUID().uuidString
         chatRequestId = id
         chatStreaming = true
@@ -3116,6 +3129,19 @@ final class Model {
         focusTick += 1
     }
 
+    /// Does the provider this chat would use take image attachments? When it
+    /// does, screenshots go as pixels; otherwise the panel OCRs them on-device.
+    var chatVision: Bool {
+        if providers.isEmpty {
+            // Cheap: reads config, no network. Attachments can be added before
+            // the chat view has loaded its provider list.
+            providers = ((Engine.call(["op": "providers"])["providers"]) as? [[String: Any]])?
+                .compactMap(Provider.init) ?? []
+        }
+        let p = providers.first { $0.id == chatProviderId } ?? providers.first { $0.isDefault } ?? providers.first
+        return p?.vision ?? false
+    }
+
     func attachFile() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
@@ -3123,13 +3149,23 @@ final class Model {
         keepOnBlurOnce = true
         guard panel.runModal() == .OK else { return }
         for url in panel.urls {
+            let vision = chatVision
+            let name = url.lastPathComponent
             Task.detached {
+                // Pixels for a vision model (layout, colour, a chart's shape);
+                // everything else gets on-device OCR text, as before.
+                if vision, let img = Attachments.imageData(of: url) {
+                    await MainActor.run {
+                        Model.shared.attach(ChatAttachment(name: name, text: "", imageB64: img.b64, imageMime: img.mime))
+                    }
+                    return
+                }
                 let text = Attachments.text(of: url)
                 await MainActor.run {
                     if let text {
-                        Model.shared.attach(ChatAttachment(name: url.lastPathComponent, text: text))
+                        Model.shared.attach(ChatAttachment(name: name, text: text))
                     } else {
-                        Model.shared.flash("Could not read \(url.lastPathComponent)", error: true, thenHide: false)
+                        Model.shared.flash("Could not read \(name)", error: true, thenHide: false)
                     }
                 }
             }
@@ -3143,7 +3179,15 @@ final class Model {
             return
         }
         if let data = NSPasteboard.general.data(forType: .png) ?? NSPasteboard.general.data(forType: .tiff) {
+            let vision = chatVision
             Task.detached {
+                if vision, let img = Attachments.imageData(data) {
+                    await MainActor.run {
+                        Model.shared.attach(
+                            ChatAttachment(name: "Clipboard image", text: "", imageB64: img.b64, imageMime: img.mime))
+                    }
+                    return
+                }
                 let text = Attachments.ocr(data: data) ?? ""
                 await MainActor.run {
                     if text.isEmpty {
@@ -3158,12 +3202,22 @@ final class Model {
         flash("The clipboard is empty", error: true, thenHide: false)
     }
 
-    /// OCR the screen under the panel (needs Screen Recording).
+    /// The screen under the panel: pixels for a vision model, OCR text otherwise
+    /// (needs Screen Recording).
     func attachScreen() {
         let target = previousApp?.localizedName ?? "Screen"
+        let vision = chatVision
         launcher?.alphaValue = 0
         Task.detached {
             try? await Task.sleep(nanoseconds: 120_000_000)
+            if vision, let shot = Attachments.screenCaptureData(), let img = Attachments.imageData(shot) {
+                await MainActor.run {
+                    Model.shared.launcher?.alphaValue = 1
+                    Model.shared.attach(
+                        ChatAttachment(name: "\(target) (screen)", text: "", imageB64: img.b64, imageMime: img.mime))
+                }
+                return
+            }
             let text = Attachments.screenText()
             await MainActor.run {
                 Model.shared.launcher?.alphaValue = 1

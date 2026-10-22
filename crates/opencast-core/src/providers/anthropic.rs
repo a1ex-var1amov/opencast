@@ -5,7 +5,9 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
-use super::{pump, sse::SseEvent, ChatEvent, ChatRequest, Endpoint, Provider, Role, Step, ToolAccumulator};
+use super::{
+    pump, sse::SseEvent, usable_images, ChatEvent, ChatRequest, Endpoint, Provider, Role, Step, ToolAccumulator,
+};
 use crate::config::ProviderKind;
 
 pub const API_VERSION: &str = "2023-06-01";
@@ -49,7 +51,16 @@ pub fn body(req: &ChatRequest) -> Value {
                     "content": m.content,
                 })],
             ),
-            _ => ("user", vec![json!({"type": "text", "text": m.content})]),
+            _ => {
+                let mut b = vec![json!({"type": "text", "text": m.content})];
+                for i in usable_images(m) {
+                    b.push(json!({
+                        "type": "image",
+                        "source": { "type": "base64", "media_type": i.mime, "data": i.b64 },
+                    }));
+                }
+                ("user", b)
+            }
         };
         if blocks.is_empty() {
             continue;
@@ -167,6 +178,10 @@ impl Provider for Anthropic {
         self.0.models.clone()
     }
 
+    fn supports_vision(&self, model: &str) -> bool {
+        self.0.vision_for(model)
+    }
+
     async fn stream(&self, req: ChatRequest, tx: mpsc::Sender<ChatEvent>) -> Result<()> {
         let req = self.0.apply_defaults(req);
         let mut rb = self
@@ -186,7 +201,7 @@ impl Provider for Anthropic {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::Message;
+    use crate::providers::{Image, Message};
 
     #[test]
     fn system_is_lifted_and_turns_merged() {
@@ -282,5 +297,32 @@ mod tests {
             )),
             Step::Error("Overloaded".into())
         );
+    }
+
+    #[test]
+    fn images_become_base64_source_blocks() {
+        let req = ChatRequest {
+            model: "claude-x".into(),
+            messages: vec![
+                Message::new(Role::User, "what is in this shot?").with_images(vec![Image {
+                    mime: "image/jpeg".into(),
+                    b64: "eA==".into(),
+                }]),
+            ],
+            ..Default::default()
+        };
+        let blocks = body(&req)["messages"][0]["content"].as_array().unwrap().clone();
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(blocks[1]["type"], "image");
+        assert_eq!(blocks[1]["source"]["type"], "base64");
+        assert_eq!(blocks[1]["source"]["media_type"], "image/jpeg");
+        assert_eq!(blocks[1]["source"]["data"], "eA==");
+        // Without images the turn stays a plain string.
+        let plain = body(&ChatRequest {
+            model: "m".into(),
+            messages: vec![Message::new(Role::User, "hi")],
+            ..Default::default()
+        });
+        assert_eq!(plain["messages"][0]["content"], "hi");
     }
 }

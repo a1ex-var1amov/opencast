@@ -76,6 +76,13 @@ large_type = "Cmd+L"            # show the typed text or answer huge on screen
 # Model ids change often: use any id your account or server actually serves.
 # ---------------------------------------------------------------------------
 
+# Attachments (screenshots, files) go to the model as pixels when it can see
+# them; otherwise OpenCast reads the text out of them on-device (Vision OCR) and
+# sends that, which works with any model. Unset = guessed from the model name
+# (gpt-4o, gpt-4.1, claude…, gemini…, …-vl, pixtral… = yes). Force it:
+#   vision = true    send images even when the name looks text-only
+#   vision = false   always OCR, never send pixels
+
 [[providers]]
 id = "ollama"
 kind = "openai"

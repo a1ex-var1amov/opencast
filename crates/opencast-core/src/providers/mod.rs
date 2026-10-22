@@ -55,6 +55,27 @@ pub struct ToolSpec {
     pub parameters: serde_json::Value,
 }
 
+/// An image on a user turn, base64 without the `data:` wrapper. Sent only when
+/// the provider says it can see (`Provider::supports_vision`); otherwise the
+/// panel OCRs the image and sends text, which works with any model.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Image {
+    /// `image/png` | `image/jpeg` | `image/webp` | `image/gif`
+    pub mime: String,
+    pub b64: String,
+}
+
+/// Base64 ceiling per image (~9 MB of bytes). The panel downscreenshots and
+/// re-encodes; this is the guard that keeps a 40 MB scan from being posted.
+pub const MAX_IMAGE_B64: usize = 12 * 1024 * 1024;
+
+/// Images worth sending: non-empty, under the ceiling.
+pub fn usable_images(m: &Message) -> impl Iterator<Item = &Image> {
+    m.images
+        .iter()
+        .filter(|i| !i.b64.is_empty() && i.b64.len() <= MAX_IMAGE_B64)
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
@@ -69,6 +90,9 @@ pub struct Message {
     /// Tool turn: the tool's name (Gemini matches results by name).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Images on this turn (usually a user turn). Empty keeps the wire shape plain.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<Image>,
 }
 
 impl Message {
@@ -79,6 +103,7 @@ impl Message {
             tool_calls: Vec::new(),
             tool_call_id: None,
             name: None,
+            images: Vec::new(),
         }
     }
 
@@ -95,6 +120,15 @@ impl Message {
             name: Some(call.name.clone()),
             ..Self::new(Role::Tool, content)
         }
+    }
+
+    pub fn with_images(mut self, images: Vec<Image>) -> Self {
+        self.images = images;
+        self
+    }
+
+    pub fn has_images(&self) -> bool {
+        !self.images.is_empty()
     }
 }
 
@@ -126,6 +160,10 @@ pub trait Provider: Send + Sync {
     fn kind(&self) -> ProviderKind;
     fn default_model(&self) -> &str;
     fn models(&self) -> Vec<String>;
+    /// Whether image attachments can be sent for `model` (else the panel OCRs).
+    fn supports_vision(&self, model: &str) -> bool {
+        looks_vision(model)
+    }
     /// Stream a completion into `tx`. Always ends with `Done` or `Error`
     /// unless the receiver is dropped.
     async fn stream(&self, req: ChatRequest, tx: mpsc::Sender<ChatEvent>) -> Result<()>;
@@ -143,6 +181,8 @@ pub struct Endpoint {
     pub headers: HashMap<String, String>,
     pub max_tokens: Option<u32>,
     pub temperature: Option<f32>,
+    /// `vision` in config: force images on/off instead of guessing from the name.
+    pub vision: Option<bool>,
     pub client: reqwest::Client,
 }
 
@@ -164,8 +204,14 @@ impl Endpoint {
             headers: cfg.headers.clone(),
             max_tokens: cfg.max_tokens,
             temperature: cfg.temperature,
+            vision: cfg.vision,
             client,
         })
+    }
+
+    /// Can this endpoint take image attachments for `model`?
+    pub fn vision_for(&self, model: &str) -> bool {
+        self.vision.unwrap_or_else(|| looks_vision(model))
     }
 
     /// Fill per-provider defaults the request did not set.
@@ -193,6 +239,46 @@ pub fn default_base_url(kind: ProviderKind) -> &'static str {
         ProviderKind::Anthropic => "https://api.anthropic.com",
         ProviderKind::Gemini => "https://generativelanguage.googleapis.com",
     }
+}
+
+/// Name-only guess at whether a model takes images, used unless config says
+/// otherwise (`vision = true|false`). Deliberately conservative: a wrong "no"
+/// costs a screenshot's layout (the panel OCRs instead), a wrong "yes" costs a
+/// rejected request and an error the user has to read.
+pub fn looks_vision(model: &str) -> bool {
+    let m = model.to_lowercase();
+    // Distinctive families first: everything current from these vendors sees.
+    const YES: &[&str] = &[
+        "vision",
+        "-vl",
+        "vl-",
+        "pixtral",
+        "llava",
+        "internvl",
+        "cogvlm",
+        "nanvl",
+        "gemini",
+        "gemma",
+        "claude",
+        "gpt-4o",
+        "gpt-4.1",
+        "gpt-4-turbo",
+        "gpt-4v",
+        "o1",
+        "o3",
+        "o4",
+        "kimi",
+        "glm-4v",
+        "qwen2-vl",
+        "qwen2.5-vl",
+        "qwen3-vl",
+        "phi3-vision",
+        "phi-3-vision",
+        "minicpm-v",
+        "molmo",
+        "paligemma",
+    ];
+    YES.iter().any(|t| m.contains(t))
 }
 
 /// What an adapter makes of one SSE event.
@@ -351,6 +437,8 @@ pub struct ProviderInfo {
     pub models: Vec<String>,
     pub default_model: String,
     pub is_default: bool,
+    /// Images can be attached for the default model (false = the panel OCRs them).
+    pub vision: bool,
 }
 
 #[derive(Default)]
@@ -411,6 +499,7 @@ impl Router {
                 models: p.models(),
                 default_model: p.default_model().to_string(),
                 is_default: self.default.as_deref() == Some(p.id()),
+                vision: p.supports_vision(p.default_model()),
             })
             .collect()
     }
@@ -479,5 +568,100 @@ mod tests {
         let list = r.list();
         assert_eq!(list[1].models, vec!["m1", "m2"]);
         assert!(list[1].is_default);
+    }
+
+    #[test]
+    fn vision_is_guessed_from_the_model_name() {
+        for m in [
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4.1-mini",
+            "gpt-4-turbo",
+            "claude-sonnet-4-5",
+            "gemini-2.5-flash",
+            "gemma3:12b",
+            "llama3.2-vision:11b",
+            "qwen2.5-vl:7b",
+            "pixtral-large-latest",
+            "minicpm-v",
+        ] {
+            assert!(looks_vision(m), "{m} should take images");
+        }
+        for m in [
+            "llama3.1:8b",
+            "llama3.3:70b",
+            "deepseek-chat",
+            "mistral-small-latest",
+            "phi-3.5-mini",
+            "gpt-3.5-turbo",
+            "qwen2.5:14b",
+        ] {
+            assert!(!looks_vision(m), "{m} should not take images");
+        }
+    }
+
+    #[test]
+    fn config_can_force_vision() {
+        let cfg = Config::parse(
+            r#"
+            [[providers]]
+            id = "local"
+            kind = "openai"
+            base_url = "http://localhost:11434/v1"
+            model = "llama3.1:8b"
+            [[providers]]
+            id = "forced"
+            kind = "openai"
+            base_url = "http://localhost:1234/v1"
+            model = "mystery-model"
+            vision = true
+            "#,
+        )
+        .unwrap();
+        let (r, warnings) = Router::from_config(&cfg);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let list = r.list();
+        assert!(!list[0].vision, "a text-only local model is listed as no-images");
+        assert!(list[1].vision, "vision = true overrides the name");
+        // Unset config still guesses per model, so picking a vision model on the
+        // same provider starts sending pixels.
+        assert!(r.get(Some("local")).unwrap().supports_vision("gpt-4o"));
+        assert!(!r.get(Some("local")).unwrap().supports_vision("llama3.1:8b"));
+    }
+
+    #[test]
+    fn images_round_trip_through_the_panel_json() {
+        let m = Message::new(Role::User, "what is in this shot?").with_images(vec![Image {
+            mime: "image/png".into(),
+            b64: "aGVsbG8=".into(),
+        }]);
+        let j = serde_json::to_string(&m).unwrap();
+        assert!(j.contains("\"b64\":\"aGVsbG8=\""), "{j}");
+        let back: Message = serde_json::from_str(&j).unwrap();
+        assert_eq!(back, m);
+        // A message without images keeps the old shape (no `images` key at all).
+        assert!(!serde_json::to_string(&Message::new(Role::User, "hi"))
+            .unwrap()
+            .contains("images"));
+    }
+
+    #[test]
+    fn oversized_or_empty_images_are_dropped() {
+        let m = Message::new(Role::User, "x").with_images(vec![
+            Image {
+                mime: "image/png".into(),
+                b64: String::new(),
+            },
+            Image {
+                mime: "image/png".into(),
+                b64: "x".repeat(MAX_IMAGE_B64 + 1),
+            },
+            Image {
+                mime: "image/jpeg".into(),
+                b64: "ok".into(),
+            },
+        ]);
+        let kept: Vec<&Image> = usable_images(&m).collect();
+        assert_eq!(kept.len(), 1, "only the sane one survives");
     }
 }

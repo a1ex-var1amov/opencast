@@ -146,9 +146,9 @@ struct ChatView: View {
             HStack(spacing: 6) {
                 ForEach(model.chatAttachments) { a in
                     HStack(spacing: 4) {
-                        Image(systemName: "paperclip")
+                        Image(systemName: a.isImage ? "photo" : "paperclip")
                         Text(a.name).lineLimit(1)
-                        Text("\(a.text.count) chars")
+                        Text(a.isImage ? "image" : "\(a.text.count) chars")
                             .foregroundStyle(Theme.tertiary(scheme))
                         Button {
                             model.chatAttachments.removeAll { $0.id == a.id }

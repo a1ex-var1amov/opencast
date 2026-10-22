@@ -1018,6 +1018,9 @@ pub struct ProviderConfig {
     pub headers: HashMap<String, String>,
     pub max_tokens: Option<u32>,
     pub temperature: Option<f32>,
+    /// Take image attachments (screenshots, files) as pixels instead of OCR text.
+    /// Unset = guess from the model name (`gpt-4o`, `claude…`, `…-vl` = yes).
+    pub vision: Option<bool>,
 }
 
 impl ProviderConfig {
@@ -1517,6 +1520,7 @@ mod tests {
             headers: Default::default(),
             max_tokens: None,
             temperature: None,
+            vision: None,
         };
         assert_eq!(p.resolve_api_key().unwrap().as_deref(), Some("sk-test"));
         assert_eq!(p.all_models(), vec!["a", "b"]);
@@ -1628,6 +1632,7 @@ mod tests {
             headers: Default::default(),
             max_tokens: None,
             temperature: None,
+            vision: None,
         };
         add_provider(dir.path(), &p).unwrap();
         // Adding again replaces, not duplicates.

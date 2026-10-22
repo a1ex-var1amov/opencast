@@ -6,7 +6,9 @@ macOS first; `crates/opencast-core` must stay portable (no platform UI deps).
 ## Layout
 - `crates/opencast-core` — config, command registry + fuzzy search, scripts
   (incl. Script Filters), app discovery, calculator, saved layouts, keymap,
-  AI provider adapters (+ all tests). Sidecar state (usage, pins, notes) is
+  AI provider adapters (+ all tests; `Message.images` carries image attachments,
+  `supports_vision`/`looks_vision` decides pixels vs the panel's OCR text). Sidecar
+  state (usage, pins, notes) is
   cached in `Engine` — search must never read disk.
 - `crates/opencast-core` also: `mcp.rs` (MCP client: stdio + HTTP, tool cache),
   `chats.rs` (saved chats), `sync.rs` (iCloud symlink sync), `updates.rs`,

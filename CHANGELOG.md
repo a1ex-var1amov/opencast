@@ -7,6 +7,11 @@ first tag is in `git log`.
 ## Unreleased
 
 ### Added
+- Image attachments reach vision models as pixels. Screenshots, clipboard images
+  and image files are downscaled and sent to `gpt-4o`, `claude…`, `gemini…`,
+  `…-vl`, `pixtral…` and friends; every other model keeps getting on-device OCR
+  text, so attachments work with a local llama too. Guessed from the model name,
+  forced with `vision = true|false` per provider.
 - `opencast://search?q=…` and `opencast://run/<command-id>` deep links, plus
   opening `.alfredworkflow` / `.alfredsnippets` files from Finder (documented
   in README).

@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
-use super::{pump, sse::SseEvent, ChatEvent, ChatRequest, Endpoint, Provider, Role, Step, ToolCall};
+use super::{pump, sse::SseEvent, usable_images, ChatEvent, ChatRequest, Endpoint, Provider, Role, Step, ToolCall};
 use crate::config::ProviderKind;
 
 pub struct Gemini(pub Endpoint);
@@ -46,7 +46,11 @@ pub fn body(req: &ChatRequest) -> Value {
             }),
             _ => {
                 let role = if m.role == Role::Assistant { "model" } else { "user" };
-                json!({"role": role, "parts": [{"text": m.content}]})
+                let mut parts = vec![json!({"text": m.content})];
+                for i in usable_images(m) {
+                    parts.push(json!({"inline_data": {"mime_type": i.mime, "data": i.b64}}));
+                }
+                json!({"role": role, "parts": parts})
             }
         })
         .collect();
@@ -172,6 +176,10 @@ impl Provider for Gemini {
         self.0.models.clone()
     }
 
+    fn supports_vision(&self, model: &str) -> bool {
+        self.0.vision_for(model)
+    }
+
     async fn stream(&self, req: ChatRequest, tx: mpsc::Sender<ChatEvent>) -> Result<()> {
         let req = self.0.apply_defaults(req);
         let mut rb = self.0.post(&url(&self.0.base_url, &req.model)).json(&body(&req));
@@ -187,7 +195,7 @@ impl Provider for Gemini {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::Message;
+    use crate::providers::{Image, Message};
 
     #[test]
     fn url_and_body() {
@@ -279,5 +287,21 @@ mod tests {
             parse(&ev(r#"{"promptFeedback":{"blockReason":"SAFETY"}}"#)),
             Step::Error("blocked by Gemini safety filter: SAFETY".into())
         );
+    }
+
+    #[test]
+    fn images_go_in_the_parts_as_inline_data() {
+        let req = ChatRequest {
+            model: "gemini-x".into(),
+            messages: vec![Message::new(Role::User, "what is this?").with_images(vec![Image {
+                mime: "image/webp".into(),
+                b64: "eA==".into(),
+            }])],
+            ..Default::default()
+        };
+        let parts = body(&req)["contents"][0]["parts"].as_array().unwrap().clone();
+        assert_eq!(parts[0]["text"], "what is this?");
+        assert_eq!(parts[1]["inline_data"]["mime_type"], "image/webp");
+        assert_eq!(parts[1]["inline_data"]["data"], "eA==");
     }
 }

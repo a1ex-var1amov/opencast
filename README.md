@@ -50,7 +50,9 @@ the core is portable.
   their shortcuts work straight from the list. A preview pane shows files,
   clipboard items, snippets, notes, chats and command details.
 - **Saved chats and attachments**: every chat is saved (`chats …` to find
-  one); attach files, PDFs, the clipboard or the screen's text (⌘O / ⌘⇧V / ⌘⇧S).
+  one); attach files, PDFs, the clipboard or the screen (⌘O / ⌘⇧V / ⌘⇧S).
+  A vision model (`gpt-4o`, `claude…`, `gemini…`, `…-vl`) gets the pixels; any
+  other model gets text read out on-device, so screenshots work everywhere.
 - **Snippets that expand anywhere**: type `;sig` in any app.
 - **Search Menu Items** of the front app, **My Schedule** with one-key join
   for Zoom/Meet/Teams, **dictation** (⌘D, on-device).

@@ -80,6 +80,8 @@ struct Provider: Identifiable, Equatable, Sendable {
     var models: [String]
     var defaultModel: String
     var isDefault: Bool
+    /// The engine will take image attachments for this provider's model.
+    var vision: Bool
 
     init?(_ raw: [String: Any]) {
         guard let id = raw["id"] as? String else { return nil }
@@ -87,6 +89,7 @@ struct Provider: Identifiable, Equatable, Sendable {
         models = raw["models"] as? [String] ?? []
         defaultModel = raw["defaultModel"] as? String ?? ""
         isDefault = raw["isDefault"] as? Bool ?? false
+        vision = raw["vision"] as? Bool ?? false
     }
 }
 
@@ -100,16 +103,26 @@ struct ChatTurn: Equatable, Sendable {
     /// Attachment text sent with a user turn (not shown inline).
     var context: String = ""
     var attachmentNames: [String] = []
+    /// Image attachments as `{"mime":…, "b64":…}` for a vision model.
+    /// Not saved with the chat: base64 would bloat the chats file.
+    var images: [[String: String]] = []
 
     /// What the model sees for this turn.
     var wireContent: String { context.isEmpty ? content : content + "\n\n" + context }
 }
 
-/// A file, clipboard or screen text attached to the next chat message.
+/// A file, clipboard or screen attachment for the next chat message: either
+/// extracted text (any model) or image pixels (a vision model — see
+/// `Attachments.imageData`).
 struct ChatAttachment: Equatable, Sendable, Identifiable {
     var id = UUID()
     var name: String
     var text: String
+    var imageB64: String? = nil
+    var imageMime: String? = nil
+
+    /// What the attachment chip shows.
+    var isImage: Bool { imageB64 != nil }
 }
 
 /// The model wants to call a tool that is not auto-approved.
