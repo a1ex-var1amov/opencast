@@ -4,17 +4,50 @@ Open-source Raycast-style launcher. SwiftUI plus `crates/opencast-ffi`. MIT.
 macOS first; `crates/opencast-core` must stay portable (no platform UI deps).
 
 ## Layout
-- `crates/opencast-core` — config, command registry + fuzzy search, scripts,
-  app discovery, calculator, saved layouts, AI provider adapters (+ all tests)
-- `crates/opencast-ffi` — macOS C ABI: hotkeys, clipboard, paste, window management
-- `macos/` — SwiftUI panel
+- `crates/opencast-core` — config, command registry + fuzzy search, scripts
+  (incl. Script Filters), app discovery, calculator, saved layouts, keymap,
+  AI provider adapters (+ all tests). Sidecar state (usage, pins, notes) is
+  cached in `Engine` — search must never read disk.
+- `crates/opencast-core` also: `mcp.rs` (MCP client: stdio + HTTP, tool cache),
+  `chats.rs` (saved chats), `sync.rs` (iCloud symlink sync), `updates.rs`,
+  `usage.rs` (frecency + learned picks), `extensions.rs` (git-installed
+  extensions), `alfred.rs` (Alfred workflow → generated bash commands),
+  `doctor.rs` (health report), `currency.rs`, `tz.rs` (TZif + POSIX rules,
+  no tz crate), `panes.rs` (System Settings), `bookmarks.rs`, `window.rs`
+  (window command geometry: gaps, cycling, displays, custom commands; the
+  panel asks it via the `windowTarget` op), `pipeline.rs` (`[[pipelines]]`
+  steps and text transforms; FFI `exec::run_pipeline` runs them),
+  `webtext.rs` (HTML → text for page context). Providers
+  support tool calling (`ToolSpec`, `ToolCall`, `ChatEvent::ToolCalls`) in
+  all three wire formats.
+- `crates/opencast-ffi` — macOS C ABI: hotkeys, hyper key, clipboard, CGEvent
+  paste/copy, Seek OCR, cached app index, Shortcuts (`shortcuts_mac.rs`),
+  `agent.rs` (MCP hub, AI tool loop with approvals), `extensions_mac.rs`
+  (install/import/doctor; plutil, ditto), `refresh_mac.rs` (bookmarks, rates)
+- `macos/` — SwiftUI panel. `WindowManager.swift` does snapping, layouts and
+  AX selection reads; nothing spawns `osascript` on a hot path. Also
+  `SettingsWindow.swift`, `Preview.swift` (pane + Quick Look), `MenuSearch`,
+  `Schedule` (EventKit), `Dictation`, `SnippetExpander`, `ConfigWatcher`,
+  `Attachments`, `MacExtras` (Contacts, Reminders, dictionary, media keys,
+  Large Type, Focus incl. site blocking and menu bar timer), `NotesEditor`
+  (+ sticky notes), `WindowUX` (region glyphs, HUD, live preview overlay,
+  drag to snap), `PageContext` (front browser tab), `CompareModels`,
+  `CheatSheet`, `Dictation` (+ Dictate Anywhere HUD)
+- Panel ↔ engine is JSON over `opencast_call`; panel-only features come back
+  as `ExecResult::Ui { action }`
 - `examples/config.toml` — default config, embedded via include_str!
 
 ## Build / test
 - Requirements: Rust and the Xcode command-line tools
 - `cargo test` — core tests (runs anywhere)
+- `./smoke.command` — tests, clippy, then OpenCast Doctor on the real config
+- The FFI crate only compiles for macOS (Linux builds a stub), so FFI and Swift
+  changes are verified by `./build-app.command` on a Mac
 - `./build-app.command` — builds and installs the app to ~/Applications/OpenCast.app
 - `./run-opencast.command` — debug app at target/debug/OpenCast.app
+- `./release.command` — signed + notarized dmg/zip (Developer ID needed)
+- Do NOT export MACOSX_DEPLOYMENT_TARGET for cargo (Rust 1.91 release builds
+  then cannot load proc macros); swiftc `-target` sets the app minimum
 - User config lives in ~/.config/opencast/config.toml (NOT in this repo);
   reload via the "Reload Commands" command in the launcher
 
@@ -22,3 +55,7 @@ macOS first; `crates/opencast-core` must stay portable (no platform UI deps).
 - rustfmt with max_width=120 (rustfmt.toml)
 - No new crate deps without need; keys never in config files
 - Window mgmt/selection grabbing need the macOS Accessibility permission
+- Design notes live in `docs/superpowers/specs/`; the 2026-10-20 speed and
+  customization spec describes the config surface (`[[commands]]`,
+  `fallbacks`, `[keys]`, `theme_file`, AI `output`); 2026-10-21 covers MCP,
+  Shortcuts, ranking, actions/preview, chats, settings, sync, releases

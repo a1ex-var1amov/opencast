@@ -10,6 +10,52 @@ presentation = "island"         # island (top bar) | spotlight (centered)
 default_provider = "ollama"     # id of a provider below; first one is used if unset
 # scripts_dir = "~/.config/opencast/scripts"
 script_timeout_secs = 30
+script_login_shell = true       # run scripts via `$SHELL -lc` so Homebrew/nvm/pyenv are on PATH
+# theme_file = "themes/mine.toml"   # colours, radius, sizes — see examples/themes/
+# What to show when a query has fewer than fallback_threshold strong hits, in order.
+# Entries: command ids/titles, "quicklinks" (every {query} quicklink), "files" (Spotlight).
+fallbacks = ["quicklinks", "files"]
+fallback_threshold = 3
+shortcuts = true                # list your Shortcuts.app shortcuts as commands
+snippet_expansion = true        # type a snippet keyword like ;sig in any app to expand it
+calendar = true                 # next meeting at the top of the launcher (asks for Calendar access)
+check_updates = false           # weekly check of GitHub releases (off: no traffic you did not configure)
+currency = false                # `100 usd to eur`: fetches exchange rates daily when on
+update_repo = ""                # "owner/repo" for Check for Updates
+confirm_destructive = true      # ask before Restart, Shut Down, Log Out, Quit All Apps
+shift_quick_look = false        # a lone Shift tap previews the selected row
+emoji_skin_tone = ""            # light | medium-light | medium | medium-dark | dark
+universal_actions_hotkey = "Hyper+Space"   # Act on Selection: actions for selected text, links or files
+ai_profile = true               # add profile.md (Edit AI Profile) to AI chats; ⌘⇧R in chat remembers a line
+translate_to = "English"        # `tr hola`, Translate (selection); text already in it goes to translate_alt
+# translate_alt = "Spanish"
+# sync_dir = "~/Dropbox/opencast" # "Sync Config" target instead of iCloud Drive
+# include = ["~/team/opencast-shared.toml", "git:https://github.com/org/opencast-shared"]
+# Window management
+window_gap = 0                  # points between snapped windows (and between a window and the screen edge)
+screen_margin = 0               # extra inset from every screen edge
+window_cycle = "sizes"          # repeat a half: sizes (1/2 → 2/3 → 1/3) | displays (move to the next screen) | off
+window_portrait = "auto"        # rotated monitor: first/center/last thirds, two thirds, center half stack top-to-bottom | off
+almost_maximize = 0.9           # size of Almost Maximize, as a fraction of the screen
+window_hud = true               # brief "Left Half" HUD when a hotkey moves a window
+drag_snap = false               # drag a window to an edge/corner to snap (⌥ = thirds); off when macOS tiling is on
+
+# In-panel keys. Mods: Cmd, Shift, Alt/Option, Ctrl. Keys: a character, or
+# Tab, Return, Escape, Space, Up, Down, Left, Right, Backspace, Delete, F1-F20.
+[keys]
+ask_ai = "Tab"
+click_text = "`"
+actions = "Cmd+K"
+pin = "Cmd+Shift+P"
+paste_answer = "Cmd+Return"
+copy_answer = "Cmd+Shift+C"
+new_chat = "Cmd+N"
+next = "Ctrl+N"
+previous = "Ctrl+P"
+dictate = "Cmd+D"               # on-device dictation into the field
+quick_look = "Cmd+Y"
+preview = "Cmd+I"               # show / hide the preview pane
+large_type = "Cmd+L"            # show the typed text or answer huge on screen
 
 # ---------------------------------------------------------------------------
 # AI providers. Three wire formats cover everything:
@@ -72,8 +118,23 @@ model = "llama3.2"
 # AI commands. Placeholders:
 #   {selection}  text selected in the frontmost app (needs Accessibility permission)
 #   {input}      text you type after picking the command
+#   {clipboard}  current clipboard text
+#   {app}        name of the frontmost app
 # provider/model are optional and default to the default provider.
+# temperature / max_tokens override the provider's.
+# output = "chat" (default) | "replace" (stream, then paste over the selection)
+#        | "paste" (paste into the front app) | "copy" (clipboard + toast)
 # ---------------------------------------------------------------------------
+
+# AI presets: a chat with its own model, prompt and MCP tools, shown as a command.
+# [[ai_presets]]
+# id = "reviewer"
+# title = "Code Reviewer"
+# provider = "anthropic"
+# model = "claude-sonnet-5-5"
+# system = "You review diffs. Be terse."
+# tools = ["github__*"]         # globs over server__tool; [] = no tools
+# profile = false               # leave profile.md out of this chat
 
 [[ai_commands]]
 id = "fix-grammar"
@@ -82,6 +143,8 @@ icon = "✍️"
 keywords = ["proofread", "spelling"]
 system = "You are a careful copy editor. Return only the corrected text, no commentary."
 prompt = "Fix spelling and grammar, keep the tone and formatting:\n\n{selection}"
+temperature = 0.2
+output = "replace"              # fixes the text in place; set to "chat" to review first
 
 [[ai_commands]]
 id = "explain"
@@ -124,12 +187,29 @@ prompt = "{input}"
 # `command` is a command title (case-insensitive) or id — an app, a window
 # action, an AI command, a script, a quicklink, a layout.
 # Window actions (Rectangle-style, all searchable in the launcher too):
-#   Left Half, Right Half, Top Half, Bottom Half, Top/Bottom Left/Right
-#   Quarter, First/Center/Last Third, Maximize, Center
+#   Left/Right/Top/Bottom/Center/Middle Half, the four Quarters, First/Center/Last
+#   Third, Top/Middle/Bottom Third, First/Last/Top/Bottom Two Thirds, the Sixths
+#   (incl. Middle Left/Right Sixth), Maximize, Almost Maximize,
+#   Maximize Height/Width, Center, Reasonable Size, Make Larger/Smaller,
+#   Move Left/Right/Up/Down, Next/Previous Display, Display 1-3,
+#   Toggle Fullscreen, Restore Window Size, Undo Window Action.
+#   "Arrange Window" shows them all as a grid with a live preview.
 # No window hotkeys ship enabled, so nothing clashes with Rectangle if you
 # still run it. The "Use Caps Lock as Launcher Key" script remaps Caps Lock
 # to F18; after running it you can set hotkey = "F18" in [general].
 # ---------------------------------------------------------------------------
+
+# Your own window positions, searchable and bindable like the built-ins.
+# Sizes are a fraction of the screen (0.6) or points ("800px").
+# [[window_commands]]
+# id = "code-left"
+# title = "Code Left"
+# x = 0
+# y = 0
+# w = 0.62
+# h = 1.0
+# display = "current"           # current | main | next | previous | 1, 2, 3
+# hotkey = "Ctrl+Alt+C"
 
 # [[hotkeys]]
 # key = "Ctrl+Alt+Left"
@@ -156,6 +236,32 @@ prompt = "{input}"
 # command = "Click Text"         # type what you see on screen, OpenCast clicks it
 
 # ---------------------------------------------------------------------------
+# Command overrides: tweak any command — apps and builtins included.
+#   match   command id or title (case-insensitive)
+#   alias   short name; an exact alias match ranks first ("sl" → Slack)
+#   icon    emoji or an SF Symbol name ("safari", "terminal.fill")
+#   title   rename · boost adds to the score (negative demotes) · hidden removes it
+# ---------------------------------------------------------------------------
+
+# [[commands]]
+# match = "Slack"
+# alias = "sl"
+# boost = 50
+
+# [[commands]]
+# match = "Visual Studio Code"
+# aliases = ["code", "vsc"]
+# title = "VS Code"
+
+# [[commands]]
+# match = "builtin:shortcuts"
+# hidden = true
+
+# [[commands]]
+# match = "Clipboard History"
+# hotkey = "Hyper+V"            # global hotkey (or ⌘K → Record Hotkey… on any row)
+
+# ---------------------------------------------------------------------------
 # Quicklinks. {query} turns the link into one that asks for input.
 # ---------------------------------------------------------------------------
 
@@ -171,11 +277,41 @@ url = "https://kagi.com/search?q={query}"
 icon = "🔎"
 
 # ---------------------------------------------------------------------------
+# MCP servers (Model Context Protocol). Their tools become launcher commands
+# and tools the AI chat can call (it asks before running any tool you have
+# not listed in auto_approve). Secrets come from commands, never this file.
+#   command/args      stdio server (npx, uvx, docker run -i …)
+#   url               Streamable HTTP server
+#   env / env_cmd     environment; env_cmd values are commands that print it
+#   tools             only these tools ("get_*" prefix allowed); empty = all
+#   in_launcher       list tools as commands (default true)
+#   in_chat           offer tools to the AI chat (default true)
+#   auto_approve      tools the AI may run without asking, e.g. ["get_*", "list_*"]
+# Run "Refresh MCP Tools" after editing.
+# ---------------------------------------------------------------------------
+
+# [[mcp_servers]]
+# id = "github"
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-github"]
+# env_cmd = { GITHUB_PERSONAL_ACCESS_TOKEN = "security find-generic-password -s opencast-github -w" }
+# auto_approve = ["get_*", "list_*", "search_*"]
+
+# [[mcp_servers]]
+# id = "fs"
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-filesystem", "/Users/you/Documents"]
+# in_launcher = false
+
+# ---------------------------------------------------------------------------
 # Snippets. Search by keyword; Return pastes into the frontmost app.
+# Keywords that start with a symbol (;sig, ::date) also expand as you type in
+# any app (snippet_expansion above). Set auto_expand = false/true to override.
+# Placeholders: {date} {time} {datetime} {clipboard} {cursor}
 # ---------------------------------------------------------------------------
 
 [[snippets]]
-keyword = "sig"
+keyword = ";sig"
 name = "Email signature"
 text = """
 Best,
@@ -184,6 +320,42 @@ Alex
 keywords = ["signature", "email"]
 
 [[snippets]]
+keyword = ";date"
+name = "Today's date"
+text = "{date}"
+
+[[snippets]]
 keyword = "shrug"
 name = "Shrug"
 text = "¯\\_(ツ)_/¯"
+
+# ---------------------------------------------------------------------------
+# Focus sessions: "Start Focus" hides these apps (and hides them again if they
+# come back) for `minutes`, or the minutes you type, and closes browser tabs on
+# `domains` (Safari and Chrome-family; subdomains count). "Pause / Resume
+# Focus" lifts the blocks and freezes the clock; "Stop Focus" ends early.
+# ---------------------------------------------------------------------------
+
+[focus]
+apps = ["Slack", "Messages", "Mail", "Discord", "Telegram", "WhatsApp"]
+minutes = 25
+domains = ["x.com", "twitter.com", "reddit.com", "facebook.com", "instagram.com", "tiktok.com", "news.ycombinator.com"]
+menu_bar = true                 # countdown in the menu bar while a session runs
+
+# ---------------------------------------------------------------------------
+# Pipelines: text through several steps, shown as one command.
+# input: selection (default) | clipboard | query (asks) | none
+# steps: ai:<ai command id> · prompt:<text with {input}> · script:<path or title>
+#        shell:<command, text on stdin> · transform:<name> (trim, upper, lower,
+#        title, sort-lines, unique-lines, reverse-lines, remove-empty-lines,
+#        join-lines, url-encode, url-decode, base64-encode, base64-decode,
+#        json-format, json-minify, slug, count, strip-markdown)
+# output: show (default) | copy | paste | replace
+# ---------------------------------------------------------------------------
+
+# [[pipelines]]
+# id = "tidy-bullets"
+# title = "Fix and Bulletize Selection"
+# steps = ["transform:trim", "ai:fix-grammar", "prompt:Turn this into short bullets:\n{input}"]
+# output = "replace"
+# hotkey = "Ctrl+Alt+B"

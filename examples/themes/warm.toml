@@ -1,0 +1,15 @@
+# OpenCast theme. Point [general] theme_file at this file (relative paths are
+# resolved against ~/.config/opencast). Every key is optional.
+
+accent = "#e8743b"        # default: the Mac's accent colour
+panel_light = "#faf6f0"
+panel_dark = "#1d1a17"
+text_light = "#2b2521"
+text_dark = "#f3ede4"
+radius = 16               # corner radius (spotlight) / bottom radius (island)
+row_height = 44
+width = 760
+font_size = 14            # row title
+title_font_size = 19      # search field
+glass = true              # false = opaque panel
+# font = "JetBrains Mono"
