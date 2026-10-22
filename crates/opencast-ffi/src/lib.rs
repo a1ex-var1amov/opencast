@@ -2,19 +2,27 @@
 //! `cargo test --workspace` still configures.
 
 #[cfg(target_os = "macos")]
-mod apps_mac;
+mod agent;
 #[cfg(target_os = "macos")]
-mod files_mac;
+mod apps_mac;
 #[cfg(target_os = "macos")]
 mod dispatch;
 #[cfg(target_os = "macos")]
 mod exec;
+#[cfg(target_os = "macos")]
+mod extensions_mac;
+#[cfg(target_os = "macos")]
+mod files_mac;
 #[cfg(target_os = "macos")]
 mod host;
 #[cfg(target_os = "macos")]
 mod hotkeys;
 #[cfg(target_os = "macos")]
 mod hyperkey;
+#[cfg(target_os = "macos")]
+mod refresh_mac;
+#[cfg(target_os = "macos")]
+mod shortcuts_mac;
 // ponytail: allow(dead_code) until every helper here is called. Drop the allow then.
 #[cfg(target_os = "macos")]
 #[allow(dead_code)]

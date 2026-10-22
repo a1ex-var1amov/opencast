@@ -1,15 +1,12 @@
-//! Window management and layouts: move/resize other apps' windows and
-//! remember/restore whole arrangements.
+//! Window geometry, the Seek (Click Text) OCR scan and synthetic clicks.
 //!
-//! macOS only for now. Everything goes through System Events (JXA via
-//! `osascript`), which needs the Accessibility permission — the same one the
-//! selection-grabbing AI commands use.
-
-use std::path::Path;
+//! Moving other apps' windows and capturing layouts happens in the Swift
+//! shell through the Accessibility API (`macos/WindowManager.swift`); the
+//! engine only decides *what* to do (`WindowAction`) and this module keeps the
+//! pure geometry so it stays testable off-macOS.
 
 use anyhow::{anyhow, bail, Result};
 use opencast_core::engine::WindowAction;
-use opencast_core::layouts::{self, AppWindows};
 use serde::{Deserialize, Serialize};
 
 /// Logical (point) rectangle.
@@ -110,37 +107,6 @@ mod mac {
     use serde::Deserialize;
     use std::time::Duration;
 
-    #[derive(Deserialize)]
-    struct FrontWindow {
-        #[serde(default)]
-        error: Option<String>,
-        #[serde(default)]
-        app: String,
-        #[serde(default)]
-        x: f64,
-        #[serde(default)]
-        y: f64,
-        #[serde(default)]
-        w: f64,
-        #[serde(default)]
-        h: f64,
-        /// Menu bar height in points (work-area top inset).
-        #[serde(default = "default_menu")]
-        menu: f64,
-    }
-
-    fn default_menu() -> f64 {
-        25.0
-    }
-
-    #[derive(Deserialize)]
-    struct ApplyResult {
-        #[serde(default)]
-        placed: Vec<String>,
-        #[serde(default)]
-        missing: Vec<String>,
-    }
-
     async fn osascript(script: &str, args: &[String]) -> Result<String> {
         let mut cmd = tokio::process::Command::new("osascript");
         cmd.args(["-l", "JavaScript", "-e", script])
@@ -148,107 +114,19 @@ mod mac {
             .kill_on_drop(true);
         let out = tokio::time::timeout(Duration::from_secs(20), cmd.output())
             .await
-            .map_err(|_| anyhow!("timed out talking to System Events"))?
+            .map_err(|_| anyhow!("timed out running the text recognizer"))?
             .context("running osascript")?;
         if !out.status.success() {
-            let err = String::from_utf8_lossy(&out.stderr);
-            if err.contains("assistive access") || err.contains("(-25211)") || err.contains("(-1719)") {
-                bail!(
-                    "OpenCast needs the Accessibility permission to see and move windows: \
-                     System Settings → Privacy & Security → Accessibility → enable OpenCast, \
-                     then try again"
-                );
-            }
-            bail!("System Events error: {}", err.trim());
+            bail!(
+                "text recognition error: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
         }
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
 
-    const FRONT_RECT: &str = r#"
-function run() {
-  const se = Application('System Events');
-  const list = se.applicationProcesses.whose({ frontmost: true })();
-  if (!list.length) return JSON.stringify({ error: 'no frontmost app' });
-  const p = list[0];
-  const ws = p.windows();
-  if (!ws.length) return JSON.stringify({ error: 'the front app (' + p.name() + ') has no window' });
-  const w = ws[0];
-  const pos = w.position(), sz = w.size();
-  let menu = 25;
-  try { menu = p.menuBars[0].size()[1]; } catch (e) {}
-  return JSON.stringify({ app: p.name(), x: pos[0], y: pos[1], w: sz[0], h: sz[1], menu: menu });
-}
-"#;
-
-    const SET_RECT: &str = r#"
-function run(argv) {
-  const x = Number(argv[0]), y = Number(argv[1]), w = Number(argv[2]), h = Number(argv[3]);
-  const se = Application('System Events');
-  const list = se.applicationProcesses.whose({ frontmost: true })();
-  if (!list.length) return JSON.stringify({ error: 'no frontmost app' });
-  const ws = list[0].windows();
-  if (!ws.length) return JSON.stringify({ error: 'no window' });
-  const win = ws[0];
-  win.position = [x, y];
-  win.size = [w, h];
-  win.position = [x, y];
-  return JSON.stringify({ ok: true });
-}
-"#;
-
-    const CAPTURE: &str = r#"
-function run() {
-  const se = Application('System Events');
-  const out = [];
-  const procs = se.applicationProcesses.whose({ visible: true })();
-  for (const p of procs) {
-    try {
-      const name = p.name();
-      if (String(name).toLowerCase().indexOf('opencast') !== -1) continue;
-      const wins = [];
-      for (const w of p.windows()) {
-        try {
-          const pos = w.position(), sz = w.size();
-          let title = '';
-          try { title = String(w.name() || ''); } catch (e) {}
-          wins.push({ title: title, x: pos[0], y: pos[1], w: sz[0], h: sz[1] });
-        } catch (e) {}
-      }
-      if (wins.length) out.push({ app: String(name), windows: wins });
-    } catch (e) {}
-  }
-  return JSON.stringify(out);
-}
-"#;
-
-    const APPLY: &str = r#"
-function run(argv) {
-  const data = JSON.parse(argv[0]);
-  const se = Application('System Events');
-  const placed = [], missing = [];
-  for (const entry of data) {
-    let ps = [];
-    try { ps = se.applicationProcesses.whose({ name: entry.app })(); } catch (e) {}
-    if (!ps.length) { missing.push(entry.app); continue; }
-    let wins = [];
-    try { wins = ps[0].windows(); } catch (e) {}
-    const n = Math.min(wins.length, entry.windows.length);
-    for (let i = 0; i < n; i++) {
-      const t = entry.windows[i];
-      try {
-        wins[i].position = [t.x, t.y];
-        wins[i].size = [t.w, t.h];
-        wins[i].position = [t.x, t.y];
-      } catch (e) {}
-    }
-    placed.push(entry.app);
-  }
-  return JSON.stringify({ placed: placed, missing: missing });
-}
-"#;
-
     fn parse<T: serde::de::DeserializeOwned>(out: &str) -> Result<T> {
-        serde_json::from_str(out).with_context(|| format!("unexpected System Events reply: {out}"))
+        serde_json::from_str(out).with_context(|| format!("unexpected reply: {out}"))
     }
 
     /// The monitor (as a logical rect) containing `point`, falling back to
@@ -269,113 +147,6 @@ function run(argv) {
             })
             .collect();
         monitor_containing(&rects, x, y).ok_or_else(|| anyhow!("no monitors found"))
-    }
-
-    static PREV_RECT: std::sync::Mutex<Option<Rect>> = std::sync::Mutex::new(None);
-
-    pub async fn apply_window_action(action: WindowAction) -> Result<()> {
-        // Let focus return to the previous app after the panel hides.
-        tokio::time::sleep(Duration::from_millis(180)).await;
-        let front: FrontWindow = parse(&osascript(FRONT_RECT, &[]).await?)?;
-        if let Some(e) = front.error {
-            bail!("{e}");
-        }
-        let current = Rect {
-            x: front.x,
-            y: front.y,
-            w: front.w,
-            h: front.h,
-        };
-        if action.is_restore() {
-            let prev = PREV_RECT
-                .lock()
-                .unwrap()
-                .take()
-                .ok_or_else(|| anyhow!("no previous window size to restore"))?;
-            return set_front_rect(prev, &front.app).await;
-        }
-        if !action.is_display_move() {
-            *PREV_RECT.lock().unwrap() = Some(current);
-        }
-        if action.is_display_move() {
-            let delta = if matches!(action, WindowAction::NextDisplay) {
-                1
-            } else {
-                -1
-            };
-            let t = adjacent_display_rect(current, front.menu, delta)?;
-            return set_front_rect(t, &front.app).await;
-        }
-        let mon = monitor_at(front.x + front.w / 2.0, front.y + front.h / 2.0)?;
-        // Work area: the monitor minus the menu bar. (The Dock is ignored;
-        // macOS keeps windows from disappearing under it.)
-        let work = Rect {
-            x: mon.x,
-            y: mon.y + front.menu,
-            w: mon.w,
-            h: mon.h - front.menu,
-        };
-        let t = target_rect(action, work, current);
-        set_front_rect(t, &front.app).await
-    }
-
-    async fn set_front_rect(t: Rect, app: &str) -> Result<()> {
-        let args = [t.x, t.y, t.w, t.h].map(|v| format!("{}", v.round())).to_vec();
-        let reply = osascript(SET_RECT, &args).await?;
-        if reply.contains("error") {
-            bail!("could not move the window ({app}): {reply}");
-        }
-        Ok(())
-    }
-
-    fn adjacent_display_rect(current: Rect, menu: f64, delta: i32) -> Result<Rect> {
-        use core_graphics::display::CGDisplay;
-        let ids = CGDisplay::active_displays().map_err(|e| anyhow!("no monitors found ({e})"))?;
-        let mut rects: Vec<Rect> = ids
-            .into_iter()
-            .map(|id| {
-                let bounds = CGDisplay::new(id).bounds();
-                Rect {
-                    x: bounds.origin.x,
-                    y: bounds.origin.y,
-                    w: bounds.size.width,
-                    h: bounds.size.height,
-                }
-            })
-            .collect();
-        rects.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
-        let cx = current.x + current.w / 2.0;
-        let cy = current.y + current.h / 2.0;
-        let idx = rects
-            .iter()
-            .position(|r| cx >= r.x && cx < r.x + r.w && cy >= r.y && cy < r.y + r.h)
-            .unwrap_or(0);
-        let n = rects.len();
-        let next = ((idx as i32 + delta).rem_euclid(n as i32)) as usize;
-        let mon = rects[next];
-        let work = Rect {
-            x: mon.x,
-            y: mon.y + menu,
-            w: mon.w,
-            h: mon.h - menu,
-        };
-        Ok(Rect {
-            x: work.x + (work.w - current.w).max(0.0) / 2.0,
-            y: work.y + (work.h - current.h).max(0.0) / 2.0,
-            w: current.w.min(work.w),
-            h: current.h.min(work.h),
-        })
-    }
-
-    pub async fn capture_layout() -> Result<Vec<AppWindows>> {
-        let out = osascript(CAPTURE, &[]).await?;
-        parse(&out)
-    }
-
-    pub async fn apply_layout(apps: &[AppWindows]) -> Result<(Vec<String>, Vec<String>)> {
-        let json = serde_json::to_string(apps)?;
-        let r: ApplyResult = parse(&osascript(APPLY, &[json]).await?)?;
-        Ok((r.placed, r.missing))
     }
 
     const OCR: &str = r#"
@@ -496,17 +267,6 @@ function run(argv) {
         }
         Ok(())
     }
-
-    pub fn launch_by_name(name: &str) {
-        let _ = std::process::Command::new("open").args(["-a", name]).spawn();
-    }
-}
-
-use mac as imp;
-
-/// Snap the frontmost window. The launcher must already be hidden.
-pub async fn apply_window_action(action: WindowAction) -> Result<()> {
-    mac::apply_window_action(action).await
 }
 
 /// OCR the display under the cursor for the Seek overlay.
@@ -517,55 +277,6 @@ pub async fn seek_scan() -> Result<SeekScan> {
 /// Click at a point in screen coordinates.
 pub fn click_at(x: f64, y: f64) -> Result<()> {
     mac::click_at(x, y)
-}
-
-/// Capture every visible window and save it under `name`. Returns the
-/// number of windows remembered.
-pub async fn remember_layout(config_dir: &Path, name: &str) -> Result<usize> {
-    let apps = imp::capture_layout().await?;
-    let count: usize = apps.iter().map(|a| a.windows.len()).sum();
-    if count == 0 {
-        bail!("no windows to remember");
-    }
-    layouts::save(config_dir, name, apps)?;
-    Ok(count)
-}
-
-/// Restore a saved layout: place running apps' windows, launch missing apps
-/// and place them too once they have started. Returns a human summary.
-pub async fn restore_layout(config_dir: &Path, slug: &str) -> Result<String> {
-    let layout =
-        layouts::get(config_dir, slug).ok_or_else(|| anyhow!("layout `{slug}` is gone — try Reload Commands"))?;
-    let (_, missing) = imp::apply_layout(&layout.apps).await?;
-    let mut still_missing = missing.clone();
-    if !missing.is_empty() {
-        for name in &missing {
-            imp::launch_by_name(name);
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(1800)).await;
-        let retry: Vec<AppWindows> = layout
-            .apps
-            .iter()
-            .filter(|a| missing.contains(&a.app))
-            .cloned()
-            .collect();
-        let (_, left) = imp::apply_layout(&retry).await?;
-        still_missing = left;
-    }
-    Ok(if still_missing.is_empty() {
-        format!("Restored “{}”", layout.name)
-    } else {
-        format!(
-            "Restored “{}” · still starting: {}",
-            layout.name,
-            still_missing.join(", ")
-        )
-    })
-}
-
-/// Delete a layout by name. Returns true when something was deleted.
-pub fn forget_layout(config_dir: &Path, name: &str) -> Result<bool> {
-    layouts::delete(config_dir, name)
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
-use opencast_core::engine::Engine;
-use opencast_core::Config;
 #[cfg(test)]
 use opencast_core::apps::AppEntry;
+use opencast_core::engine::Engine;
+use opencast_core::Config;
 #[cfg(test)]
 use std::path::PathBuf;
 
@@ -40,10 +40,120 @@ pub fn dispatch(engine: &Engine, request: &str) -> String {
                         engine.config.general.presentation.clone(),
                     )
                 });
-            serde_json::json!({ "theme": theme, "presentation": presentation })
+            serde_json::json!({
+                "theme": theme,
+                "presentation": presentation,
+                "themeFile": engine.theme,
+                "keymap": engine.keymap,
+                "fallbackFiles": engine.fallback_files(),
+                "fallbackThreshold": engine.config.general.fallback_threshold,
+                "calendar": engine.config.general.calendar,
+                "checkUpdates": engine.config.general.check_updates,
+                "focus": {
+                    "apps": engine.config.focus.apps,
+                    "minutes": engine.config.focus.minutes,
+                    "domains": engine.config.focus.domains,
+                    "menuBar": engine.config.focus.menu_bar,
+                },
+                "shiftQuickLook": engine.config.general.shift_quick_look,
+                "windowHud": engine.config.general.window_hud,
+                "dragSnap": engine.config.general.drag_snap,
+                "windowCycle": engine.config.general.window_cycle,
+                "windowPortrait": engine.config.general.window_portrait,
+                "confirmDestructive": engine.config.general.confirm_destructive,
+            })
         }
         "warnings" => serde_json::json!({ "warnings": engine.warnings }),
+        "apps" => serde_json::json!({ "paths": engine.app_paths() }),
+        "preview" => {
+            let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("");
+            serde_json::json!({ "preview": engine.preview(id) })
+        }
+        "snippets" => {
+            let list: Vec<serde_json::Value> = engine
+                .expanding_snippets()
+                .into_iter()
+                .map(|(k, t)| serde_json::json!({ "keyword": k, "text": t }))
+                .collect();
+            serde_json::json!({ "snippets": list })
+        }
         "providers" => serde_json::json!({ "providers": engine.router.list() }),
+        "windowTarget" => {
+            use opencast_core::window::{self, Rect};
+            let rect = |x: Option<&serde_json::Value>| x.and_then(|r| serde_json::from_value::<Rect>(r.clone()).ok());
+            let action = v.get("action").and_then(|x| x.as_str()).unwrap_or("");
+            let cycle = v.get("cycle").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+            let screens: Vec<Rect> = v
+                .get("screens")
+                .and_then(|x| x.as_array())
+                .map(|a| a.iter().filter_map(|r| rect(Some(r))).collect())
+                .unwrap_or_default();
+            match rect(v.get("current")) {
+                Some(cur) => {
+                    let opts = window::Opts::from_config(&engine.config);
+                    match window::target(action, &cur, &screens, cycle, &opts, &engine.config.window_commands) {
+                        Some(r) => {
+                            serde_json::json!({ "rect": r, "cycles": opencast_core::engine::WindowAction::from_key(action).map(window::cycle_len).unwrap_or(1) })
+                        }
+                        None => serde_json::json!({ "none": true }),
+                    }
+                }
+                None => serde_json::json!({ "error": "missing current frame" }),
+            }
+        }
+        "windowGlyphs" => {
+            let ids: Vec<String> = v
+                .get("actions")
+                .and_then(|x| x.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+            let portrait = v.get("portrait").and_then(|x| x.as_bool()).unwrap_or(false)
+                && opencast_core::window::Opts::from_config(&engine.config).portrait;
+            let map: serde_json::Map<String, serde_json::Value> = ids
+                .into_iter()
+                .filter_map(|id| {
+                    opencast_core::window::glyph(&id, &engine.config.window_commands, portrait)
+                        .map(|r| (id, serde_json::json!(r)))
+                })
+                .collect();
+            serde_json::json!({ "glyphs": map })
+        }
+        "accepting" => {
+            let kind = v.get("type").and_then(|x| x.as_str()).unwrap_or("text");
+            serde_json::json!({ "commands": engine.accepting(kind) })
+        }
+        "rankActions" => {
+            let q = v.get("query").and_then(|x| x.as_str()).unwrap_or("");
+            let ids: Vec<String> = v
+                .get("ids")
+                .and_then(|x| x.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+            serde_json::json!({ "ids": engine.rank_ids(q, &ids) })
+        }
+        "bumpUsage" => {
+            let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("");
+            let q = v.get("query").and_then(|x| x.as_str()).unwrap_or("");
+            engine.bump_usage(id, q);
+            serde_json::json!({ "ok": true })
+        }
+        "listPath" => {
+            // Path mode reads one directory; off the search hot path (own op).
+            let q = v.get("query").and_then(|x| x.as_str()).unwrap_or("");
+            let hidden = v.get("hidden").and_then(|x| x.as_bool()).unwrap_or(false);
+            match opencast_core::files::list_path(q, hidden, 200) {
+                Some(rows) => serde_json::json!({ "commands": rows }),
+                None => serde_json::json!({ "commands": [], "notPath": true }),
+            }
+        }
+        "aiCommands" => {
+            let list: Vec<&opencast_core::Command> = engine
+                .registry
+                .iter()
+                .filter(|c| c.kind == opencast_core::CommandKind::Ai)
+                .collect();
+            serde_json::json!({ "commands": list })
+        }
         _ => serde_json::json!({ "error": format!("unknown op `{op}`") }),
     };
     out.to_string()
@@ -105,11 +215,18 @@ fn search_op_returns_commands() {
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     let commands = v["commands"].as_array().expect("commands array");
     assert!(commands.iter().any(|c| c["title"] == "Safari"));
-    assert!(
-        commands
-            .iter()
-            .any(|c| c["id"] == "app:/Applications/Safari.app" && c["subtitle"].is_null())
-    );
+    let settings = dispatch(&engine, r#"{"op":"settings"}"#);
+    let s: serde_json::Value = serde_json::from_str(&settings).unwrap();
+    assert!(s["keymap"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|k| k["name"] == "actions" && k["key"] == "k"));
+    assert_eq!(s["fallbackFiles"], true);
+    assert!(s["themeFile"].is_null());
+    assert!(commands
+        .iter()
+        .any(|c| c["id"] == "app:/Applications/Safari.app" && c["subtitle"].is_null()));
     let bad = dispatch(&engine, r#"{"op":"nope"}"#);
     assert!(serde_json::from_str::<serde_json::Value>(&bad).unwrap()["error"].is_string());
 }

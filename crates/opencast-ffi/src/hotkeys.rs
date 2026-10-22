@@ -144,12 +144,16 @@ pub(crate) fn listen() {
                         let result = if let Some(command) = command {
                             crate::exec::ExecResult::Args { command }
                         } else {
-                            crate::exec::run_command(cmd, vec![]).await
+                            crate::exec::run_command(cmd, vec![], crate::exec::ExecContext::default()).await
                         };
-                        if !matches!(result, crate::exec::ExecResult::Hide) {
-                            host::emit(serde_json::json!({ "type": "show" }));
-                            host::emit(serde_json::json!({ "type": "result", "result": result }));
+                        if matches!(result, crate::exec::ExecResult::Hide) {
+                            return;
                         }
+                        // Window snaps and layouts run in the shell without the panel.
+                        if result.wants_panel() {
+                            host::emit(serde_json::json!({ "type": "show" }));
+                        }
+                        host::emit(serde_json::json!({ "type": "result", "result": result }));
                     });
                 }
             }

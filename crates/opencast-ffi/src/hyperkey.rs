@@ -4,16 +4,21 @@
 //! `hidutil` remaps Caps Lock to F18. A CGEventTap then swallows F18 itself,
 //! adds all four modifiers to any key pressed while it is held, and treats a
 //! tap with nothing else pressed as "toggle the launcher".
+//!
+//! The remap outlives the process, so it is undone on quit, on SIGTERM, and
+//! on the next launch if a crash left it behind. macOS disables a tap whose
+//! callback stalls; a watchdog re-enables it.
 
 #[cfg(target_os = "macos")]
 mod mac {
-    use core_foundation::runloop::CFRunLoop;
+    use core_foundation::runloop::{kCFRunLoopCommonModes, kCFRunLoopDefaultMode, CFRunLoop};
     use core_graphics::event::{
         CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
         CallbackResult, EventField,
     };
     use std::process::{Command, Stdio};
     use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+    use std::time::Duration;
 
     const F18_KEYCODE: i64 = 79;
     const CAPS_LOCK_USAGE: u64 = 0x700000039;
@@ -34,11 +39,35 @@ mod mac {
             .status();
     }
 
+    /// True when the current `hidutil` mapping is the Caps Lock → F18 one we install.
+    pub fn caps_lock_is_ours() -> bool {
+        let Ok(out) = Command::new("hidutil")
+            .args(["property", "--get", "UserKeyMapping"])
+            .output()
+        else {
+            return false;
+        };
+        let text = String::from_utf8_lossy(&out.stdout);
+        let src = format!("{CAPS_LOCK_USAGE}");
+        let dst = format!("{F18_USAGE}");
+        // hidutil prints the values in decimal or hex depending on the release.
+        let src_hex = format!("{CAPS_LOCK_USAGE:#x}");
+        let dst_hex = format!("{F18_USAGE:#x}");
+        (text.contains(&src) || text.contains(&src_hex)) && (text.contains(&dst) || text.contains(&dst_hex))
+    }
+
+    /// Undo our remap, and only ours (leave Karabiner & co alone).
+    pub fn restore_caps_lock_if_ours() {
+        if caps_lock_is_ours() {
+            remap_caps_lock(false);
+        }
+    }
+
+    static TAP_DISABLED: AtomicBool = AtomicBool::new(false);
+
     /// Install the event tap on its own thread. `on_tap` runs when F18 is
     /// pressed and released with no other key in between.
-    // ponytail: a tap macOS disables (timeout) is not re-enabled; the
-    // callback is microseconds so it should not happen. Restart if it does.
-    pub fn start(on_tap: impl Fn() + Send + 'static) {
+    pub fn start(on_tap: impl Fn() + Send + Sync + 'static) {
         std::thread::spawn(move || {
             let held = AtomicBool::new(false);
             let used = AtomicBool::new(false);
@@ -46,12 +75,20 @@ mod mac {
                 | CGEventFlags::CGEventFlagAlternate
                 | CGEventFlags::CGEventFlagCommand
                 | CGEventFlags::CGEventFlagShift;
-            let r = CGEventTap::with_enabled(
+            let tap = CGEventTap::new(
                 CGEventTapLocation::HID,
                 CGEventTapPlacement::HeadInsertEventTap,
                 CGEventTapOptions::Default,
+                // Disabled-tap notices arrive regardless of the mask (and must not be masked: their raw values overflow the bit shift).
                 vec![CGEventType::KeyDown, CGEventType::KeyUp],
-                |_, kind, event| {
+                move |_, kind, event| {
+                    match kind {
+                        CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput => {
+                            TAP_DISABLED.store(true, SeqCst);
+                            return CallbackResult::Keep;
+                        }
+                        _ => {}
+                    }
                     if event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) == F18_KEYCODE {
                         match kind {
                             CGEventType::KeyDown => {
@@ -76,10 +113,36 @@ mod mac {
                     }
                     CallbackResult::Keep
                 },
-                CFRunLoop::run_current,
             );
-            if r.is_err() {
-                eprintln!("opencast: could not install the hyper key (is Accessibility enabled for OpenCast?)");
+            let tap = match tap {
+                Ok(t) => t,
+                Err(_) => {
+                    eprintln!("opencast: could not install the hyper key (is Accessibility enabled for OpenCast?)");
+                    return;
+                }
+            };
+            let Ok(source) = tap.mach_port().create_runloop_source(0) else {
+                eprintln!("opencast: could not attach the hyper key to the run loop");
+                return;
+            };
+            let run_loop = CFRunLoop::get_current();
+            unsafe {
+                run_loop.add_source(&source, kCFRunLoopCommonModes);
+            }
+            tap.enable();
+            // Pump the run loop in slices so the watchdog can re-enable a tap
+            // macOS switched off (it does that when a callback runs too long).
+            loop {
+                // Common modes is a set you register sources in, not a mode you can run:
+                // running it returns at once and this loop would spin. The tap's source is in
+                // the common set, which includes the default mode.
+                unsafe {
+                    CFRunLoop::run_in_mode(kCFRunLoopDefaultMode, Duration::from_secs(1), false);
+                }
+                if TAP_DISABLED.swap(false, SeqCst) {
+                    tap.enable();
+                    eprintln!("opencast: hyper key tap re-enabled");
+                }
             }
         });
     }
@@ -92,4 +155,7 @@ pub use mac::*;
 pub fn remap_caps_lock(_on: bool) {}
 
 #[cfg(not(target_os = "macos"))]
-pub fn start(_on_tap: impl Fn() + Send + 'static) {}
+pub fn restore_caps_lock_if_ours() {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn start(_on_tap: impl Fn() + Send + Sync + 'static) {}
