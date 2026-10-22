@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Hardened-runtime exceptions OpenCast needs. Not sandboxed: a launcher
+     has to see other apps' windows, menus and selections. -->
+<plist version="1.0">
+<dict>
+	<!-- osascript to System Events / Finder (quit app, empty trash, lock…) -->
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+	<!-- Dictation -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<!-- My Schedule (EventKit) -->
+	<key>com.apple.security.personal-information.calendars</key>
+	<true/>
+</dict>
+</plist>
