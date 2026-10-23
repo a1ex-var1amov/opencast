@@ -1403,6 +1403,13 @@ impl Config {
 
     /// `[[hotkeys]]` plus `hotkey` on `[[commands]]` entries.
     pub fn all_hotkeys(&self) -> Vec<HotkeyBinding> {
+        self.all_hotkeys_and_clashes().0
+    }
+
+    /// Hotkeys to register, plus notes about preset entries that got no key
+    /// because something else already had it — silent would look like a bug.
+    pub fn all_hotkeys_and_clashes(&self) -> (Vec<HotkeyBinding>, Vec<String>) {
+        let mut clashes = Vec::new();
         let mut out = self.hotkeys.clone();
         let ua = self.general.universal_actions_hotkey.trim();
         let norm = crate::keymap::normalize_hotkey;
@@ -1469,7 +1476,17 @@ impl Config {
             for (key, id) in set {
                 let taken = rebound(id)
                     || norm(key).is_some_and(|k| out.iter().any(|h| norm(&h.key).as_deref() == Some(k.as_str())));
-                if !taken {
+                if taken {
+                    let title = id
+                        .strip_prefix("window:")
+                        .and_then(crate::engine::WindowAction::from_key)
+                        .map(|a| a.title())
+                        .unwrap_or(id);
+                    clashes.push(format!(
+                        "window_hotkeys: {key} was already bound, so {title} got no key — name the presets in \
+                         the order you want (\"spaces, spectacle\"), or rebind one in the Window tab"
+                    ));
+                } else {
                     out.push(HotkeyBinding {
                         key: (*key).into(),
                         command: (*id).into(),
@@ -1477,7 +1494,7 @@ impl Config {
                 }
             }
         }
-        out
+        (out, clashes)
     }
 
     /// Load `<dir>/config.toml`, creating it and the example scripts first if

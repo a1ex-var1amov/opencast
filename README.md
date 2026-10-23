@@ -156,7 +156,9 @@ window_hotkeys = "rectangle"   # ⌃⌥ + arrows for the halves, U I J K for the
 `"spectacle"` installs the ⌥⌘ set Rectangle registers out of the box (and that
 Spectacle used before it); `"off"` binds nothing. Preset names combine with a
 comma: `"rectangle, spaces"` adds the Mission Control keys (⌃⌥⇧ + arrows for
-previous / next space) to the tiling set. Use `"off"` while Rectangle,
+previous / next space) to the tiling set. The `spectacle` set uses those same two
+keys for make-smaller / make-larger, so with both named the preset written first
+keeps them and the launcher says which command was left without a key. Use `"off"` while Rectangle,
 Magnet or Hammerspoon is still running — two apps registering the same keys means
 only one of them gets the press. Your own bindings always win: a `[[hotkeys]]`
 entry on the same keys, or a rebind in the Window tab, replaces just that one

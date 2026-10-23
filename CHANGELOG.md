@@ -12,7 +12,9 @@ first tag is in `git log`.
   also gets a **Move Window to Space N** row that takes the window along. **Next
   Space**, **Previous Space**, **Move Window to Next/Previous Space** are
   commands too, and `window_hotkeys` presets now combine with a comma:
-  `"rectangle, spaces"` adds ⌃⌥⇧ + arrows. A full-screen window owns a space of
+  `"rectangle, spaces"` adds ⌃⌥⇧ + arrows. The `spectacle` set claims those two
+  for make-smaller / make-larger, so the preset written first keeps them and the
+  launcher reports the command left keyless. A full-screen window owns a space of
   its own: the list shows it, and moving a window skips past those. Switching
   posts the Dock swipe the system expects (with the IOHID payload macOS 27
   demands); moving uses SkyLight's own operation. Neither needs Accessibility.

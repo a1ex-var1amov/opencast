@@ -1257,6 +1257,9 @@ impl Engine {
                 crate::config::window_hotkey_preset_names()
             ));
         }
+        // Two presets can want the same key; the one named first gets it, and the
+        // other command ends up keyless. Say so.
+        warnings.extend(config.all_hotkeys_and_clashes().1);
         let theme = match config.load_theme(&config_dir) {
             Ok(t) => t,
             Err(e) => {
@@ -3194,7 +3197,54 @@ mod tests {
     }
 
     #[test]
-    fn presets_combine_and_a_bad_half_warns() {
+    fn presets_combine_and_the_first_named_wins_a_clash() {
+        // The spectacle set claims ⌃⌥⇧←/→ for make-smaller / make-larger, which
+        // is also where the space keys live. Whichever preset is named first gets
+        // them, and the other says out loud that its command ended up keyless.
+        let e = engine_from(
+            &DEFAULT_CONFIG.replace(
+                "window_hotkeys = \"rectangle\"",
+                "window_hotkeys = \"spaces, spectacle\"",
+            ),
+            vec![],
+        );
+        let (bindings, _) = e.hotkey_bindings();
+        assert!(
+            bindings.iter().any(|(_, b)| b == "window:space-next"),
+            "the space keys did not bind"
+        );
+        assert!(
+            bindings.iter().any(|(_, b)| b == "window:left-half"),
+            "the tiling keys did not bind"
+        );
+        let lost: Vec<&String> = e.warnings.iter().filter(|w| w.contains("got no key")).collect();
+        assert_eq!(lost.len(), 2, "make-larger / make-smaller lost theirs: {lost:?}");
+        assert!(lost.iter().all(|w| w.contains("Make")), "{lost:?}");
+
+        let e = engine_from(
+            &DEFAULT_CONFIG.replace(
+                "window_hotkeys = \"rectangle\"",
+                "window_hotkeys = \"spectacle, spaces\"",
+            ),
+            vec![],
+        );
+        let (bindings, _) = e.hotkey_bindings();
+        assert!(bindings.iter().any(|(_, b)| b == "window:left-half"));
+        assert!(
+            !bindings.iter().any(|(_, b)| b == "window:space-next"),
+            "spectacle holds the shared keys here"
+        );
+        assert!(
+            e.warnings
+                .iter()
+                .any(|w| w.contains("got no key") && w.contains("Next Space")),
+            "{:?}",
+            e.warnings
+        );
+    }
+
+    #[test]
+    fn rectangle_and_spaces_do_not_collide() {
         let e = engine_from(
             &DEFAULT_CONFIG.replace(
                 "window_hotkeys = \"rectangle\"",
@@ -3202,20 +3252,20 @@ mod tests {
             ),
             vec![],
         );
-        assert!(
-            e.warnings.iter().all(|w| !w.contains("window_hotkeys")),
-            "{:?}",
-            e.warnings
-        );
         let (bindings, _) = e.hotkey_bindings();
         assert!(
             bindings.iter().any(|(_, b)| b == "window:space-next"),
-            "the space half did not bind"
+            "the space keys did not bind"
         );
         assert!(
             bindings.iter().any(|(_, b)| b == "window:left-half"),
-            "the tiling half did not bind"
+            "the tiling keys did not bind"
         );
+        assert!(e.warnings.iter().all(|w| !w.contains("got no key")), "{:?}", e.warnings);
+    }
+
+    #[test]
+    fn a_bad_name_in_a_combined_preset_warns() {
         let e = engine_from(
             &DEFAULT_CONFIG.replace(
                 "window_hotkeys = \"rectangle\"",
