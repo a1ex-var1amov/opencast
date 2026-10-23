@@ -562,7 +562,15 @@ const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
         "cheat-sheet",
         "Keyboard Shortcuts",
         "⌨️",
-        &["cheat sheet", "cheatsheet", "shortcuts", "hotkeys", "menu", "keys"],
+        &[
+            "cheat sheet",
+            "cheatsheet",
+            "shortcuts",
+            "keyboard",
+            "hotkeys",
+            "menu",
+            "keys",
+        ],
     ),
     (
         Builtin::StickyNote,
@@ -2755,7 +2763,7 @@ impl Engine {
                         args: vec!["summarize".into()],
                     },
                     Builtin::DictateAnywhere => Plan::Ui("dictate-anywhere"),
-                    Builtin::CheatSheet => Plan::Ui("cheat-sheet"),
+                    Builtin::CheatSheet => Plan::Ui("shortcuts"),
                     Builtin::StickyNote => Plan::Ui("sticky-note"),
                     Builtin::CompareModels => Plan::UiArgs {
                         action: "compare",

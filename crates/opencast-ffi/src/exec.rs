@@ -139,7 +139,6 @@ const UI_WITHOUT_PANEL: &[&str] = &[
     "focus-pause",
     "compare",
     "dictate-anywhere",
-    "cheat-sheet",
     "sticky-note",
 ];
 

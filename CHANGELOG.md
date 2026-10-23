@@ -7,6 +7,13 @@ first tag is in `git log`.
 ## Unreleased
 
 ### Added
+- **Keyboard Shortcuts drills down**: the command lists the running apps (the
+  one you were in first), Return opens that app's shortcut list with the key
+  equivalent in the hotkey column, and Return there activates the app and
+  presses the menu item. Typing filters at every level, Esc steps back a level,
+  and **Keyboard Shortcuts** is also an action on any running app's row. The
+  separate floating sheet is gone: the launcher list does the same job and can
+  run what it shows.
 - **Spaces** (Mission Control desktops): **Switch Space** lists every desktop
   with the apps that live on it — Return moves the view there, and each desktop
   also gets a **Move Window to Space N** row that takes the window along. **Next
@@ -73,8 +80,32 @@ first tag is in `git log`.
   `packaging/build-arch.zsh`.
 - CI runs `cargo fmt --all -- --check`, and the Swift type check now passes the
   engine header (`macos/opencast.h`), so `opencast_call` is actually checked.
+- Typing inside a panel-side list (menu items, spaces, schedule, Script Filters)
+  is fuzzy rather than a substring test: `nbrw` finds **New Browser Window**, the
+  best match moves to the top, and a list the author already ranked (spaces,
+  Recents) keeps its order when nothing is typed.
 
 ### Fixed
+- **The launcher sometimes never appeared**: the clipboard history indexes the
+  screenshot folders, and Desktop is behind a permission prompt that an accessory
+  app may never get to answer. Listing and opening those folders happened on the
+  main thread, which is also where hotkey registration waits — so the app started,
+  showed nothing and answered nothing. The folder work moved off the main thread,
+  and the wait for it now has a timeout instead of lasting forever.
+- **Hotkeys went dead after a reload**: Carbon refuses a second event handler on a
+  target while the previous one is alive, and the manager was built before the old
+  one was torn down. Every re-registration after the first — **Reload Commands**, a
+  recorded hotkey, a config edit — left the keys doing nothing. The old manager is
+  retired first now, and the panel re-registers once more a few seconds after
+  launch, so a key that another app had at startup gets picked up when it lets go.
+- **A crash on the way up**: the clipboard history asked for the config directory
+  before the engine existed, which panicked on some machines.
+- **Bookmarks that did nothing**: Chrome, Brave, Edge and Safari keep their
+  bookmark stores behind Full Disk Access. The refresh skipped them, the cache
+  stayed empty and the launcher showed a search with no results and no reason.
+  The **Bookmarks** command now says which stores exist and that Full Disk Access
+  is missing, Doctor reports it as a warning, and the refresh logs the blocked
+  store names at startup.
 - `cargo test -p opencast-ffi --lib` failed on any machine with more built-in
   commands than the 60-row search limit.
 - Typing a snippet keyword could expand a *shorter* keyword that matched its

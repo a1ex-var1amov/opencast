@@ -142,6 +142,8 @@ final class Model {
     private var previewTask: Task<Void, Never>?
     /// Return on a row of a panel-side list (menu items, schedule).
     var localListAction: ((Int) -> Void)?
+    /// Esc from a drilled-in list goes back a level instead of closing.
+    var localListBack: (() -> Void)?
     /// Script Filter display options (grid, columns, rerun).
     var listOptions = ListOptions()
     private var listRefreshTask: Task<Void, Never>?
@@ -201,20 +203,21 @@ final class Model {
 
     /// Script Filter items as rows. Ids are `item:<index>` so Return can map back.
     static func listRows(command: Command, items: [ListItem], filter: Bool, query: String) -> [Row] {
-        let q = query.lowercased()
-        return items.enumerated().compactMap { (index, item) -> Row? in
-            if filter, !q.isEmpty {
-                let hay = (item.title + " " + (item.subtitle ?? "")).lowercased()
-                guard hay.contains(q) else { return nil }
-            }
-            return .command(Command(
+        let kept: [(index: Int, item: ListItem)]
+        if filter, !query.trimmingCharacters(in: .whitespaces).isEmpty {
+            kept = ListFilter.order(items, query: query, hotkey: { $0.hotkey }) { ($0.title, $0.subtitle) }
+        } else {
+            kept = items.enumerated().map { ($0.offset, $0.element) }
+        }
+        return kept.map { (index, item) in
+            Row.command(Command(
                 id: "item:\(index)",
                 title: item.title,
                 subtitle: item.subtitle,
                 icon: item.icon ?? command.icon,
                 kind: .script,
                 arguments: [],
-                hotkey: nil
+                hotkey: item.hotkey
             ))
         }
     }
@@ -427,6 +430,19 @@ final class Model {
             }
         default:
             break
+        }
+    }
+
+    /// Carbon hotkey registration can fail while AppKit is still coming up, which
+    /// leaves a working launcher with dead keys. Re-register once the UI is up.
+    func checkHotkeys() {
+        for delay in [1.0, 4.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                guard let out = opencast_hotkeys_fix() else { return }
+                let problems = String(cString: out)
+                opencast_free(out)
+                for line in problems.split(separator: "\n") { NSLog("opencast: hotkeys: \(line)") }
+            }
         }
     }
 
@@ -1300,7 +1316,13 @@ final class Model {
         case .search:
             if query.isEmpty { hide() } else { query = "" }
         case .list:
-            backToSearch(clearQuery: true)
+            if let back = localListBack {
+                // App → its shortcuts → Esc lands on the app list, not on search.
+                localListBack = nil
+                back()
+            } else {
+                backToSearch(clearQuery: true)
+            }
         case .chat where pendingApproval != nil:
             answerApproval(false)
         case .chat where chatStreaming:
@@ -1326,6 +1348,7 @@ final class Model {
         listRefreshTask?.cancel()
         if case .chat = mode { stopStream() }
         localListAction = nil
+        localListBack = nil
         openWithFor = nil
         if clearQuery { query = "" }
         mode = .search
@@ -1829,16 +1852,10 @@ final class Model {
         case "dictate-anywhere":
             hide()
             GlobalDictation.shared.toggle()
-        case "cheat-sheet":
-            // From a hotkey the panel is down and the front app is the one to read.
-            let target = (launcher?.isVisible == true || NSApp.isActive) ? previousApp : NSWorkspace.shared.frontmostApplication
-            hide()
-            guard WindowManager.accessibilityTrusted else {
-                show()
-                flash(WindowManager.permissionHint, error: true, thenHide: false)
-                return
-            }
-            if let target { CheatSheet.shared.show(for: target) }
+        case "cheat-sheet", "shortcuts":
+            // App → that app's menu shortcuts → Return presses one. The search
+            // bar keeps filtering at every level, so drilling down is searching.
+            showShortcutApps()
         case "page":
             askAboutPage(mode: first, question: args.count > 1 ? args[1] : "")
         case "compare":
@@ -2270,6 +2287,7 @@ final class Model {
     /// A list the panel builds itself; Return calls `action` with the item's index.
     func showLocalList(
         id: String, title: String, icon: String, items: [ListItem],
+        back: (() -> Void)? = nil,
         action: @escaping (Int) -> Void,
         itemAction: ((Int, String) -> Void)? = nil,
         options: ListOptions = ListOptions()
@@ -2278,6 +2296,7 @@ final class Model {
         show()
         localListAction = action
         localItemAction = itemAction
+        localListBack = back
         listOptions = options
         mode = .list(command: command, items: items, filter: true)
         query = ""
@@ -2286,6 +2305,71 @@ final class Model {
         noteContentChanged()
         focusTick += 1
         updatePreview()
+    }
+
+    /// "Keyboard Shortcuts": every running app with a menu bar. Pick one and you
+    /// get its shortcuts; pick a shortcut and it runs in that app.
+    func showShortcutApps() {
+        guard WindowManager.accessibilityTrusted else {
+            flash(WindowManager.permissionHint, error: true, thenHide: false)
+            return
+        }
+        let front = previousApp?.processIdentifier ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let entries = ShortcutApps.rows(
+            NSWorkspace.shared.runningApplications
+                .filter { $0.activationPolicy == .regular && !$0.isTerminated }
+                .map { ShortcutAppEntry(pid: $0.processIdentifier, name: $0.localizedName ?? $0.bundleIdentifier ?? "App") },
+            front: front
+        )
+        guard !entries.isEmpty else {
+            flash("No running app has a menu bar to read", error: true, thenHide: false)
+            return
+        }
+        let items = entries.enumerated().map { (i, entry) in
+            ListItem(
+                title: entry.name,
+                subtitle: i == 0 && entry.pid == front ? "the app you were in — Return for its shortcuts" : "running",
+                icon: "⌨️",
+                arg: String(i)
+            )
+        }
+        showLocalList(id: "shortcuts", title: "Keyboard Shortcuts", icon: "⌨️", items: items) { i in
+            guard entries.indices.contains(i) else { return }
+            self.showAppShortcuts(NSRunningApplication(processIdentifier: entries[i].pid), name: entries[i].name)
+        }
+    }
+
+    /// One app's menu shortcuts, key equivalent in the hotkey column. Return
+    /// activates the app and presses the menu item.
+    func showAppShortcuts(_ app: NSRunningApplication?, name: String) {
+        guard let pid = app?.processIdentifier else {
+            flash("\(name) has quit — open the launcher from it to read its menus", error: true, thenHide: false)
+            return
+        }
+        busy = true
+        Task.detached {
+            let found = MenuSearch.collect(pid: pid).filter { !$0.shortcut.isEmpty }
+            await MainActor.run {
+                let model = Model.shared
+                model.busy = false
+                guard !found.isEmpty else {
+                    model.flash("\(name) has no menu shortcuts OpenCast can read", error: true, thenHide: false)
+                    return
+                }
+                let items = found.enumerated().map { (i, item) in
+                    ListItem(title: item.title, subtitle: item.path, icon: "⌨️", arg: String(i), hotkey: item.shortcut)
+                }
+                model.showLocalList(
+                    id: "shortcuts:\(pid)", title: "\(name) — Shortcuts", icon: "⌨️", items: items,
+                    back: { Model.shared.showShortcutApps() }
+                ) { i in
+                    guard found.indices.contains(i) else { return }
+                    let target = NSRunningApplication(processIdentifier: pid)
+                    Model.shared.apply(.hide)
+                    MenuSearch.press(found[i], in: target)
+                }
+            }
+        }
     }
 
     func showMenuItems() {
@@ -2312,9 +2396,10 @@ final class Model {
                 let items = found.enumerated().map { i, item in
                     ListItem(
                         title: item.title,
-                        subtitle: item.shortcut.isEmpty ? item.path : "\(item.path)   \(item.shortcut)",
+                        subtitle: item.path,
                         icon: "☰",
-                        arg: String(i)
+                        arg: String(i),
+                        hotkey: item.shortcut.isEmpty ? nil : item.shortcut
                     )
                 }
                 model.showLocalList(id: "menu", title: "\(appName) Menus", icon: "☰", items: items) { i in
@@ -2425,6 +2510,7 @@ final class Model {
             ]
             rows.append(ActionRow(id: "recent-docs", title: "Recent Documents", key: "cmd+r"))
             if runningApp(for: command) != nil {
+                rows.append(ActionRow(id: "shortcuts-app", title: "Keyboard Shortcuts"))
                 rows.append(ActionRow(id: "quit-app", title: "Quit \(command.title)", key: "cmd+q"))
                 rows.append(ActionRow(id: "hide-app", title: "Hide \(command.title)", key: "cmd+h"))
             }
@@ -2565,6 +2651,10 @@ final class Model {
             runningApp(for: command)?.terminate()
             mode = .search
             flash("Quit \(command.title)", error: false, thenHide: false)
+        case "shortcuts-app":
+            // Menus can only be read from a running app, so this row only shows
+            // when one is running.
+            showAppShortcuts(runningApp(for: command), name: command.title)
         case "hide-app":
             runningApp(for: command)?.hide()
             mode = .search
@@ -3529,6 +3619,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Model.shared.ready = true
                 // First show happens here, with the right presentation (the engine used to show too early).
                 Model.shared.show()
+                Model.shared.checkHotkeys()
                 Model.shared.prefetchAppIcons()
                 SnippetExpander.shared.reload()
                 ConfigWatcher.shared.start(configDir: dir)

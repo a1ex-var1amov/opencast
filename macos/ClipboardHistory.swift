@@ -85,6 +85,7 @@ final class ClipboardHistory {
     private var thumbCache: [String: NSImage] = [:]
     private var saveTask: Task<Void, Never>?
     private var knownShotPaths: Set<String> = []
+    private var shotScanRunning = false
     private var dirWatchers: [DispatchSourceFileSystemObject] = []
     private var shotRescan: Task<Void, Never>?
     private let maxEntries = 200
@@ -507,6 +508,22 @@ final class ClipboardHistory {
     }
 
     private func scanScreenshots(initial: Bool) {
+        // Desktop and the screencapture folder are TCC-protected: listing them can
+        // block on a permission prompt. Never do it on the main thread — Carbon hotkey
+        // registration waits there, and a wedged main thread means no panel, no keys.
+        guard !shotScanRunning else { return }
+        shotScanRunning = true
+        Task.detached(priority: .utility) {
+            let found = Self.newestShots(limit: initial ? 80 : 40)
+            await MainActor.run {
+                ClipboardHistory.shared.shotScanRunning = false
+                ClipboardHistory.shared.applyShotScan(found, initial: initial)
+            }
+        }
+    }
+
+    /// Pure file walking, off the main actor.
+    private nonisolated static func newestShots(limit: Int) -> [URL] {
         let dirs = Self.screenshotDirs()
         let fm = FileManager.default
         var found: [URL] = []
@@ -532,15 +549,19 @@ final class ClipboardHistory {
             let b = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
             return a > b
         }
+        return Array(found.prefix(limit))
+    }
+
+    private func applyShotScan(_ found: [URL], initial: Bool) {
         if initial {
-            knownShotPaths = Set(found.prefix(80).map(\.path))
+            knownShotPaths = Set(found.map(\.path))
             // Index newest 30 as shots if not already present.
             for url in found.prefix(30) {
                 ingestShot(url, skipIfKnown: false)
             }
             return
         }
-        for url in found.prefix(40) {
+        for url in found {
             if knownShotPaths.contains(url.path) { continue }
             knownShotPaths.insert(url.path)
             ingestShot(url, skipIfKnown: true)
@@ -580,9 +601,29 @@ final class ClipboardHistory {
 
     /// Re-list the screenshot folders when their directory entries change.
     private func watchScreenshotDirs() {
-        for dir in Self.screenshotDirs() {
+        // Belt and braces: a slow rescan catches a folder that changed location.
+        shotTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
+            MainActor.assumeIsolated { ClipboardHistory.shared.scanScreenshots(initial: false) }
+        }
+        // `open()` on a TCC-protected folder (Desktop) blocks until the user answers a
+        // permission prompt — and that prompt may never appear for an accessory app.
+        // Do the opens off the main thread: hotkey registration waits there, and a
+        // blocked main thread means no panel and no keys.
+        Task.detached(priority: .utility) {
+            let fds = Self.openShotDirs(Self.screenshotDirs())
+            await MainActor.run { ClipboardHistory.shared.installShotWatchers(fds) }
+        }
+    }
+
+    private nonisolated static func openShotDirs(_ dirs: [URL]) -> [Int32] {
+        dirs.compactMap { dir in
             let fd = open(dir.path, O_EVTONLY)
-            guard fd >= 0 else { continue }
+            return fd >= 0 ? fd : nil
+        }
+    }
+
+    private func installShotWatchers(_ fds: [Int32]) {
+        for fd in fds {
             let src = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .rename], queue: .main)
             src.setEventHandler {
                 MainActor.assumeIsolated { ClipboardHistory.shared.scheduleShotRescan() }
@@ -590,10 +631,6 @@ final class ClipboardHistory {
             src.setCancelHandler { close(fd) }
             src.resume()
             dirWatchers.append(src)
-        }
-        // Belt and braces: a slow rescan catches a folder that changed location.
-        shotTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
-            MainActor.assumeIsolated { ClipboardHistory.shared.scanScreenshots(initial: false) }
         }
     }
 
@@ -607,7 +644,7 @@ final class ClipboardHistory {
         }
     }
 
-    private static func screenshotDirs() -> [URL] {
+    private nonisolated static func screenshotDirs() -> [URL] {
         var dirs: [URL] = [URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Desktop")]
         let loc = UserDefaults(suiteName: "com.apple.screencapture")?.string(forKey: "location")
         if let loc, !loc.isEmpty {

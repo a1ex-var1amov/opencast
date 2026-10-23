@@ -15,6 +15,7 @@ extern "C" {
     // `dispatch_get_main_queue()` is a header inline of this symbol.
     static _dispatch_main_q: u8;
     fn dispatch_sync_f(queue: *const u8, context: *mut std::ffi::c_void, work: extern "C" fn(*mut std::ffi::c_void));
+    fn dispatch_async_f(queue: *const u8, context: *mut std::ffi::c_void, work: extern "C" fn(*mut std::ffi::c_void));
     fn pthread_main_np() -> i32;
 }
 
@@ -24,7 +25,16 @@ fn dispatch_get_main_queue() -> *const u8 {
 
 /// `RegisterEventHotKey` only delivers presses to a manager created on the main
 /// run loop. `dispatch_sync` from that thread deadlocks, so it runs inline.
-fn on_main<F: FnOnce() -> Vec<String>>(work: F) -> Vec<String> {
+///
+/// From any other thread the work goes to the main queue *asynchronously* and we
+/// wait on a channel with a timeout: a main thread stuck in slow or permission-
+/// gated work (a TCC prompt for the Desktop folder, say) must not wedge engine
+/// startup forever. The queued block still runs when the main thread frees up,
+/// so the keys do get registered — just later.
+fn on_main<F>(work: F) -> Vec<String>
+where
+    F: FnOnce() -> Vec<String> + Send + 'static,
+{
     if unsafe { pthread_main_np() } != 0 {
         return work();
     }
@@ -33,38 +43,62 @@ fn on_main<F: FnOnce() -> Vec<String>>(work: F) -> Vec<String> {
         let work = slot.0.take().unwrap();
         slot.1 = Some(work());
     }
-    let mut slot = (Some(work), None);
-    unsafe {
-        dispatch_sync_f(
-            dispatch_get_main_queue(),
-            &mut slot as *mut _ as *mut std::ffi::c_void,
-            run::<F>,
-        );
+    if std::env::var("OPENCAST_HOTKEY_SYNC").is_ok() {
+        // Escape hatch for debugging: the old blocking path.
+        let mut slot = (Some(work), None);
+        unsafe {
+            dispatch_sync_f(
+                dispatch_get_main_queue(),
+                &mut slot as *mut _ as *mut std::ffi::c_void,
+                run::<F>,
+            );
+        }
+        return slot.1.unwrap();
     }
-    slot.1.unwrap()
+    let (tx, rx) = std::sync::mpsc::channel();
+    let task: Box<dyn FnOnce() + Send> = Box::new(move || {
+        let _ = tx.send(work());
+    });
+    extern "C" fn run_boxed(ctx: *mut std::ffi::c_void) {
+        let task: Box<Box<dyn FnOnce() + Send>> = unsafe { Box::from_raw(ctx as *mut Box<dyn FnOnce() + Send>) };
+        (*task)();
+    }
+    let raw = Box::into_raw(Box::new(task)) as *mut std::ffi::c_void;
+    unsafe { dispatch_async_f(dispatch_get_main_queue(), raw, run_boxed) };
+    match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+        Ok(problems) => problems,
+        Err(_) => vec!["hotkeys: the app was still busy 10 s after launch, so keys land late".into()],
+    }
 }
 
-pub fn register(engine: &opencast_core::engine::Engine) -> Vec<String> {
-    on_main(|| register_here(engine))
+pub fn register(engine: &std::sync::Arc<opencast_core::engine::Engine>) -> Vec<String> {
+    let engine = std::sync::Arc::clone(engine);
+    on_main(move || register_here(&engine))
 }
 
 fn register_here(engine: &opencast_core::engine::Engine) -> Vec<String> {
-    let manager = GlobalHotKeyManager::new();
     let mut problems = Vec::new();
-    let Ok(manager) = manager else {
-        problems.push("could not start the hotkey manager".into());
-        return problems;
-    };
-    {
-        let prev = MANAGER.lock().unwrap();
-        if let Some(prev) = prev.as_ref() {
-            let mut keys = BINDS.lock().unwrap().iter().map(|(k, _)| *k).collect::<Vec<_>>();
-            if let Some(t) = *TOGGLE.lock().unwrap() {
-                keys.push(t);
-            }
-            let _ = prev.unregister_all(&keys);
+    // Tear the old manager down *first*. Carbon refuses a second handler on the same
+    // target while the previous one is alive (eventHandlerAlreadyInstalledErr), so
+    // building a manager before unregistering the old one broke every re-registration
+    // after the first: reloads and the post-launch retry left the keys dead.
+    let previous = MANAGER.lock().unwrap().take();
+    if let Some(previous) = previous {
+        let mut keys = BINDS.lock().unwrap().iter().map(|(k, _)| *k).collect::<Vec<_>>();
+        if let Some(t) = *TOGGLE.lock().unwrap() {
+            keys.push(t);
         }
+        let _ = previous.unregister_all(&keys);
+        drop(previous); // RemoveEventHandler runs here
     }
+
+    let manager = match GlobalHotKeyManager::new() {
+        Ok(m) => m,
+        Err(e) => {
+            problems.push(format!("could not start the hotkey manager ({e})"));
+            return problems;
+        }
+    };
 
     let spec = engine.config.general.hotkey.as_str();
     let toggle = match spec.parse::<HotKey>() {

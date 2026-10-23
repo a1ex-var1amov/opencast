@@ -158,13 +158,17 @@ struct ListItem: Equatable, Sendable {
     var valid = true
     /// Passed to the `run` step as environment variables.
     var variables: [String: String] = [:]
+    /// Key equivalent shown in the hotkey column (menu shortcuts list rows).
+    var hotkey: String?
 
-    init(title: String, subtitle: String?, icon: String?, arg: String, autocomplete: String? = nil) {
+    init(title: String, subtitle: String?, icon: String?, arg: String, autocomplete: String? = nil,
+         hotkey: String? = nil) {
         self.title = title
         self.subtitle = subtitle
         self.icon = icon
         self.arg = arg
         self.autocomplete = autocomplete
+        self.hotkey = hotkey
     }
 
     init?(_ raw: [String: Any]) {

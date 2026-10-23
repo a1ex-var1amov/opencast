@@ -74,5 +74,43 @@ check(SpaceLabels.summary(["Window Server", "OpenCast"], fullscreen: false) == "
 check(SpaceLabels.summary(["A", "B", "C", "D", "E", "F"], fullscreen: false) == "A, B, C, D +2",
       "long lists are capped with a count")
 
+// MARK: - List filtering (typing inside a panel-side list)
+
+check(ListFilter.score(title: "New Browser Window", subtitle: nil, hotkey: nil, query: "nbrw") != nil,
+      "word starts carry a subsequence: nbrw → New Browser Window")
+check(ListFilter.score(title: "New Tab", subtitle: nil, hotkey: nil, query: "zzz") == nil,
+      "letters that are not there match nothing")
+check(ListFilter.score(title: "New Tab", subtitle: "Shell", hotkey: "⌘T", query: "⌘t") != nil,
+      "the key equivalent is searchable too")
+check(ListFilter.order(["Safari", "Safari Services", "Notes"], query: "saf").map(\.item)
+      == ["Safari", "Safari Services"], "prefix first, non-matches dropped")
+check(ListFilter.order(["New Tab", "Note"], query: "nt").map(\.item) == ["New Tab", "Note"],
+      "word starts beat a tighter gap")
+check(ListFilter.order(["Print", "Sub Print"], query: "print").map(\.item) == ["Print", "Sub Print"],
+      "a title match outranks a subtitle match")
+check(ListFilter.order(["ax", "bx"], query: "x").map(\.item) == ["ax", "bx"],
+      "equal scores keep the order the list came in")
+check(ListFilter.order(["b", "a"], query: "").map(\.item) == ["b", "a"], "no query keeps everything in order")
+check(ListFilter.order(["Safari", "Notes"], query: "notes").map(\.index) == [1], "indices point at the original rows")
+
+// MARK: - Which apps the shortcut drill-down offers
+
+let apps = ShortcutApps.rows([
+    ShortcutAppEntry(pid: 1, name: "Safari"),
+    ShortcutAppEntry(pid: 2, name: "Ghostty"),
+    ShortcutAppEntry(pid: 3, name: "telegram"),
+], front: 2)
+check(apps.map(\.name) == ["Ghostty", "Safari", "telegram"], "the app you were in leads, the rest are A→Z")
+let twins = ShortcutApps.rows([
+    ShortcutAppEntry(pid: 1, name: "Ghostty"),
+    ShortcutAppEntry(pid: 7, name: "Ghostty"),
+], front: 7)
+check(twins.count == 1 && twins[0].pid == 7, "two instances, one row: the one you were in")
+check(ShortcutApps.rows([
+    ShortcutAppEntry(pid: 1, name: "Safari"),
+    ShortcutAppEntry(pid: 2, name: "SAFARI"),
+], front: nil).count == 1, "name case does not make two rows")
+check(ShortcutApps.rows([], front: nil).isEmpty, "no running apps, no rows")
+
 print("\n\(checks - failures)/\(checks) panel logic checks passed")
 exit(failures == 0 ? 0 : 1)

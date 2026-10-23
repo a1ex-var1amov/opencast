@@ -507,8 +507,12 @@ as is):
   side, with time to first token, total time and words per second.
 - **Dictate Anywhere**: bind a hotkey; speak, and the text is pasted into the
   front app when you pause (on-device recognition; Esc cancels).
-- **Keyboard Shortcuts**: a cheat sheet of every menu shortcut in the front
-  app, grouped by menu; type to filter, click to run.
+- **Keyboard Shortcuts**: pick a running app, then pick one of its menu
+  shortcuts and it runs in that app. The search bar filters at every level — the
+  app list, then that app's shortcuts, fuzzy, and `⌘t` finds ⌘T — while Esc
+  steps back a level instead of closing. **Keyboard Shortcuts** is also an action
+  on any running app's row, and **Search Menus** does the same for every menu
+  item, key equivalent or not.
 - **Pipelines** (`[[pipelines]]`): run the selection, clipboard or typed text
   through AI commands, ad hoc prompts, scripts, shell commands and built-in
   transforms (trim, sort-lines, json-format, base64…), then show, copy, paste

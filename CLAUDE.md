@@ -40,7 +40,9 @@ macOS first; `crates/opencast-core` must stay portable (no platform UI deps).
   Large Type, Focus incl. site blocking and menu bar timer), `NotesEditor`
   (+ sticky notes), `WindowUX` (region glyphs, HUD, live preview overlay,
   drag to snap), `PageContext` (front browser tab), `CompareModels`,
-  `CheatSheet`, `Dictation` (+ Dictate Anywhere HUD)
+  `ListFilter` (fuzzy typing inside panel-side lists) and `ShortcutApps` (the
+  Keyboard Shortcuts drill-down: running apps → that app's menu shortcuts →
+  press one), `Dictation` (+ Dictate Anywhere HUD)
 - Panel ↔ engine is JSON over `opencast_call`; panel-only features come back
   as `ExecResult::Ui { action }`
 - `examples/config.toml` — default config, embedded via include_str!
@@ -71,6 +73,10 @@ macOS first; `crates/opencast-core` must stay portable (no platform UI deps).
 - rustfmt with max_width=120 (rustfmt.toml)
 - No new crate deps without need; keys never in config files
 - Window mgmt/selection grabbing need the macOS Accessibility permission
+- Carbon hotkeys register on the **main queue**; never block the main thread with
+  TCC-protected folder I/O (Desktop, Documents) — that wedges registration. The
+  old `GlobalHotKeyManager` must be dropped before a new one is built, or Carbon
+  returns `eventHandlerAlreadyInstalledErr` and the keys go dead.
 - Design notes live in `docs/superpowers/specs/`; the 2026-10-20 speed and
   customization spec describes the config surface (`[[commands]]`,
   `fallbacks`, `[keys]`, `theme_file`, AI `output`); 2026-10-21 covers MCP,

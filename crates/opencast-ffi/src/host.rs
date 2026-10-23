@@ -56,6 +56,26 @@ pub fn with_engine<T>(f: impl FnOnce(&Engine) -> T) -> T {
     f(&engine)
 }
 
+fn engine_arc() -> std::sync::Arc<Engine> {
+    std::sync::Arc::clone(&ENGINE.get().expect("opencast_start was not called").lock().unwrap())
+}
+
+/// Re-register the global hotkeys; returns problems newline-joined (empty when fine).
+///
+/// Carbon's `InstallEventHandler` can fail while AppKit is still coming up, which
+/// leaves a perfectly working launcher with dead keys. The panel calls this a beat
+/// after the window appears.
+#[no_mangle]
+pub extern "C" fn opencast_hotkeys_fix() -> *mut std::ffi::c_char {
+    let engine = engine_arc();
+    let problems = crate::hotkeys::register(&engine);
+    let text = problems.join("\n");
+    match std::ffi::CString::new(text) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
 pub fn replace_engine(engine: std::sync::Arc<Engine>) {
     *ENGINE.get().expect("opencast_start").lock().unwrap() = engine;
 }
@@ -119,8 +139,9 @@ fn handle(request: &str) -> String {
                 r#"{"ok":true}"#.into()
             }
             "configDir" => {
-                let dir = with_engine(|engine| engine.config_dir.display().to_string());
-                serde_json::json!({ "path": dir }).to_string()
+                // Must not need the engine: the clipboard history asks for this while
+                // opencast_start is still loading config, apps and MCP tools.
+                serde_json::json!({ "path": opencast_core::config::Config::config_dir().to_string_lossy() }).to_string()
             }
             "copy" => {
                 let text = v.get("text").and_then(|x| x.as_str()).unwrap_or("");
