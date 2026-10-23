@@ -962,7 +962,7 @@ final class Model {
         afterHide {
             do {
                 let frame = try WindowManager.apply(action: action, frac: frac, app: target)
-                if hud, frame != nil { WindowHUD.shared.show(action: action, on: frame) }
+                if hud, frame != nil || action.hasPrefix("space-") { WindowHUD.shared.show(action: action, on: frame) }
             } catch {
                 Model.shared.show()
                 Model.shared.flash("\(error)", error: true, thenHide: false)
@@ -1709,6 +1709,54 @@ final class Model {
         updatePreview()
     }
 
+    /// Mission Control's desktops as a list: Return moves the view there, and
+    /// every desktop also gets a row that takes the covered app's window with it.
+    func showSpaces() {
+        guard WindowManager.accessibilityTrusted else {
+            flash(WindowManager.permissionHint, error: true, thenHide: false)
+            return
+        }
+        let spaces = Spaces.list()
+        guard !spaces.isEmpty else {
+            flash(Spaces.unavailable, error: true, thenHide: false)
+            return
+        }
+        let active = Spaces.activeMid()
+        var items: [ListItem] = []
+        var rows: [(space: SpaceInfo, move: Bool)] = []
+        for (i, space) in spaces.enumerated() {
+            let here = space.mid == active
+            let title = "Space \(i + 1)" + (space.fullscreen ? " · \(space.ownerApp ?? "Full Screen")" : "")
+            items.append(ListItem(title: here ? "• \(title)" : title, subtitle: space.summary, icon: "🗔", arg: String(i)))
+            rows.append((space, false))
+            if !space.fullscreen && !here {
+                items.append(ListItem(title: "Move Window to Space \(i + 1)", subtitle: space.summary, icon: "🗔", arg: "m\(i)"))
+                rows.append((space, true))
+            }
+        }
+        let app = previousApp
+        showLocalList(id: "spaces", title: "Switch Space", icon: "🗔", items: items) { i in
+            guard rows.indices.contains(i) else { return }
+            let (space, move) = rows[i]
+            self.afterHide {
+                do {
+                    if move {
+                        guard let app, let window = WindowManager.focusedWindow(pid: app.processIdentifier) else {
+                            throw WindowManager.WMError.message("\(app?.localizedName ?? "the front app") has no window")
+                        }
+                        try Spaces.move(window, to: space)
+                    } else {
+                        try Spaces.switchTo(space)
+                    }
+                } catch {
+                    Model.shared.show()
+                    Model.shared.flash("\(error)", error: true, thenHide: false)
+                }
+            }
+        }
+        updatePreview()
+    }
+
     // MARK: - Panel-side features
 
     func handleUi(_ action: String, args: [String] = []) {
@@ -1801,6 +1849,8 @@ final class Model {
         case "note-editor":
             hide()
             NotesEditorController.shared.show(noteId: first.isEmpty ? nil : first)
+        case "spaces":
+            showSpaces()
         case "mcp-prompt":
             // An MCP server filled in one of its own prompt templates: open a
             // chat with it, unsent, so it can be edited or given an attachment.

@@ -29,7 +29,11 @@ macOS first; `crates/opencast-core` must stay portable (no platform UI deps).
   `agent.rs` (MCP hub, AI tool loop with approvals), `extensions_mac.rs`
   (install/import/doctor; plutil, ditto), `refresh_mac.rs` (bookmarks, rates)
 - `macos/` — SwiftUI panel. `WindowManager.swift` does snapping, layouts and
-  AX selection reads; nothing spawns `osascript` on a hot path. Also
+  AX selection reads; nothing spawns `osascript` on a hot path. `Spaces.swift`
+  covers Mission Control desktops (SkyLight reads, a synthesized Dock swipe to
+  switch — with the IOHID payload macOS 27+ requires — and SkyLight's bridged
+  operation to move a window; every private symbol is looked up by name), with
+  its AppKit-free labelling in `SpaceLabel.swift`. Also
   `SettingsWindow.swift`, `Preview.swift` (pane + Quick Look), `MenuSearch`,
   `Schedule` (EventKit), `Dictation`, `SnippetExpander`, `ConfigWatcher`,
   `Attachments`, `MacExtras` (Contacts, Reminders, dictionary, media keys,

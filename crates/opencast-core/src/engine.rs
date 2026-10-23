@@ -760,6 +760,12 @@ pub enum WindowAction {
     ExitFullscreen,
     RestoreSize,
     Undo,
+    SpaceNext,
+    SpacePrev,
+    SpaceMoveNext,
+    SpaceMovePrev,
+    /// The panel lists every space and switches (or moves the window) from there.
+    SpaceSwitcher,
 }
 
 pub const WINDOW_ACTIONS: &[(WindowAction, &str, &str, &str)] = &[
@@ -857,6 +863,22 @@ pub const WINDOW_ACTIONS: &[(WindowAction, &str, &str, &str)] = &[
         "←",
     ),
     (WindowAction::RestoreSize, "restore", "Restore Window Size", "↩"),
+    // Spaces: one glyph for the whole family, the title carries the verb.
+    (WindowAction::SpaceNext, "space-next", "Next Space", "🗔"),
+    (WindowAction::SpacePrev, "space-prev", "Previous Space", "🗔"),
+    (
+        WindowAction::SpaceMoveNext,
+        "space-move-next",
+        "Move Window to Next Space",
+        "🗔",
+    ),
+    (
+        WindowAction::SpaceMovePrev,
+        "space-move-prev",
+        "Move Window to Previous Space",
+        "🗔",
+    ),
+    (WindowAction::SpaceSwitcher, "spaces", "Switch Space", "🗔"),
 ];
 
 impl WindowAction {
@@ -884,6 +906,11 @@ impl WindowAction {
 
     pub fn is_restore(self) -> bool {
         matches!(self, Self::RestoreSize)
+    }
+
+    /// Move the window itself between spaces (as opposed to switching view).
+    pub fn is_space_move(self) -> bool {
+        matches!(self, Self::SpaceMoveNext | Self::SpaceMovePrev)
     }
 }
 
@@ -3167,6 +3194,39 @@ mod tests {
     }
 
     #[test]
+    fn presets_combine_and_a_bad_half_warns() {
+        let e = engine_from(
+            &DEFAULT_CONFIG.replace(
+                "window_hotkeys = \"rectangle\"",
+                "window_hotkeys = \"rectangle, spaces\"",
+            ),
+            vec![],
+        );
+        assert!(
+            e.warnings.iter().all(|w| !w.contains("window_hotkeys")),
+            "{:?}",
+            e.warnings
+        );
+        let (bindings, _) = e.hotkey_bindings();
+        assert!(
+            bindings.iter().any(|(_, b)| b == "window:space-next"),
+            "the space half did not bind"
+        );
+        assert!(
+            bindings.iter().any(|(_, b)| b == "window:left-half"),
+            "the tiling half did not bind"
+        );
+        let e = engine_from(
+            &DEFAULT_CONFIG.replace(
+                "window_hotkeys = \"rectangle\"",
+                "window_hotkeys = \"rectangle, spces\"",
+            ),
+            vec![],
+        );
+        assert!(e.warnings.iter().any(|w| w.contains("spces")), "{:?}", e.warnings);
+    }
+
+    #[test]
     fn the_window_key_preset_resolves_and_a_typo_is_reported() {
         // The default config ships the Rectangle set, so every one of its ids
         // must name a real command (a bad id would warn on every launch).
@@ -3308,6 +3368,42 @@ steps = ["ai:nope"]
         );
         assert!(e.plan("link:search-github", &[]).is_err());
         assert!(e.plan("nope", &[]).is_err());
+    }
+
+    #[test]
+    fn space_commands_plan_search_and_share_a_glyph() {
+        let e = engine_with(vec![], "");
+        for (id, a) in [
+            ("window:space-next", WindowAction::SpaceNext),
+            ("window:space-prev", WindowAction::SpacePrev),
+            ("window:space-move-next", WindowAction::SpaceMoveNext),
+            ("window:space-move-prev", WindowAction::SpaceMovePrev),
+            ("window:spaces", WindowAction::SpaceSwitcher),
+        ] {
+            assert_eq!(e.plan(id, &[]).unwrap(), Plan::Window(a), "{id}");
+            assert!(e.registry.get(id).is_some(), "{id} has no row");
+        }
+        let found = |q: &str, id: &str| {
+            assert!(
+                e.search(q, 12).iter().any(|c| c.id == id),
+                "'{q}' missed {id}: {:?}",
+                e.search(q, 12).iter().map(|c| c.id.as_str()).collect::<Vec<_>>()
+            )
+        };
+        found("switch space", "window:spaces");
+        found("move window to next space", "window:space-move-next");
+        found("previous space", "window:space-prev");
+        // One glyph for the family; the title carries the verb.
+        let icons: Vec<String> = e
+            .search("space", 20)
+            .iter()
+            .filter(|c| c.id.starts_with("window:space"))
+            .map(|c| c.icon.clone().unwrap_or_default())
+            .collect();
+        assert!(icons.len() >= 4, "only {icons:?}");
+        assert!(icons.iter().all(|i| i == "🗔"), "{icons:?}");
+        assert!(WindowAction::SpaceMoveNext.is_space_move());
+        assert!(!WindowAction::SpaceNext.is_space_move());
     }
 
     #[test]

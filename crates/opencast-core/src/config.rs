@@ -373,13 +373,31 @@ pub const WINDOW_HOTKEY_PRESETS: &[WindowHotkeyPreset] = &[
             ("Ctrl+Alt+Backspace", "window:restore"),
         ],
     ),
+    // Mission Control desktops. Separate from the tiling sets because people
+    // who live in spaces bind these and the tiling keys together.
+    (
+        "spaces",
+        "Space keys (⌃⌥⇧ arrows)",
+        &[
+            ("Ctrl+Alt+Shift+Left", "window:space-prev"),
+            ("Ctrl+Alt+Shift+Right", "window:space-next"),
+        ],
+    ),
 ];
 
-pub fn window_hotkey_preset(name: &str) -> Option<&'static [(&'static str, &'static str)]> {
-    WINDOW_HOTKEY_PRESETS
-        .iter()
-        .find(|(n, _, _)| n.eq_ignore_ascii_case(name.trim()))
-        .map(|(_, _, keys)| *keys)
+/// Keys for `window_hotkeys`, which may name more than one preset
+/// (`"rectangle, spaces"`). `None` when a name is unknown: that is a typo, and
+/// the engine says so instead of binding nothing.
+pub fn window_hotkey_preset(name: &str) -> Option<Vec<(&'static str, &'static str)>> {
+    let mut out = Vec::new();
+    for token in name.split([' ', ',']).map(str::trim).filter(|t| !t.is_empty()) {
+        let set = WINDOW_HOTKEY_PRESETS
+            .iter()
+            .find(|(n, _, _)| n.eq_ignore_ascii_case(token))
+            .map(|(_, _, keys)| *keys)?;
+        out.extend(set.iter().copied());
+    }
+    Some(out)
 }
 
 /// For the warning when a config names a preset that does not exist.
@@ -640,8 +658,9 @@ pub struct General {
     /// Almost Maximize size, as a fraction of the screen.
     #[serde(default = "default_almost")]
     pub almost_maximize: f64,
-    /// Window keys to install: `off`, `rectangle` or `spectacle` (see
-    /// `WINDOW_HOTKEY_PRESETS`). `off` binds no window keys at all.
+    /// Window keys to install: `off`, `rectangle`, `spectacle`, or presets
+    /// combined with a comma (`"rectangle, spaces"`); see `WINDOW_HOTKEY_PRESETS`.
+    /// `off` binds no window keys at all.
     #[serde(default = "default_window_hotkeys")]
     pub window_hotkeys: String,
     /// Show a small HUD when a hotkey moves a window.

@@ -379,7 +379,8 @@ pub fn target(
             }
             Some(r)
         }
-        RestoreSize | Undo | ToggleFullscreen | Fullscreen | ExitFullscreen => None,
+        RestoreSize | Undo | ToggleFullscreen | Fullscreen | ExitFullscreen | SpaceNext | SpacePrev | SpaceMoveNext
+        | SpaceMovePrev | SpaceSwitcher => None,
         _ => {
             let steps = if o.cycle == Cycle::Sizes { cycle } else { 0 };
             Some(tile(work, frac_on(a, steps, o, is_portrait(work))?, o))
@@ -477,6 +478,11 @@ mod tests {
                             | WindowAction::ToggleFullscreen
                             | WindowAction::Fullscreen
                             | WindowAction::ExitFullscreen
+                            | WindowAction::SpaceNext
+                            | WindowAction::SpacePrev
+                            | WindowAction::SpaceMoveNext
+                            | WindowAction::SpaceMovePrev
+                            | WindowAction::SpaceSwitcher
                     ),
                     "{key}"
                 );

@@ -652,6 +652,13 @@ pub async fn run_command(id: String, args: Vec<String>, ctx: ExecContext) -> Exe
 }
 
 fn window_result(action: WindowAction) -> ExecResult {
+    if action == WindowAction::SpaceSwitcher {
+        // The space list is live state the engine never sees; the panel reads it.
+        return ExecResult::Ui {
+            action: "spaces".to_string(),
+            args: Vec::new(),
+        };
+    }
     ExecResult::Window {
         action: action.key().to_string(),
         frac: action.frac().map(|(x, y, w, h)| [x, y, w, h]),

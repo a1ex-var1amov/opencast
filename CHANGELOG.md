@@ -7,6 +7,15 @@ first tag is in `git log`.
 ## Unreleased
 
 ### Added
+- **Spaces** (Mission Control desktops): **Switch Space** lists every desktop
+  with the apps that live on it — Return moves the view there, and each desktop
+  also gets a **Move Window to Space N** row that takes the window along. **Next
+  Space**, **Previous Space**, **Move Window to Next/Previous Space** are
+  commands too, and `window_hotkeys` presets now combine with a comma:
+  `"rectangle, spaces"` adds ⌃⌥⇧ + arrows. A full-screen window owns a space of
+  its own: the list shows it, and moving a window skips past those. Switching
+  posts the Dock swipe the system expects (with the IOHID payload macOS 27
+  demands); moving uses SkyLight's own operation. Neither needs Accessibility.
 - **Rectangle's window hotkeys, in one line**: `window_hotkeys = "rectangle"` in
   `[general]` installs ⌃⌥ + arrows for the halves, U I J K for the quarters, D E
   F T G for the thirds, ⌃⌥⌅ maximize, ⌃⌥⌫ put it back, ⌃⌥= / ⌃⌥- bigger and

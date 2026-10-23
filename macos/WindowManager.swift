@@ -64,6 +64,11 @@ enum WindowManager {
             let ms = Int((CFAbsoluteTimeGetCurrent() - started) * 1000)
             NSLog("opencast: window %@ on %@ took %d ms", action, (app ?? frontApp())?.localizedName ?? "?", ms)
         }
+        // Spaces are SkyLight state: changing the view needs no AX window.
+        if action == "space-next" || action == "space-prev" {
+            try Spaces.switchRelative(action == "space-next" ? 1 : -1)
+            return nil
+        }
         guard accessibilityTrusted else { throw WMError.permission }
         guard let app = app ?? frontApp() else { throw WMError.message("no frontmost app") }
         let pid = app.processIdentifier
@@ -71,6 +76,12 @@ enum WindowManager {
             throw WMError.message("the front app (\(app.localizedName ?? "?")) has no window")
         }
         guard let current = frame(of: window) else { throw WMError.message("could not read the window frame") }
+
+        // Moving a window between spaces is SkyLight's operation, not a frame change.
+        if action == "space-move-next" || action == "space-move-prev" {
+            try Spaces.move(window, relative: action == "space-move-next" ? 1 : -1)
+            return nil
+        }
 
         switch action {
         case "fullscreen", "full-screen", "exit-fullscreen":
@@ -324,7 +335,7 @@ enum WindowManager {
         }
     }
 
-    private static func focusedWindow(pid: pid_t) -> AXUIElement? {
+    static func focusedWindow(pid: pid_t) -> AXUIElement? {
         let app = AXUIElementCreateApplication(pid)
         var value: CFTypeRef?
         if AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &value) == .success, let v = value {

@@ -48,6 +48,8 @@ drag_snap = false               # drag a window to an edge/corner to snap (⌥ =
 # rebind one in the Window tab and only that one changes.
 # Use "off" if Rectangle, Magnet or Hammerspoon is still running — two apps
 # grabbing the same keys means whoever registers first wins.
+# Names combine with a comma: "rectangle, spaces" adds ⌃⌥⇧ + arrows for the
+# Mission Control spaces (move the view, or the window, left and right).
 window_hotkeys = "rectangle"
 
 # In-panel keys. Mods: Cmd, Shift, Alt/Option, Ctrl. Keys: a character, or
@@ -211,6 +213,8 @@ prompt = "{input}"
 #   Move Left/Right/Up/Down, Next/Previous Display, Display 1-3, Full Screen,
 #   Exit Full Screen, Toggle Fullscreen, Restore Window Size, Undo Window Action.
 #   "Arrange Window" shows them all as a grid with a live preview.
+#   Spaces too: Next/Previous Space, Move Window to Next/Previous Space, and
+#   "Switch Space", which lists every desktop and what runs on it.
 # The keys come from `window_hotkeys` above ("rectangle" here). Set it to "off"
 # if you still run Rectangle, Magnet or Hammerspoon — two apps registering the
 # same keys means only one of them gets the press. The "Use Caps Lock as Launcher

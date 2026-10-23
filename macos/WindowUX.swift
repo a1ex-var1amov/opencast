@@ -133,6 +133,11 @@ final class WindowHUD {
 
     static func title(for action: String) -> String {
         let key = action.hasPrefix("custom:") ? String(action.dropFirst(7)) : action
+        let spaces = [
+            "space-next": "Next Space", "space-prev": "Previous Space",
+            "space-move-next": "Window → Next Space", "space-move-prev": "Window → Previous Space",
+        ]
+        if let name = spaces[key] { return name }
         return key.split(separator: "-").map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
     }
 }

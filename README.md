@@ -30,6 +30,8 @@ the core is portable.
   size, a highlighted command outlines where the window will go, hotkeys show a
   small HUD, *Arrange Window* is a picker grid, and `drag_snap` adds
   drag-to-edge snapping. Your own positions go in `[[window_commands]]`.
+  **Spaces**: *Switch Space* lists Mission Control's desktops with what runs on
+  each, and moving a window to one takes you there too.
 - **Layouts**: *Remember Layout* saves where every window is; *Restore
   Layout: \<name\>* puts them back, launching missing apps.
 - **Global hotkeys**: bind any command — an app, a window action, an AI
@@ -111,6 +113,15 @@ Type "half", "maximize", "third"… in the launcher to snap the window you were
 just using (Rectangle-style). Full screen has its own rows too — **Full Screen**,
 **Exit Full Screen** and the **Toggle Fullscreen** you may already have bound —
 so a hotkey does the one thing you expect and says so when it can't.
+**Spaces** (Mission Control desktops): **Switch Space** lists every desktop with
+the apps that live there — Return moves the view, and each desktop also gets a
+**Move Window to Space N** row that takes the window with you. **Next Space**,
+**Previous Space** and **Move Window to Next/Previous Space** are commands you
+can bind. A full-screen window owns a space of its own: the list shows it, and
+moving a window skips past those. Switching is a synthesized Dock swipe and
+moving is SkyLight's own operation, so neither needs the Accessibility
+permission; both are private APIs, so a macOS that stops answering them reports
+an error rather than leaving a window half-moved.
 **Remember Layout** saves every visible window's
 position under a name; **Restore Layout: \<name\>** puts everything back and
 launches apps that aren't running. Multi-monitor placement is restored as
@@ -143,7 +154,9 @@ window_hotkeys = "rectangle"   # ⌃⌥ + arrows for the halves, U I J K for the
 ```
 
 `"spectacle"` installs the ⌥⌘ set Rectangle registers out of the box (and that
-Spectacle used before it); `"off"` binds nothing. Use `"off"` while Rectangle,
+Spectacle used before it); `"off"` binds nothing. Preset names combine with a
+comma: `"rectangle, spaces"` adds the Mission Control keys (⌃⌥⇧ + arrows for
+previous / next space) to the tiling set. Use `"off"` while Rectangle,
 Magnet or Hammerspoon is still running — two apps registering the same keys means
 only one of them gets the press. Your own bindings always win: a `[[hotkeys]]`
 entry on the same keys, or a rebind in the Window tab, replaces just that one

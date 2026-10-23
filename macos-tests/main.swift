@@ -63,5 +63,16 @@ check(SnippetMatch.trim("ab", longestKeyword: 0) == "ab", "no keywords: nothing 
 check(SnippetMatch.trim("abcdefghij", longestKeyword: 3) == "hij", "long typing streams stay short")
 check(SnippetMatch.trim("abcde", longestKeyword: 4) == "abcde", "under the limit: untouched")
 
+// MARK: - Space labels
+
+check(SpaceLabels.visibleApps(["Safari", "Window Server", "Safari", "Dock"]) == ["Safari"],
+      "menu-bar noise and duplicates drop out")
+check(SpaceLabels.summary(["Safari", "Mail"], fullscreen: false) == "Safari, Mail", "apps on a desktop")
+check(SpaceLabels.summary([], fullscreen: false) == "Empty", "an empty desktop says so")
+check(SpaceLabels.summary([], fullscreen: true) == "", "a full-screen tile needs no summary")
+check(SpaceLabels.summary(["Window Server", "OpenCast"], fullscreen: false) == "Empty", "noise only reads as empty")
+check(SpaceLabels.summary(["A", "B", "C", "D", "E", "F"], fullscreen: false) == "A, B, C, D +2",
+      "long lists are capped with a count")
+
 print("\n\(checks - failures)/\(checks) panel logic checks passed")
 exit(failures == 0 ? 0 : 1)
