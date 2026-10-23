@@ -219,6 +219,23 @@ pub fn run(engine: &Engine, load_time: Option<Duration>) -> Report {
         report.push(Level::Ok, "no browser bookmarks cached");
     }
 
+    // Integrations: which app bridges are live. An integration whose app is
+    // missing is absent by design, so say so rather than looking broken.
+    if engine.integrations_on.is_empty() {
+        report.push(
+            Level::Ok,
+            format!(
+                "no app integrations on (integrations = \"{}\")",
+                engine.config.general.integrations
+            ),
+        );
+    } else {
+        report.push(
+            Level::Ok,
+            format!("integrations on: {}", engine.integrations_on.join(", ")),
+        );
+    }
+
     // Extensions.
     let exts = crate::extensions::list(&engine.scripts_dir());
     if !exts.is_empty() {

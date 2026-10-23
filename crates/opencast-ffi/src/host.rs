@@ -259,7 +259,7 @@ fn handle(request: &str) -> String {
                 serde_json::json!({
                     "general": {
                         "hotkey": g.hotkey, "hyperkey": g.hyperkey, "presentation": g.presentation,
-                        "theme": g.theme, "default_provider": g.default_provider,
+                        "theme": g.theme, "default_provider": g.default_provider, "integrations": g.integrations,
                         "snippet_expansion": g.snippet_expansion, "shortcuts": g.shortcuts,
                         "calendar": g.calendar, "check_updates": g.check_updates,
                         "update_repo": g.update_repo, "script_login_shell": g.script_login_shell,

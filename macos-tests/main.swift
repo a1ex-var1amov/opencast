@@ -148,5 +148,25 @@ check(SpotifyTrack.rows(for: bare)[0].title == "Play", "a paused list starts wit
 check(SpotifyTrack.rows(for: SpotifyTrack()).contains(where: { $0.title == "Volume Up" && $0.subtitle == "+10" }),
       "with no volume read, the row just promises +10")
 
+// Rows as the engine sends them. The panel drops anything whose kind it cannot
+// name, which is once how every MCP resource and prompt row vanished.
+let resource = Command(["id": "mcp:gh:res:issues", "title": "Open issues", "kind": "mcpresource", "icon": "🔌"])
+check(resource?.kind == .mcpResource, "an MCP resource row decodes — an unknown kind drops the row in silence")
+check(Command(["id": "mcp:gh:prompt:sum", "title": "Summarize", "kind": "mcpprompt"])?.kind == .mcpPrompt, "an MCP prompt row decodes")
+check(Command(["id": "x", "title": "Y", "kind": "notakind"]) == nil, "a kind the panel has not declared still drops the row")
+
+let appRow = Command([
+    "id": "app:/Applications/Spotify.app", "title": "Spotify", "kind": "app",
+    "actions": [
+        ["id": "spotify-play", "title": "Play / Pause"],
+        ["id": "spotify-search", "title": "Search in Spotify…", "key": "cmd+f"],
+    ],
+])
+check(appRow?.actions.count == 2, "integration verbs arrive on the app row")
+check(appRow?.actions.first?.title == "Play / Pause", "the verb keeps its own label")
+check(appRow?.actions.last?.key == "cmd+f", "and its key, when it has one")
+check(Command(["id": "builtin:reload", "title": "Reload Commands", "kind": "builtin"])?.actions.isEmpty == true,
+      "a row with no integration carries no verbs")
+
 print("\n\(checks - failures)/\(checks) panel logic checks passed")
 exit(failures == 0 ? 0 : 1)

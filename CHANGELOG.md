@@ -7,6 +7,19 @@ first tag is in `git log`.
 ## Unreleased
 
 ### Added
+- **Integrations, detachable as a unit**: `integrations = "auto"` (the default)
+  registers an app bridge only when its app is installed, `"off"` drops its
+  commands, its app-row actions and its hotkeys together, and a list forces one
+  in or out (`"spotify"`, `"auto, -spotify"`). A name that does not exist warns
+  instead of quietly doing nothing, and Doctor lists what is live.
+- **Spotify Search**: name an artist, track, album or playlist and it opens in
+  Spotify's own search. The app has no search command over Apple Events, so this
+  travels by its deep link — no API credentials, no scraping.
+- **An integration puts its verbs on the app row**: ⌘K on the **Spotify** app row
+  offers Player Controls…, Play / Pause, Previous Track, Next Track, Now Playing
+  and Search in Spotify…, so you do not need to know the command names. The engine
+  attaches them, which is what makes switching the integration off take them away
+  too.
 - **Spotify, driven directly.** The media-key commands follow whatever owns Now
   Playing — a browser tab counts — and read nothing back, so *Next Track* could
   skip a video and *what is playing?* had no answer. **Spotify** opens a live list:
@@ -97,6 +110,11 @@ first tag is in `git log`.
   Recents) keeps its order when nothing is typed.
 
 ### Fixed
+- **MCP resources and prompts never reached the panel.** Core serialized their
+  kinds as `mcpresource` and `mcpprompt`, and the panel's kind enum could not
+  decode either one, so those rows were dropped before display: the engine had
+  them, the launcher showed none. Both kinds decode now, share the MCP glyph, and
+  get their own actions (Read Resource, Open in Chat).
 - **The launcher sometimes never appeared**: the clipboard history indexes the
   screenshot folders, and Desktop is behind a permission prompt that an accessory
   app may never get to answer. Listing and opening those folders happened on the

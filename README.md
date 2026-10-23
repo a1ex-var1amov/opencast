@@ -527,8 +527,18 @@ as is):
   Playing (Return there copies the track line). **Spotify Play / Pause**,
   **Spotify Next Track**, **Spotify Previous Track** and **Spotify Now Playing**
   are commands of their own, so a hotkey can drive Spotify even when a browser tab
-  owns Now Playing. No shuffle or repeat rows: Spotify ignores those script writes
-  and has no menu item for them, so the launcher leaves them out.
+  owns Now Playing. **Spotify Search** hands a query to Spotify's own search: the
+  app exposes no search command over Apple Events, so this goes through its deep
+  link and needs no API credentials. No shuffle or repeat rows: Spotify ignores
+  those script writes and has no menu item for them, so the launcher leaves them
+  out.
+- **Integrations** (`integrations = "auto"`): a bridge to one app's own controls,
+  detachable as a unit. `auto` registers one only when its app is installed;
+  `"off"` drops its commands, its app-row actions and its hotkeys together; name
+  them to force one in or out (`"spotify"`, `"auto, -spotify"`). A name that does
+  not exist warns instead of doing nothing. An integration also puts its verbs on
+  the app row: ⌘K on **Spotify** offers Player Controls…, Play / Pause, Next
+  Track, Previous Track, Now Playing and Search in Spotify…
 - **Emoji**: every Unicode emoji by name (`emoji pretzel`), recent ones first,
   `emoji_skin_tone` applied.
 - **AI presets** (`[[ai_presets]]`): a chat with its own model, prompt and MCP

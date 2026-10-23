@@ -19,6 +19,47 @@ struct Argument: Equatable, Sendable {
     }
 }
 
+/// One window as a saved layout remembers it (AX coordinates, top-left origin).
+struct SavedWindow: Codable {
+    var title: String
+    var x: Double
+    var y: Double
+    var w: Double
+    var h: Double
+}
+
+/// One app's windows in a saved layout. Lives here, next to the other wire
+/// types, so `Mode` can decode without pulling in the window manager.
+struct AppWindows: Codable {
+    var app: String
+    var bundleId: String?
+    var windows: [SavedWindow]
+
+    enum CodingKeys: String, CodingKey {
+        case app, windows
+        case bundleId = "bundle_id"
+    }
+}
+
+struct CommandAction: Equatable, Sendable {
+    var id: String
+    var title: String
+    var key: String?
+
+    init(id: String, title: String, key: String?) {
+        self.id = id
+        self.title = title
+        self.key = key
+    }
+
+    init?(_ raw: [String: Any]) {
+        guard let id = raw["id"] as? String, let title = raw["title"] as? String else { return nil }
+        self.id = id
+        self.title = title
+        key = raw["key"] as? String
+    }
+}
+
 struct Command: Identifiable, Equatable, Sendable {
     var id: String
     var title: String
@@ -27,9 +68,16 @@ struct Command: Identifiable, Equatable, Sendable {
     var kind: Kind
     var arguments: [Argument]
     var hotkey: String?
+    /// ⌘-menu actions an integration adds to this row (the app row of a running
+    /// integration). The engine owns the list, so config switches apply.
+    var actions: [CommandAction]
 
     enum Kind: String, Equatable, Sendable {
         case builtin, ai, script, quicklink, app, calculator, window, layout, file, snippet, clipboard, shortcut, mcp
+        // Core serializes these lowercase; without them the rows fail to decode
+        // and every MCP resource and prompt silently disappears from search.
+        case mcpResource = "mcpresource"
+        case mcpPrompt = "mcpprompt"
 
         var label: String {
             switch self {
@@ -46,6 +94,8 @@ struct Command: Identifiable, Equatable, Sendable {
             case .clipboard: "Clipboard"
             case .shortcut: "Shortcut"
             case .mcp: "MCP Tool"
+            case .mcpResource: "MCP Resource"
+            case .mcpPrompt: "MCP Prompt"
             }
         }
     }
@@ -62,9 +112,10 @@ struct Command: Identifiable, Equatable, Sendable {
         icon = raw["icon"] as? String
         arguments = (raw["arguments"] as? [[String: Any]])?.compactMap(Argument.init) ?? []
         hotkey = raw["hotkey"] as? String
+        actions = (raw["actions"] as? [[String: Any]])?.compactMap(CommandAction.init) ?? []
     }
 
-    init(id: String, title: String, subtitle: String?, icon: String?, kind: Kind, arguments: [Argument], hotkey: String?) {
+    init(id: String, title: String, subtitle: String?, icon: String?, kind: Kind, arguments: [Argument], hotkey: String?, actions: [CommandAction] = []) {
         self.id = id
         self.title = title
         self.subtitle = subtitle
@@ -72,6 +123,7 @@ struct Command: Identifiable, Equatable, Sendable {
         self.kind = kind
         self.arguments = arguments
         self.hotkey = hotkey
+        self.actions = actions
     }
 }
 
@@ -272,7 +324,7 @@ enum ExecOutcome: Sendable {
     /// Snap the front window; `frac` = (x, y, w, h) of the work area or nil for special actions.
     case window(action: String, frac: [Double]?)
     /// `capture` → record windows and call layoutSave; `apply` → place `apps`.
-    case layout(op: String, name: String, apps: [WindowManager.AppWindows])
+    case layout(op: String, name: String, apps: [AppWindows])
     case list(command: Command, items: [ListItem], filter: Bool, options: ListOptions)
     case quit
     /// Panel-side feature: `settings`, `menu-items`, `dictate`, `schedule`.
@@ -317,9 +369,9 @@ enum ExecOutcome: Sendable {
         case "window":
             self = .window(action: raw["action"] as? String ?? "", frac: raw["frac"] as? [Double])
         case "layout":
-            let apps: [WindowManager.AppWindows] = (raw["apps"] as? [[String: Any]])
+            let apps: [AppWindows] = (raw["apps"] as? [[String: Any]])
                 .flatMap { try? JSONSerialization.data(withJSONObject: $0) }
-                .flatMap { try? JSONDecoder().decode([WindowManager.AppWindows].self, from: $0) } ?? []
+                .flatMap { try? JSONDecoder().decode([AppWindows].self, from: $0) } ?? []
             self = .layout(op: raw["op"] as? String ?? "", name: raw["name"] as? String ?? "", apps: apps)
         case "list":
             if let command = (raw["command"] as? [String: Any]).flatMap(Command.init) {

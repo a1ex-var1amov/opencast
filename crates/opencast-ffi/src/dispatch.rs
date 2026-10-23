@@ -17,7 +17,10 @@ pub fn dispatch(engine: &Engine, request: &str) -> String {
         // Instant: registry / emoji / notes / thin quicklink fallbacks only.
         "search" => {
             let q = v.get("query").and_then(|x| x.as_str()).unwrap_or("");
-            serde_json::json!({ "commands": engine.search(q, SEARCH_LIMIT) })
+            let mut rows =
+                serde_json::to_value(engine.search(q, SEARCH_LIMIT)).unwrap_or_else(|_| serde_json::json!([]));
+            attach_actions(engine, &mut rows);
+            serde_json::json!({ "commands": rows })
         }
         // Soft / forced Spotlight — never on the hot path; Swift debounces.
         "searchFiles" => {
@@ -159,6 +162,24 @@ pub fn dispatch(engine: &Engine, request: &str) -> String {
     out.to_string()
 }
 
+/// Attach an integration's ⌘-menu actions to the row it drives, so the Spotify
+/// app row offers Play / Pause and Now Playing without a trip through search.
+fn attach_actions(engine: &Engine, rows: &mut serde_json::Value) {
+    let Some(list) = rows.as_array_mut() else {
+        return;
+    };
+    for row in list.iter_mut() {
+        let Some(id) = row.get("id").and_then(|i| i.as_str()) else {
+            continue;
+        };
+        if let Some(actions) = engine.actions_for(id) {
+            if let Ok(v) = serde_json::to_value(actions) {
+                row["actions"] = v;
+            }
+        }
+    }
+}
+
 /// Needle for Spotlight. `file notes` → `notes`; `find.pdf` stays intact.
 fn file_needle(query: &str) -> Option<String> {
     let q = query.trim();
@@ -229,6 +250,39 @@ fn search_op_returns_commands() {
         .any(|c| c["id"] == "app:/Applications/Safari.app" && c["subtitle"].is_null()));
     let bad = dispatch(&engine, r#"{"op":"nope"}"#);
     assert!(serde_json::from_str::<serde_json::Value>(&bad).unwrap()["error"].is_string());
+}
+
+#[test]
+fn an_integration_puts_its_verbs_on_the_app_row() {
+    let engine = Engine::assemble(
+        Config::default(),
+        PathBuf::from("/tmp/opencast-test"),
+        vec![AppEntry {
+            name: "Spotify".into(),
+            path: PathBuf::from("/Applications/Spotify.app"),
+        }],
+        vec![],
+        vec![],
+        vec![],
+    );
+    let out = dispatch(&engine, r#"{"op":"search","query":"spotify"}"#);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let rows = v["commands"].as_array().unwrap();
+    let row = rows
+        .iter()
+        .find(|c| c["id"] == "app:/Applications/Spotify.app")
+        .expect("no Spotify app row");
+    let ids: Vec<&str> = row["actions"]
+        .as_array()
+        .expect("the app row has no actions")
+        .iter()
+        .map(|a| a["id"].as_str().unwrap())
+        .collect();
+    assert!(ids.contains(&"spotify-play"), "{ids:?}");
+    assert!(ids.contains(&"spotify-search"), "{ids:?}");
+    // Only the app row carries them: the command rows themselves do not.
+    let plain = rows.iter().find(|c| c["id"] == "builtin:spotify-play").unwrap();
+    assert!(plain.get("actions").is_none());
 }
 
 #[test]

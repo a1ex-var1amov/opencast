@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 
 use crate::apps::{self, AppEntry};
-use crate::commands::{Argument, Command, CommandKind, Override, Registry};
+use crate::commands::{Action, Argument, Command, CommandKind, Override, Registry};
 use crate::config::{AiCommandConfig, AiOutput, Config, QuicklinkConfig, ThemeFile};
 use crate::keymap::KeyBinding;
 use crate::layouts;
@@ -84,6 +84,7 @@ pub enum Builtin {
     SpotifyNext,
     SpotifyPrevious,
     SpotifyNowPlaying,
+    SpotifySearch,
     ActOnSelection,
     StartFocus,
     StopFocus,
@@ -478,6 +479,15 @@ const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
         "Spotify Now Playing",
         "🎧",
         &["music", "track", "song", "album", "what is playing", "player"],
+    ),
+    // Spotify's scripting dictionary has no search command, so this one hands the
+    // query to the app over its deep link — no API credentials needed.
+    (
+        Builtin::SpotifySearch,
+        "spotify-search",
+        "Spotify Search",
+        "🎧",
+        &["music", "find", "artist", "album", "playlist", "query"],
     ),
     (
         Builtin::ActOnSelection,
@@ -1224,6 +1234,10 @@ pub struct Engine {
     /// Which browser bookmark stores exist here, and which OpenCast may not read.
     /// Lets the bookmarks command explain an empty result instead of showing none.
     pub bookmark_scan: crate::bookmarks::Scan,
+    /// Integrations switched on (`spotify`) — Doctor reports these.
+    pub integrations_on: Vec<&'static str>,
+    /// Command id → ⌘-menu actions an integration adds to it (app rows).
+    app_actions: HashMap<String, Vec<Action>>,
     sidecars: RwLock<Sidecars>,
     /// This Mac's time zone (`America/New_York`).
     local_tz: String,
@@ -1339,7 +1353,18 @@ impl Engine {
         let mut links = HashMap::new();
         let mut restore_ids = HashMap::new();
 
+        // Integrations are opt-out: `auto` turns one on when its app is installed,
+        // and a switched-off integration drops its whole command family.
+        let installed: HashSet<String> = app_list.iter().map(|a| a.name.to_lowercase()).collect();
+        let (integrations_on, integration_warnings) = config.integrations_enabled(&installed);
+        warnings.extend(integration_warnings);
+
         for (_, key, title, icon, kw) in BUILTINS {
+            if let Some(name) = Config::integration_for_key(key) {
+                if !integrations_on.contains(&name) {
+                    continue;
+                }
+            }
             commands.push(Command {
                 id: format!("builtin:{key}"),
                 title: title.to_string(),
@@ -1365,6 +1390,7 @@ impl Engine {
                 &[("Remind me to…", false), ("when (tomorrow 9am)", true)],
             ),
             ("builtin:define", &[("word", false)]),
+            ("builtin:spotify-search", &[("artist, track, album or playlist", false)]),
             ("builtin:large-type", &[("text", false)]),
             ("builtin:focus-start", &[("minutes", true), ("goal (optional)", true)]),
             ("builtin:spell", &[("word", false)]),
@@ -1663,6 +1689,30 @@ impl Engine {
             apps.push((id, a.path, a.name));
         }
         apps.sort_by_key(|a| a.2.to_lowercase());
+
+        // An integration puts its verbs on the app row it drives, so the Spotify
+        // row offers Play / Pause and Now Playing without a trip through search.
+        let mut app_actions: HashMap<String, Vec<Action>> = HashMap::new();
+        for (name, app, _, acts) in crate::config::INTEGRATIONS {
+            if !integrations_on.contains(name) {
+                continue;
+            }
+            if let Some(row) = commands
+                .iter()
+                .find(|c| c.kind == CommandKind::App && c.title.eq_ignore_ascii_case(app))
+            {
+                app_actions.insert(
+                    row.id.clone(),
+                    acts.iter()
+                        .map(|(id, title)| Action {
+                            id: (*id).into(),
+                            title: (*title).into(),
+                            key: None,
+                        })
+                        .collect(),
+                );
+            }
+        }
         let app_index: HashMap<String, usize> = apps.iter().enumerate().map(|(i, a)| (a.0.clone(), i)).collect();
 
         if config.general.shortcuts {
@@ -1907,6 +1957,8 @@ impl Engine {
             mcp_prompts,
             extras,
             bookmark_scan,
+            integrations_on,
+            app_actions,
             sidecars,
             local_tz: crate::tz::local_zone_name(),
             zones: Default::default(),
@@ -2589,6 +2641,12 @@ impl Engine {
         self.extras.bookmarks.len()
     }
 
+    /// ⌘-menu actions an integration added to this command (the app row of a
+    /// running integration), if any.
+    pub fn actions_for(&self, id: &str) -> Option<&[Action]> {
+        self.app_actions.get(id).map(|a| a.as_slice())
+    }
+
     pub fn app_paths(&self) -> Vec<&Path> {
         self.apps.iter().map(|a| a.1.as_path()).collect()
     }
@@ -2763,6 +2821,9 @@ impl Engine {
                     Builtin::SpotifyNext => Plan::Ui("spotify-next"),
                     Builtin::SpotifyPrevious => Plan::Ui("spotify-previous"),
                     Builtin::SpotifyNowPlaying => Plan::Ui("spotify-now"),
+                    Builtin::SpotifySearch => {
+                        Plan::OpenUrl(spotify_search_url(args.first().map(|s| s.as_str()).unwrap_or("")))
+                    }
                     Builtin::ActOnSelection => Plan::Ui("selection"),
                     Builtin::StartFocus => Plan::UiArgs {
                         action: "focus-start",
@@ -3260,6 +3321,20 @@ pub fn url_encode(s: &str) -> String {
     out
 }
 
+/// `spotify:search:<query>` — the app exposes no search command over Apple
+/// Events, so the deep link is the only way in without API credentials.
+fn spotify_search_url(query: &str) -> String {
+    let mut out = String::from("spotify:search:");
+    for b in query.trim().bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b' ' => out.push_str("%20"),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3267,6 +3342,32 @@ mod tests {
 
     fn engine_with(layouts: Vec<(String, String, usize)>, extra_toml: &str) -> Engine {
         engine_from(&format!("{DEFAULT_CONFIG}\n{extra_toml}"), layouts)
+    }
+
+    /// An engine whose installed-app list is exactly `apps` — integrations decide
+    /// their own commands from it, so tests need to control it.
+    /// An engine whose installed-app list is exactly `apps`. `integrations`
+    /// rewrites the line the example config ships, because a second `[general]`
+    /// table would not parse.
+    fn engine_apps(apps: Vec<AppEntry>, integrations: Option<&str>) -> Engine {
+        let mut src = DEFAULT_CONFIG.to_string();
+        if let Some(spec) = integrations {
+            let before = src.clone();
+            src = src.replace("integrations = \"auto\"", &format!("integrations = \"{spec}\""));
+            assert_ne!(
+                src, before,
+                "examples/config.toml lost the integrations line tests rewrite"
+            );
+        }
+        let cfg = Config::parse(&src).unwrap();
+        Engine::assemble_with(cfg, "/cfg".into(), apps, vec![], vec![], vec![], Extras::default())
+    }
+
+    fn spotify() -> AppEntry {
+        AppEntry {
+            name: "Spotify".into(),
+            path: "/Applications/Spotify.app".into(),
+        }
     }
 
     fn engine_from(src: &str, layouts: Vec<(String, String, usize)>) -> Engine {
@@ -3545,7 +3646,16 @@ steps = ["ai:nope"]
 
     #[test]
     fn spotify_commands_plan_search_and_share_a_glyph() {
-        let e = engine_with(vec![], "");
+        let e = engine_apps(
+            vec![
+                AppEntry {
+                    name: "Safari".into(),
+                    path: "/Applications/Safari.app".into(),
+                },
+                spotify(),
+            ],
+            None,
+        );
         let ids = [
             "builtin:spotify",
             "builtin:spotify-play",
@@ -3575,6 +3685,7 @@ steps = ["ai:nope"]
         found("spotify now playing", "builtin:spotify-now");
         found("what is playing", "builtin:spotify-now");
         found("spotify next", "builtin:spotify-next");
+        found("spotify search", "builtin:spotify-search");
         // One glyph for the family; the title carries the verb.
         let icons: Vec<String> = e
             .search("spotify", 20)
@@ -3586,6 +3697,110 @@ steps = ["ai:nope"]
         assert!(icons.iter().all(|i| i == "🎧"), "{icons:?}");
         // The media-key family stays: it drives whatever owns Now Playing.
         assert!(e.registry.get("builtin:media-play").is_some());
+    }
+
+    #[test]
+    fn an_integration_turns_itself_on_when_its_app_is_installed() {
+        let e = engine_apps(vec![spotify()], None);
+        assert_eq!(e.integrations_on, vec!["spotify"]);
+        assert!(e.registry.get("builtin:spotify-search").is_some());
+        assert!(e.warnings.is_empty(), "{:?}", e.warnings);
+    }
+
+    #[test]
+    fn switching_an_integration_off_drops_its_whole_command_family() {
+        let e = engine_apps(vec![spotify()], Some("off"));
+        assert!(e.integrations_on.is_empty());
+        for key in [
+            "spotify",
+            "spotify-play",
+            "spotify-next",
+            "spotify-previous",
+            "spotify-now",
+            "spotify-search",
+        ] {
+            assert!(e.registry.get(&format!("builtin:{key}")).is_none(), "{key} survived");
+        }
+        // Media keys are not an integration: they work without any one app.
+        assert!(e.registry.get("builtin:media-play").is_some());
+        assert!(e
+            .search("spotify", 20)
+            .iter()
+            .all(|c| !c.id.starts_with("builtin:spotify")));
+    }
+
+    #[test]
+    fn an_integration_named_without_its_app_says_so() {
+        let e = engine_apps(vec![], Some("spotify"));
+        assert!(e.integrations_on.is_empty());
+        assert!(
+            e.warnings.iter().any(|w| w.contains("Spotify is not installed")),
+            "{:?}",
+            e.warnings
+        );
+    }
+
+    #[test]
+    fn a_typo_in_the_integration_list_is_not_silence() {
+        let e = engine_apps(vec![spotify()], Some("spotipy"));
+        assert!(
+            e.warnings
+                .iter()
+                .any(|w| w.contains("not a known integration") && w.contains("spotify")),
+            "{:?}",
+            e.warnings
+        );
+    }
+
+    #[test]
+    fn auto_can_subtract_one_integration() {
+        let e = engine_apps(vec![spotify()], Some("auto, -spotify"));
+        assert!(e.integrations_on.is_empty());
+        assert!(e.registry.get("builtin:spotify").is_none());
+    }
+
+    #[test]
+    fn the_app_row_carries_the_integration_verbs() {
+        let e = engine_apps(vec![spotify()], None);
+        let acts = e
+            .actions_for("app:/Applications/Spotify.app")
+            .expect("the Spotify app row has no actions");
+        let ids: Vec<&str> = acts.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "spotify",
+                "spotify-play",
+                "spotify-previous",
+                "spotify-next",
+                "spotify-now",
+                "spotify-search"
+            ]
+        );
+        assert_eq!(acts[1].title, "Play / Pause");
+        // Off means off: no commands, and no verbs on the app row either.
+        let off = engine_apps(vec![spotify()], Some("off"));
+        assert!(off.actions_for("app:/Applications/Spotify.app").is_none());
+        // Ordinary rows get nothing.
+        assert!(e.actions_for("builtin:reload").is_none());
+    }
+
+    #[test]
+    fn spotify_search_hands_the_query_to_the_app() {
+        let e = engine_apps(vec![spotify()], None);
+        assert_eq!(
+            e.plan("builtin:spotify-search", &["korol i shut".into()]).unwrap(),
+            Plan::OpenUrl("spotify:search:korol%20i%20shut".into())
+        );
+        // Non-ASCII survives as UTF-8 percent escapes, which the app decodes.
+        assert_eq!(
+            e.plan("builtin:spotify-search", &["сектор".into()]).unwrap(),
+            Plan::OpenUrl("spotify:search:%D1%81%D0%B5%D0%BA%D1%82%D0%BE%D1%80".into())
+        );
+        // The row asks for the query instead of running with none.
+        let row = e.registry.get("builtin:spotify-search").unwrap();
+        assert_eq!(row.arguments.len(), 1);
+        assert!(!row.arguments[0].optional);
     }
 
     #[test]

@@ -55,6 +55,14 @@ drag_snap = false               # drag a window to an edge/corner to snap (⌥ =
 # which command was left without a key.
 window_hotkeys = "rectangle"
 
+# App integrations: bridges to one app's own controls, rather than system-wide
+# keys. "auto" turns one on when its app is installed; "off" drops every
+# integration and its commands; or name them ("spotify", "auto, -spotify").
+# An integration is detachable both ways: switch it off and its commands, its
+# app-row actions and its hotkeys all go away. An unknown name warns instead of
+# quietly doing nothing.
+integrations = "auto"
+
 # In-panel keys. Mods: Cmd, Shift, Alt/Option, Ctrl. Keys: a character, or
 # Tab, Return, Escape, Space, Up, Down, Left, Right, Backspace, Delete, F1-F20.
 [keys]

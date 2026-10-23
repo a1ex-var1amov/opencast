@@ -24,6 +24,13 @@ macOS first; `crates/opencast-core` must stay portable (no platform UI deps).
   `webtext.rs` (HTML → text for page context). Providers
   support tool calling (`ToolSpec`, `ToolCall`, `ChatEvent::ToolCalls`) in
   all three wire formats.
+- **Integrations** (`config::INTEGRATIONS`): a named bridge to one app's own
+  controls (Spotify today). `general.integrations` is `auto` (on when the app is
+  installed), `off`, or a list where `-name` subtracts; a disabled integration
+  registers none of its builtin commands and warns on an unknown name. An
+  integration also attaches ⌘-menu `Action`s to the app row it drives:
+  `Engine::actions_for` feeds `dispatch::attach_actions`, which adds them to the
+  search JSON, and the panel renders `Command.actions`.
 - `crates/opencast-ffi` — macOS C ABI: hotkeys, hyper key, clipboard, CGEvent
   paste/copy, Seek OCR, cached app index, Shortcuts (`shortcuts_mac.rs`),
   `agent.rs` (MCP hub, AI tool loop with approvals), `extensions_mac.rs`
@@ -72,6 +79,10 @@ macOS first; `crates/opencast-core` must stay portable (no platform UI deps).
   reload via the "Reload Commands" command in the launcher
 
 ## Conventions
+- One glyph per command family; the subtitle or title carries the kind or verb.
+- A new `CommandKind` variant must be added to the panel's `Kind` enum as well:
+  the panel drops rows whose kind string it cannot decode, which silently hid
+  every MCP resource and prompt row until both kinds were declared.
 - rustfmt with max_width=120 (rustfmt.toml)
 - No new crate deps without need; keys never in config files
 - Window mgmt/selection grabbing need the macOS Accessibility permission

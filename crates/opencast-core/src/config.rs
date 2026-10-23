@@ -316,6 +316,39 @@ pub struct HotkeyBinding {
 /// One preset row: `(name, what it is, [(key, command id)])`.
 pub type WindowHotkeyPreset = (&'static str, &'static str, &'static [(&'static str, &'static str)]);
 
+/// An optional app integration: name, the app it drives, the builtin commands
+/// it owns, and the ⌘-menu actions the app's row gets. Actions reuse builtin
+/// command ids, so the panel runs them through the same path as the commands.
+pub type Integration = (
+    &'static str,
+    &'static str,
+    &'static [&'static str],
+    &'static [(&'static str, &'static str)],
+);
+
+/// Integrations are detachable: `integrations = "off"` drops the whole family of
+/// commands, and `auto` (the default) only registers one when its app is here.
+pub const INTEGRATIONS: &[Integration] = &[(
+    "spotify",
+    "Spotify",
+    &[
+        "spotify",
+        "spotify-play",
+        "spotify-next",
+        "spotify-previous",
+        "spotify-now",
+        "spotify-search",
+    ],
+    &[
+        ("spotify", "Player Controls…"),
+        ("spotify-play", "Play / Pause"),
+        ("spotify-previous", "Previous Track"),
+        ("spotify-next", "Next Track"),
+        ("spotify-now", "Now Playing"),
+        ("spotify-search", "Search in Spotify…"),
+    ],
+)];
+
 /// Window-manager hotkey presets.
 ///
 /// `rectangle` is Rectangle's ⌃⌥ set — arrows for the halves, U/I/J/K for the
@@ -663,6 +696,11 @@ pub struct General {
     /// `off` binds no window keys at all.
     #[serde(default = "default_window_hotkeys")]
     pub window_hotkeys: String,
+    /// App integrations (Spotify and friends): `auto` turns one on when its app
+    /// is installed, `off` turns all off, or name them (`"spotify"`,
+    /// `"auto, -spotify"`). An unknown name warns instead of doing nothing.
+    #[serde(default = "default_integrations")]
+    pub integrations: String,
     /// Show a small HUD when a hotkey moves a window.
     #[serde(default = "default_true")]
     pub window_hud: bool,
@@ -686,6 +724,10 @@ fn default_window_cycle() -> String {
 
 fn default_window_hotkeys() -> String {
     "off".into()
+}
+
+fn default_integrations() -> String {
+    "auto".into()
 }
 
 fn default_almost() -> f64 {
@@ -754,6 +796,7 @@ impl Default for General {
             window_portrait: default_window_portrait(),
             almost_maximize: default_almost(),
             window_hotkeys: default_window_hotkeys(),
+            integrations: default_integrations(),
             window_hud: true,
             drag_snap: false,
         }
@@ -1404,6 +1447,65 @@ impl Config {
     /// `[[hotkeys]]` plus `hotkey` on `[[commands]]` entries.
     pub fn all_hotkeys(&self) -> Vec<HotkeyBinding> {
         self.all_hotkeys_and_clashes().0
+    }
+
+    /// Which integrations to switch on, given the installed app names
+    /// (lowercased). `auto` means "every integration whose app is here"; a list
+    /// names them, and `-name` subtracts from `auto`. Unknown names and missing
+    /// apps come back as warnings rather than silence.
+    pub fn integrations_enabled(&self, installed: &HashSet<String>) -> (Vec<&'static str>, Vec<String>) {
+        let spec = self.general.integrations.trim().to_lowercase();
+        let mut warnings = Vec::new();
+        let mut on: Vec<&'static str> = Vec::new();
+        if spec.is_empty() || spec == "auto" {
+            on.extend(
+                INTEGRATIONS
+                    .iter()
+                    .filter(|(_, app, _, _)| installed.contains(&app.to_lowercase()))
+                    .map(|(name, _, _, _)| *name),
+            );
+            return (on, warnings);
+        }
+        if spec == "off" || spec == "none" {
+            return (on, warnings);
+        }
+        for raw in spec.split(',').map(|t| t.trim()).filter(|t| !t.is_empty()) {
+            let (subtract, token) = match raw.strip_prefix('-') {
+                Some(rest) => (true, rest),
+                None => (false, raw),
+            };
+            let Some(found) = INTEGRATIONS.iter().find(|(name, _, _, _)| *name == token) else {
+                let names: Vec<&str> = INTEGRATIONS.iter().map(|(name, _, _, _)| *name).collect();
+                warnings.push(format!(
+                    "integrations: `{token}` is not a known integration (try {}), or use \"auto\" / \"off\"",
+                    names.join(", ")
+                ));
+                continue;
+            };
+            let (name, app, _, _) = found;
+            if subtract {
+                on.retain(|n| n != name);
+                continue;
+            }
+            if !installed.contains(&app.to_lowercase()) {
+                warnings.push(format!(
+                    "integrations: {name} is on, but {app} is not installed — nothing to control"
+                ));
+                continue;
+            }
+            if !on.contains(name) {
+                on.push(name);
+            }
+        }
+        (on, warnings)
+    }
+
+    /// The builtin command keys an integration owns, or None for plain builtins.
+    pub fn integration_for_key(key: &str) -> Option<&'static str> {
+        INTEGRATIONS
+            .iter()
+            .find(|(_, _, keys, _)| keys.contains(&key))
+            .map(|(name, _, _, _)| *name)
     }
 
     /// Hotkeys to register, plus notes about preset entries that got no key

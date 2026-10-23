@@ -1000,7 +1000,7 @@ final class Model {
     }
 
     /// Review a captured layout before saving: Return on an app toggles it, Return on Save saves.
-    private func confirmLayout(name: String, apps: [WindowManager.AppWindows], displays: String, excluded: Set<Int>, selected sel: Int) {
+    private func confirmLayout(name: String, apps: [AppWindows], displays: String, excluded: Set<Int>, selected sel: Int) {
         let kept = apps.indices.filter { !excluded.contains($0) }
         var items = [ListItem(title: "Save “\(name)”", subtitle: "\(kept.count) of \(apps.count) apps · Return on an app to leave it out", icon: "💾", arg: "0")]
         for (i, a) in apps.enumerated() {
@@ -1044,7 +1044,7 @@ final class Model {
         updatePreview()
     }
 
-    private func applyLayout(name: String, apps: [WindowManager.AppWindows]) {
+    private func applyLayout(name: String, apps: [AppWindows]) {
         afterHide {
             do {
                 let missing = try WindowManager.applyLayout(apps)
@@ -1826,6 +1826,14 @@ final class Model {
             showSpotify()
         case "spotify-now":
             showSpotifyNow()
+        case "spotify-search":
+            // An app row cannot carry an argument, so jump straight to the
+            // command's argument field instead of opening a search with no query.
+            if let cmd = registryCommand(query: "spotify search", id: "builtin:spotify-search") {
+                showArgs(cmd)
+            } else {
+                showSpotify()
+            }
         case "selection":
             showSelectionActions()
         case "focus-start":
@@ -2626,6 +2634,10 @@ final class Model {
                 ActionRow(id: "run", title: "Run Tool"),
                 ActionRow(id: "copy-tool", title: "Copy Tool Name", key: "cmd+shift+c"),
             ]
+        case .mcpResource:
+            rows = [ActionRow(id: "run", title: "Read Resource")]
+        case .mcpPrompt:
+            rows = [ActionRow(id: "run", title: "Open in Chat")]
         default:
             if id.hasPrefix("note:") {
                 rows = [
@@ -2643,6 +2655,12 @@ final class Model {
             } else {
                 rows = [ActionRow(id: "run", title: "Run")]
             }
+        }
+        // Integration verbs the engine attached to this row (Play / Pause on the
+        // Spotify row, and so on). The engine owns the list, so switching an
+        // integration off takes them away too.
+        for a in command.actions where !rows.contains(where: { $0.id == a.id }) {
+            rows.append(ActionRow(id: a.id, title: a.title, key: a.key))
         }
         rows.append(ActionRow(id: "pin", title: "Pin / Unpin", key: "cmd+shift+p"))
         if Self.takesHotkey(command.id) {
@@ -2934,9 +2952,25 @@ final class Model {
             mode = .search
             search()
         default:
+            // Engine-attached integration verbs share the command router, so one
+            // verb has exactly one implementation.
+            if command.actions.contains(where: { $0.id == actionId }) {
+                mode = .search
+                handleUi(actionId)
+                noteContentChanged()
+                return
+            }
             mode = .search
         }
         noteContentChanged()
+    }
+
+    /// Fetch one registry command by id (engine search is sub-millisecond), for
+    /// actions that need the command's argument field.
+    private func registryCommand(query: String, id: String) -> Command? {
+        let raw = Engine.call(["op": "search", "query": query])
+        let rows = (raw["commands"] as? [[String: Any]])?.compactMap(Command.init) ?? []
+        return rows.first { $0.id == id }
     }
 
     private func togglePinSelected() {

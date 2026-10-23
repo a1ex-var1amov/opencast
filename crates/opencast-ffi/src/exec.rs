@@ -487,6 +487,7 @@ pub async fn run_command(id: String, args: Vec<String>, ctx: ExecContext) -> Exe
             | Builtin::SpotifyNext
             | Builtin::SpotifyPrevious
             | Builtin::SpotifyNowPlaying
+            | Builtin::SpotifySearch
             | Builtin::ActOnSelection
             | Builtin::StartFocus
             | Builtin::StopFocus

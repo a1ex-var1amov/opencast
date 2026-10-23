@@ -174,7 +174,7 @@ enum Theme {
         case .window: return "rectangle.split.2x1"
         case .layout: return "square.stack.3d.up.fill"
         case .shortcut: return "square.2.layers.3d.fill"
-        case .mcp: return "puzzlepiece.extension.fill"
+        case .mcp, .mcpResource, .mcpPrompt: return "puzzlepiece.extension.fill"
         case .builtin: break
         }
         guard let icon = command.icon else { return nil }

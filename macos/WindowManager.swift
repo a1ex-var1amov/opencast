@@ -214,25 +214,6 @@ enum WindowManager {
         NSScreen.screens.first { $0.frameTopLeft.contains(p) }?.frameTopLeft
     }
 
-    struct SavedWindow: Codable {
-        var title: String
-        var x: Double
-        var y: Double
-        var w: Double
-        var h: Double
-    }
-
-    struct AppWindows: Codable {
-        var app: String
-        var bundleId: String?
-        var windows: [SavedWindow]
-
-        enum CodingKeys: String, CodingKey {
-            case app, windows
-            case bundleId = "bundle_id"
-        }
-    }
-
     /// Every visible window of every regular app, in AX (top-left) coordinates.
     static func captureLayout() throws -> [AppWindows] {
         guard accessibilityTrusted else { throw WMError.permission }

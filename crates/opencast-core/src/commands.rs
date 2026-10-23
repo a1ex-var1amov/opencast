@@ -105,6 +105,17 @@ pub struct Argument {
     pub secure: bool,
 }
 
+/// A ⌘-menu action the panel offers on a command row. Integrations attach these
+/// to the app row they drive, so the Spotify row carries Play / Pause and Now
+/// Playing instead of making the user hunt for them in the command list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Action {
+    pub id: String,
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Command {
