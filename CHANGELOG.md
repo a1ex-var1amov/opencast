@@ -7,6 +7,17 @@ first tag is in `git log`.
 ## Unreleased
 
 ### Added
+- **Spotify, driven directly.** The media-key commands follow whatever owns Now
+  Playing — a browser tab counts — and read nothing back, so *Next Track* could
+  skip a video and *what is playing?* had no answer. **Spotify** opens a live list:
+  the current track and where you are in it, Play/Pause, Next, Previous, Seek
+  ±10s, Volume Up/Down, Now Playing (Return copies the track line) and Open
+  Spotify; the list re-reads after each press, so Next twice is two presses.
+  **Spotify Play / Pause**, **Spotify Next Track**, **Spotify Previous Track** and
+  **Spotify Now Playing** are commands too, ready for a hotkey. No Shuffle or
+  Repeat row: this Spotify takes `set shuffling` and ignores it, and its own menu
+  has no such item to press, so the launcher does not pretend. Spotify starts when
+  it was not up, and the first use asks the usual automation question.
 - **Keyboard Shortcuts drills down**: the command lists the running apps (the
   one you were in first), Return opens that app's shortcut list with the key
   equivalent in the hotkey column, and Return there activates the app and

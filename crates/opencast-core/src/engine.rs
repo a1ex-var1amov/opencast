@@ -79,6 +79,11 @@ pub enum Builtin {
     MediaPlayPause,
     MediaNext,
     MediaPrevious,
+    Spotify,
+    SpotifyPlay,
+    SpotifyNext,
+    SpotifyPrevious,
+    SpotifyNowPlaying,
     ActOnSelection,
     StartFocus,
     StopFocus,
@@ -427,6 +432,52 @@ const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
         "Previous Track",
         "⏮",
         &["music", "back", "song", "media"],
+    ),
+    // The Spotify family talks to Spotify itself: media keys follow whatever owns
+    // Now Playing (a browser tab included) and cannot read anything back.
+    (
+        Builtin::Spotify,
+        "spotify",
+        "Spotify",
+        "🎧",
+        &[
+            "music",
+            "player",
+            "track",
+            "album",
+            "playlist",
+            "volume",
+            "shuffle",
+            "now playing",
+        ],
+    ),
+    (
+        Builtin::SpotifyPlay,
+        "spotify-play",
+        "Spotify Play / Pause",
+        "🎧",
+        &["music", "pause", "resume", "player"],
+    ),
+    (
+        Builtin::SpotifyNext,
+        "spotify-next",
+        "Spotify Next Track",
+        "🎧",
+        &["music", "skip", "song", "player"],
+    ),
+    (
+        Builtin::SpotifyPrevious,
+        "spotify-previous",
+        "Spotify Previous Track",
+        "🎧",
+        &["music", "back", "song", "player"],
+    ),
+    (
+        Builtin::SpotifyNowPlaying,
+        "spotify-now",
+        "Spotify Now Playing",
+        "🎧",
+        &["music", "track", "song", "album", "what is playing", "player"],
     ),
     (
         Builtin::ActOnSelection,
@@ -2707,6 +2758,11 @@ impl Engine {
                     Builtin::MediaPlayPause => Plan::Ui("media-play"),
                     Builtin::MediaNext => Plan::Ui("media-next"),
                     Builtin::MediaPrevious => Plan::Ui("media-previous"),
+                    Builtin::Spotify => Plan::Ui("spotify"),
+                    Builtin::SpotifyPlay => Plan::Ui("spotify-play"),
+                    Builtin::SpotifyNext => Plan::Ui("spotify-next"),
+                    Builtin::SpotifyPrevious => Plan::Ui("spotify-previous"),
+                    Builtin::SpotifyNowPlaying => Plan::Ui("spotify-now"),
                     Builtin::ActOnSelection => Plan::Ui("selection"),
                     Builtin::StartFocus => Plan::UiArgs {
                         action: "focus-start",
@@ -3485,6 +3541,51 @@ steps = ["ai:nope"]
         assert!(icons.iter().all(|i| i == "🗔"), "{icons:?}");
         assert!(WindowAction::SpaceMoveNext.is_space_move());
         assert!(!WindowAction::SpaceNext.is_space_move());
+    }
+
+    #[test]
+    fn spotify_commands_plan_search_and_share_a_glyph() {
+        let e = engine_with(vec![], "");
+        let ids = [
+            "builtin:spotify",
+            "builtin:spotify-play",
+            "builtin:spotify-next",
+            "builtin:spotify-previous",
+            "builtin:spotify-now",
+        ];
+        for id in ids {
+            assert!(e.registry.get(id).is_some(), "{id} has no row");
+        }
+        assert_eq!(e.plan("builtin:spotify", &[]).unwrap(), Plan::Ui("spotify"));
+        assert_eq!(e.plan("builtin:spotify-play", &[]).unwrap(), Plan::Ui("spotify-play"));
+        assert_eq!(e.plan("builtin:spotify-next", &[]).unwrap(), Plan::Ui("spotify-next"));
+        assert_eq!(
+            e.plan("builtin:spotify-previous", &[]).unwrap(),
+            Plan::Ui("spotify-previous")
+        );
+        assert_eq!(e.plan("builtin:spotify-now", &[]).unwrap(), Plan::Ui("spotify-now"));
+        let found = |q: &str, id: &str| {
+            assert!(
+                e.search(q, 12).iter().any(|c| c.id == id),
+                "'{q}' missed {id}: {:?}",
+                e.search(q, 12).iter().map(|c| c.id.as_str()).collect::<Vec<_>>()
+            )
+        };
+        found("spotify", "builtin:spotify");
+        found("spotify now playing", "builtin:spotify-now");
+        found("what is playing", "builtin:spotify-now");
+        found("spotify next", "builtin:spotify-next");
+        // One glyph for the family; the title carries the verb.
+        let icons: Vec<String> = e
+            .search("spotify", 20)
+            .iter()
+            .filter(|c| c.id.starts_with("builtin:spotify"))
+            .map(|c| c.icon.clone().unwrap_or_default())
+            .collect();
+        assert!(icons.len() >= 4, "only {icons:?}");
+        assert!(icons.iter().all(|i| i == "🎧"), "{icons:?}");
+        // The media-key family stays: it drives whatever owns Now Playing.
+        assert!(e.registry.get("builtin:media-play").is_some());
     }
 
     #[test]

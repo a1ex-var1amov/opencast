@@ -42,7 +42,9 @@ macOS first; `crates/opencast-core` must stay portable (no platform UI deps).
   drag to snap), `PageContext` (front browser tab), `CompareModels`,
   `ListFilter` (fuzzy typing inside panel-side lists) and `ShortcutApps` (the
   Keyboard Shortcuts drill-down: running apps → that app's menu shortcuts →
-  press one), `Dictation` (+ Dictate Anywhere HUD)
+  press one), `Spotify` (+ `SpotifyText`, the parsed player state: these talk to
+  Spotify by Apple Event, unlike the media-key commands), `Dictation` (+ Dictate
+  Anywhere HUD)
 - Panel ↔ engine is JSON over `opencast_call`; panel-only features come back
   as `ExecResult::Ui { action }`
 - `examples/config.toml` — default config, embedded via include_str!

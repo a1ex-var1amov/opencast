@@ -112,5 +112,41 @@ check(ShortcutApps.rows([
 ], front: nil).count == 1, "name case does not make two rows")
 check(ShortcutApps.rows([], front: nil).isEmpty, "no running apps, no rows")
 
+// MARK: - What Spotify reports, and what the Spotify list offers
+
+let sep = SpotifyTrack.sep
+let loaded = SpotifyTrack.parse("playing\(sep)The Weeknd\(sep)Blinding Lights\(sep)After Hours\(sep)true\(sep)false\(sep)60")
+check(loaded.playing && loaded.artist == "The Weeknd" && loaded.track == "Blinding Lights", "a loaded player parses")
+check(loaded.shuffle && !loaded.repeatOn && loaded.volume == 60, "booleans and volume come through")
+check(loaded.line == "Blinding Lights — The Weeknd · After Hours", "the track line reads like a now-playing strip")
+check(loaded.facts == "playing · shuffle on · volume 60", "the facts line says what the player is doing")
+
+let bare = SpotifyTrack.parse("paused")
+check(bare.running && !bare.playing && bare.line.isEmpty, "no track loaded is not no player")
+check(bare.facts == "paused" && bare.volume == -1, "missing fields stay missing instead of zero")
+check(SpotifyTrack.parse("").state.isEmpty && !SpotifyTrack.parse("").running, "an empty answer means not running")
+check(SpotifyTrack.parse("stopped").line.isEmpty && !SpotifyTrack.parse("stopped").running, "stopped reads as stopped")
+
+let playingRows = SpotifyTrack.rows(for: loaded)
+check(playingRows[0].title == "Pause" && playingRows[0].verb == "pause", "a playing list starts with Pause")
+check(playingRows[1].verb == "next" && playingRows[2].verb == "previous", "skip and back follow right behind")
+check(playingRows.contains(where: { $0.title == "Volume Up" && $0.subtitle == "now 60" }), "volume rows say where the volume is")
+check(!playingRows.contains(where: { $0.title.contains("Shuffle") || $0.title.contains("Repeat") }),
+      "no shuffle or repeat row: Spotify ignores those writes, so the launcher does not promise them")
+check(playingRows.contains(where: { $0.title == "Seek Forward 10s" && $0.subtitle.isEmpty }),
+      "seek rows appear without a position to report")
+
+let mid = SpotifyTrack.parse("playing\(sep)x\(sep)y\(sep)z\(sep)false\(sep)false\(sep)40\(sep)112.5\(sep)221000")
+check(mid.progress == "1:52 / 3:41", "the progress line reads like a player strip")
+check(mid.facts == "playing · 1:52 / 3:41 · volume 40", "progress sits between the state and the volume")
+check(SpotifyTrack.parse("playing\(sep)x\(sep)y\(sep)z\(sep)false\(sep)false\(sep)40\(sep)112,5").position == 112.5,
+      "a comma decimal mark still parses")
+check(SpotifyTrack.rows(for: mid).contains(where: { $0.title == "Seek Back 10s" && $0.subtitle == "1:52 / 3:41" }),
+      "seek rows show where in the song you are")
+
+check(SpotifyTrack.rows(for: bare)[0].title == "Play", "a paused list starts with Play")
+check(SpotifyTrack.rows(for: SpotifyTrack()).contains(where: { $0.title == "Volume Up" && $0.subtitle == "+10" }),
+      "with no volume read, the row just promises +10")
+
 print("\n\(checks - failures)/\(checks) panel logic checks passed")
 exit(failures == 0 ? 0 : 1)

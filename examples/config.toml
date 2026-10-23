@@ -258,6 +258,10 @@ prompt = "{input}"
 # command = "ai:fix-grammar"     # fix the selected text anywhere
 
 # [[hotkeys]]
+# key = "Ctrl+Alt+P"
+# command = "Spotify Play / Pause"  # always Spotify, whatever owns Now Playing
+
+# [[hotkeys]]
 # key = "Hyper+C"                # Caps Lock + C when hyperkey = true
 # command = "Click Text"         # type what you see on screen, OpenCast clicks it
 

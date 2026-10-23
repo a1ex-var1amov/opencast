@@ -41,7 +41,10 @@ echo "== Binary archs: $(lipo -archs "$APP/Contents/MacOS/OpenCast") =="
 # Strip local symbols from the final binary (what `strip = true` was meant to do).
 strip -x "$APP/Contents/MacOS/OpenCast" 2>/dev/null
 if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
-  codesign --force --deep --sign "$APPLE_SIGNING_IDENTITY" "$APP" || exit 1
+  # No secure timestamp: codesign would phone Apple's timestamp server and stall
+  # (indefinitely on a sick network). A dev build is not notarized anyway; the
+  # release script signs with a timestamp and notarizes.
+  codesign --force --deep --timestamp=none --sign "$APPLE_SIGNING_IDENTITY" "$APP" || exit 1
 fi
 rm -rf "$HOME/Applications/OpenCast.app"
 ditto "$APP" "$HOME/Applications/OpenCast.app" || exit 1

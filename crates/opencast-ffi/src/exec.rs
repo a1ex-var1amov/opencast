@@ -133,6 +133,9 @@ const UI_WITHOUT_PANEL: &[&str] = &[
     "media-play",
     "media-next",
     "media-previous",
+    "spotify-play",
+    "spotify-next",
+    "spotify-previous",
     "large-type",
     "note-editor",
     "focus-stop",
@@ -479,6 +482,11 @@ pub async fn run_command(id: String, args: Vec<String>, ctx: ExecContext) -> Exe
             | Builtin::MediaPlayPause
             | Builtin::MediaNext
             | Builtin::MediaPrevious
+            | Builtin::Spotify
+            | Builtin::SpotifyPlay
+            | Builtin::SpotifyNext
+            | Builtin::SpotifyPrevious
+            | Builtin::SpotifyNowPlaying
             | Builtin::ActOnSelection
             | Builtin::StartFocus
             | Builtin::StopFocus

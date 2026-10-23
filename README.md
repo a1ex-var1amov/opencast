@@ -522,6 +522,13 @@ as is):
 - **System**: Restart, Shut Down, Log Out, Quit All Apps (these ask first;
   `confirm_destructive`), Toggle Hidden Files, Hide All Apps Except Front, Show
   Desktop, plus Lock, Sleep, Empty Trash, Eject, volume and brightness.
+- **Spotify**: **Spotify** opens the player's own list — the current track and
+  where you are in it, play/pause, next, previous, seek ±10s, volume, and Now
+  Playing (Return there copies the track line). **Spotify Play / Pause**,
+  **Spotify Next Track**, **Spotify Previous Track** and **Spotify Now Playing**
+  are commands of their own, so a hotkey can drive Spotify even when a browser tab
+  owns Now Playing. No shuffle or repeat rows: Spotify ignores those script writes
+  and has no menu item for them, so the launcher leaves them out.
 - **Emoji**: every Unicode emoji by name (`emoji pretzel`), recent ones first,
   `emoji_skin_tone` applied.
 - **AI presets** (`[[ai_presets]]`): a chat with its own model, prompt and MCP

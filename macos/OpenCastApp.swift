@@ -1814,6 +1814,18 @@ final class Model {
         case "media-play", "media-next", "media-previous":
             hide()
             MediaKeys.press(action)
+        case "spotify-play", "spotify-next", "spotify-previous":
+            guard Spotify.installed else {
+                flash("Spotify is not installed", error: true, thenHide: false)
+                return
+            }
+            hide()
+            let verb = action == "spotify-play" ? "toggle" : (action == "spotify-next" ? "next" : "previous")
+            if let problem = Spotify.control(verb) { flash(problem, error: true, thenHide: false) }
+        case "spotify":
+            showSpotify()
+        case "spotify-now":
+            showSpotifyNow()
         case "selection":
             showSelectionActions()
         case "focus-start":
@@ -2305,6 +2317,62 @@ final class Model {
         noteContentChanged()
         focusTick += 1
         updatePreview()
+    }
+
+    /// "Spotify": the player's own state and controls. The media-key commands above
+    /// follow whatever owns Now Playing; these always reach Spotify and can read it.
+    func showSpotify() {
+        guard Spotify.installed else {
+            flash("Spotify is not installed", error: true, thenHide: false)
+            return
+        }
+        let track = Spotify.state()
+        var items: [ListItem] = []
+        var verbs: [String] = []
+        if !track.line.isEmpty {
+            items.append(ListItem(title: track.line, subtitle: track.facts, icon: "🎧", arg: "copy"))
+            verbs.append("copy")
+        }
+        for row in SpotifyTrack.rows(for: track) {
+            items.append(ListItem(title: row.title, subtitle: row.subtitle.isEmpty ? nil : row.subtitle, icon: "🎧", arg: row.verb))
+            verbs.append(row.verb)
+        }
+        showLocalList(id: "spotify", title: "Spotify", icon: "🎧", items: items) { i in
+            guard verbs.indices.contains(i) else { return }
+            let verb = verbs[i]
+            if verb == "copy" {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(track.line, forType: .string)
+                self.flash("copied: \(track.line)", error: false, thenHide: false)
+                return
+            }
+            if verb == "open" {
+                self.hide()
+                Spotify.control("open")
+                return
+            }
+            // Stay put and re-read: pressing Next twice should be two presses, not
+            // two trips through the launcher.
+            if let problem = Spotify.control(verb) {
+                self.flash(problem, error: true, thenHide: false)
+            }
+            Model.shared.showSpotify()
+        }
+    }
+
+    func showSpotifyNow() {
+        guard Spotify.installed else {
+            flash("Spotify is not installed", error: true, thenHide: false)
+            return
+        }
+        let track = Spotify.state()
+        let text = if track.line.isEmpty {
+            track.state.isEmpty ? "Spotify is not running." : "Spotify is \(track.state) with nothing loaded."
+        } else {
+            "\(track.line)\n\(track.facts)"
+        }
+        show()
+        mode = .output(title: "Now Playing", text: text)
     }
 
     /// "Keyboard Shortcuts": every running app with a menu bar. Pick one and you

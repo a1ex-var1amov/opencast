@@ -11,7 +11,7 @@ ARCH=$(uname -m)
 mkdir -p target/tests
 swiftc -O -target "${ARCH}-apple-macos14.0" \
   macos/DeepLink.swift macos/MeetingLinks.swift macos/SnippetMatch.swift macos/SpaceLabel.swift \
-  macos/ListFilter.swift macos/ShortcutApps.swift \
+  macos/ListFilter.swift macos/ShortcutApps.swift macos/SpotifyText.swift \
   macos-tests/main.swift \
   -o target/tests/panel-logic || exit 1
 ./target/tests/panel-logic
