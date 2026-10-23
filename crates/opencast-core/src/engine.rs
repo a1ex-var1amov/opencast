@@ -1222,6 +1222,14 @@ impl Engine {
         }
         let (router, router_warnings) = Router::from_config(&config);
         warnings.extend(router_warnings);
+        // A window-hotkey preset that doesn't exist is a typo, not "off".
+        let preset = config.general.window_hotkeys.trim();
+        if !preset.is_empty() && preset != "off" && crate::config::window_hotkey_preset(preset).is_none() {
+            warnings.push(format!(
+                "[general] window_hotkeys = \"{preset}\" is not a preset; use {} or \"off\"",
+                crate::config::window_hotkey_preset_names()
+            ));
+        }
         let theme = match config.load_theme(&config_dir) {
             Ok(t) => t,
             Err(e) => {
@@ -3141,7 +3149,11 @@ mod tests {
     use crate::config::DEFAULT_CONFIG;
 
     fn engine_with(layouts: Vec<(String, String, usize)>, extra_toml: &str) -> Engine {
-        let cfg = Config::parse(&format!("{DEFAULT_CONFIG}\n{extra_toml}")).unwrap();
+        engine_from(&format!("{DEFAULT_CONFIG}\n{extra_toml}"), layouts)
+    }
+
+    fn engine_from(src: &str, layouts: Vec<(String, String, usize)>) -> Engine {
+        let cfg = Config::parse(src).unwrap();
         let apps = vec![AppEntry {
             name: "Safari".into(),
             path: "/Applications/Safari.app".into(),
@@ -3152,6 +3164,33 @@ mod tests {
         )
         .unwrap();
         Engine::assemble(cfg, "/cfg".into(), apps, vec![script], layouts, vec![])
+    }
+
+    #[test]
+    fn the_window_key_preset_resolves_and_a_typo_is_reported() {
+        // The default config ships the Rectangle set, so every one of its ids
+        // must name a real command (a bad id would warn on every launch).
+        let e = engine_with(vec![], "");
+        let (bindings, warnings) = e.hotkey_bindings();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        for (_, id) in crate::config::window_hotkey_preset("rectangle")
+            .unwrap()
+            .iter()
+            .copied()
+        {
+            assert!(bindings.iter().any(|(_, b)| b == id), "{id} is not bound");
+        }
+        let e = engine_from(
+            &DEFAULT_CONFIG.replace("window_hotkeys = \"rectangle\"", "window_hotkeys = \"retangle\""),
+            vec![],
+        );
+        assert!(
+            e.warnings
+                .iter()
+                .any(|w| w.contains("retangle") && w.contains("`rectangle`")),
+            "{:?}",
+            e.warnings
+        );
     }
 
     fn engine() -> Engine {
@@ -3342,15 +3381,16 @@ steps = ["ai:nope"]
             "#,
         );
         let (bindings, warnings) = e.hotkey_bindings();
+        let has = |k: &str, id: &str| bindings.iter().any(|(bk, bi)| bk == k && bi == id);
+        assert!(has("Ctrl+Alt+Left", "window:left-half"), "{bindings:?}");
+        assert!(has("Cmd+Alt+S", "app:/Applications/Safari.app"));
+        assert!(has("Cmd+Alt+G", "ai:fix-grammar"));
+        // The default Act on Selection hotkey.
+        assert!(has("Hyper+Space", "builtin:selection"));
         assert_eq!(
-            bindings,
-            vec![
-                ("Ctrl+Alt+Left".to_string(), "window:left-half".to_string()),
-                ("Cmd+Alt+S".to_string(), "app:/Applications/Safari.app".to_string()),
-                ("Cmd+Alt+G".to_string(), "ai:fix-grammar".to_string()),
-                // The default Act on Selection hotkey.
-                ("Hyper+Space".to_string(), "builtin:selection".to_string()),
-            ]
+            bindings.iter().filter(|(_, id)| id == "window:left-half").count(),
+            1,
+            "your binding replaces the preset one instead of adding a second"
         );
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("No Such Thing"));

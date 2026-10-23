@@ -25,7 +25,8 @@ the core is portable.
   per-command AI options (`temperature`, `output = "replace"`).
 - **Window management** (Rectangle-style): halves, quarters, thirds, two
   thirds, sixths, maximize, almost maximize, move between displays, grow and
-  shrink, undo — searchable or bound to hotkeys. Repeating a half cycles its
+  shrink, undo — searchable or bound to hotkeys (Rectangle's own key set is one
+  line away: `window_hotkeys = "rectangle"`). Repeating a half cycles its
   size, a highlighted command outlines where the window will go, hotkeys show a
   small HUD, *Arrange Window* is a picker grid, and `drag_snap` adds
   drag-to-edge snapping. Your own positions go in `[[window_commands]]`.
@@ -131,8 +132,23 @@ key = "Cmd+Alt+G"
 command = "ai:fix-grammar"   # run an AI command on the selection
 ```
 
-No window hotkeys ship enabled, so OpenCast won't fight Rectangle if you still
-run it.
+Window keys come from a preset, and the config you start with enables
+Rectangle's:
+
+```toml
+window_hotkeys = "rectangle"   # ⌃⌥ + arrows for the halves, U I J K for the
+                               # corners, D E F T G for the thirds, ⌃⌥⌅ to
+                               # maximize, ⌃⌥⌫ to put it back, ⌃⌥= / ⌃⌥- bigger
+                               # and smaller, ⌃⌥⌘ + arrows for displays
+```
+
+`"spectacle"` installs the ⌥⌘ set Rectangle registers out of the box (and that
+Spectacle used before it); `"off"` binds nothing. Use `"off"` while Rectangle,
+Magnet or Hammerspoon is still running — two apps registering the same keys means
+only one of them gets the press. Your own bindings always win: a `[[hotkeys]]`
+entry on the same keys, or a rebind in the Window tab, replaces just that one
+preset entry. The code default is `"off"`; the preset is opt-in for anyone whose
+config predates it.
 
 Window behaviour lives in `[general]`: `window_gap` and `screen_margin`
 (points), `window_cycle` (`sizes`: pressing Left Half again goes ½ → ⅔ → ⅓;

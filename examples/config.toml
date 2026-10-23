@@ -40,6 +40,16 @@ almost_maximize = 0.9           # size of Almost Maximize, as a fraction of the 
 window_hud = true               # brief "Left Half" HUD when a hotkey moves a window
 drag_snap = false               # drag a window to an edge/corner to snap (⌥ = thirds); off when macOS tiling is on
 
+# Window keys to install. "rectangle" is the set Rectangle uses: ⌃⌥ + arrows for
+# the halves, U I J K for the corners, D E F T G for the thirds, ⌃⌥⌅ to maximize,
+# ⌃⌥⌫ to put a window back, ⌃⌥= / ⌃⌥- bigger and smaller, ⌃⌥⌘ + arrows for
+# displays. "spectacle" is the ⌥⌘ set Rectangle registers out of the box (and
+# Spectacle used). Keys you bind yourself always win over a preset entry, so
+# rebind one in the Window tab and only that one changes.
+# Use "off" if Rectangle, Magnet or Hammerspoon is still running — two apps
+# grabbing the same keys means whoever registers first wins.
+window_hotkeys = "rectangle"
+
 # In-panel keys. Mods: Cmd, Shift, Alt/Option, Ctrl. Keys: a character, or
 # Tab, Return, Escape, Space, Up, Down, Left, Right, Backspace, Delete, F1-F20.
 [keys]
@@ -198,12 +208,14 @@ prompt = "{input}"
 #   Third, Top/Middle/Bottom Third, First/Last/Top/Bottom Two Thirds, the Sixths
 #   (incl. Middle Left/Right Sixth), Maximize, Almost Maximize,
 #   Maximize Height/Width, Center, Reasonable Size, Make Larger/Smaller,
-#   Move Left/Right/Up/Down, Next/Previous Display, Display 1-3,
-#   Toggle Fullscreen, Restore Window Size, Undo Window Action.
+#   Move Left/Right/Up/Down, Next/Previous Display, Display 1-3, Full Screen,
+#   Exit Full Screen, Toggle Fullscreen, Restore Window Size, Undo Window Action.
 #   "Arrange Window" shows them all as a grid with a live preview.
-# No window hotkeys ship enabled, so nothing clashes with Rectangle if you
-# still run it. The "Use Caps Lock as Launcher Key" script remaps Caps Lock
-# to F18; after running it you can set hotkey = "F18" in [general].
+# The keys come from `window_hotkeys` above ("rectangle" here). Set it to "off"
+# if you still run Rectangle, Magnet or Hammerspoon — two apps registering the
+# same keys means only one of them gets the press. The "Use Caps Lock as Launcher
+# Key" script remaps Caps Lock to F18; after running it you can set
+# hotkey = "F18" in [general].
 # ---------------------------------------------------------------------------
 
 # Your own window positions, searchable and bindable like the built-ins.

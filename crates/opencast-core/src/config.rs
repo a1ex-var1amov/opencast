@@ -313,6 +313,84 @@ pub struct HotkeyBinding {
     pub command: String,
 }
 
+/// One preset row: `(name, what it is, [(key, command id)])`.
+pub type WindowHotkeyPreset = (&'static str, &'static str, &'static [(&'static str, &'static str)]);
+
+/// Window-manager hotkey presets.
+///
+/// `rectangle` is Rectangle's ⌃⌥ set — arrows for the halves, U/I/J/K for the
+/// corners, D/E/F/T/G for the thirds, ⌫ to put a window back, = and - bigger and
+/// smaller. `spectacle` is the ⌥⌘ set Rectangle registers out of the box and
+/// that Spectacle used before it. Keys are `[[hotkeys]]` syntax; only tiles
+/// OpenCast actually has are bound (Rectangle's Center Two Thirds is not one).
+pub const WINDOW_HOTKEY_PRESETS: &[WindowHotkeyPreset] = &[
+    (
+        "rectangle",
+        "Rectangle's set (⌃⌥ arrows, U I J K, D E F T G)",
+        &[
+            ("Ctrl+Alt+Left", "window:left-half"),
+            ("Ctrl+Alt+Right", "window:right-half"),
+            ("Ctrl+Alt+Up", "window:top-half"),
+            ("Ctrl+Alt+Down", "window:bottom-half"),
+            ("Ctrl+Alt+U", "window:top-left"),
+            ("Ctrl+Alt+I", "window:top-right"),
+            ("Ctrl+Alt+J", "window:bottom-left"),
+            ("Ctrl+Alt+K", "window:bottom-right"),
+            ("Ctrl+Alt+D", "window:first-third"),
+            ("Ctrl+Alt+E", "window:first-two-thirds"),
+            ("Ctrl+Alt+F", "window:center-third"),
+            ("Ctrl+Alt+T", "window:last-two-thirds"),
+            ("Ctrl+Alt+G", "window:last-third"),
+            ("Ctrl+Alt+Enter", "window:maximize"),
+            ("Ctrl+Alt+Shift+Up", "window:maximize-height"),
+            ("Ctrl+Alt+C", "window:center"),
+            ("Ctrl+Alt+Backspace", "window:restore"),
+            ("Ctrl+Alt+=", "window:make-larger"),
+            ("Ctrl+Alt+-", "window:make-smaller"),
+            ("Ctrl+Alt+Cmd+Left", "window:previous-display"),
+            ("Ctrl+Alt+Cmd+Right", "window:next-display"),
+        ],
+    ),
+    (
+        "spectacle",
+        "Spectacle's set (⌥⌘ arrows; Rectangle's own default)",
+        &[
+            ("Cmd+Alt+Left", "window:left-half"),
+            ("Cmd+Alt+Right", "window:right-half"),
+            ("Cmd+Alt+Up", "window:top-half"),
+            ("Cmd+Alt+Down", "window:bottom-half"),
+            ("Cmd+Alt+F", "window:maximize"),
+            ("Cmd+Alt+C", "window:center"),
+            ("Ctrl+Cmd+Left", "window:top-left"),
+            ("Ctrl+Cmd+Right", "window:top-right"),
+            ("Ctrl+Cmd+Shift+Left", "window:bottom-left"),
+            ("Ctrl+Cmd+Shift+Right", "window:bottom-right"),
+            ("Ctrl+Alt+Shift+Up", "window:maximize-height"),
+            ("Ctrl+Alt+Shift+Right", "window:make-larger"),
+            ("Ctrl+Alt+Shift+Left", "window:make-smaller"),
+            ("Ctrl+Alt+Cmd+Left", "window:previous-display"),
+            ("Ctrl+Alt+Cmd+Right", "window:next-display"),
+            ("Ctrl+Alt+Backspace", "window:restore"),
+        ],
+    ),
+];
+
+pub fn window_hotkey_preset(name: &str) -> Option<&'static [(&'static str, &'static str)]> {
+    WINDOW_HOTKEY_PRESETS
+        .iter()
+        .find(|(n, _, _)| n.eq_ignore_ascii_case(name.trim()))
+        .map(|(_, _, keys)| *keys)
+}
+
+/// For the warning when a config names a preset that does not exist.
+pub fn window_hotkey_preset_names() -> String {
+    WINDOW_HOTKEY_PRESETS
+        .iter()
+        .map(|(n, _, _)| format!("`{n}`"))
+        .collect::<Vec<_>>()
+        .join(" or ")
+}
+
 /// `[[commands]]`: tweak any command, including apps and builtins.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandOverride {
@@ -562,6 +640,10 @@ pub struct General {
     /// Almost Maximize size, as a fraction of the screen.
     #[serde(default = "default_almost")]
     pub almost_maximize: f64,
+    /// Window keys to install: `off`, `rectangle` or `spectacle` (see
+    /// `WINDOW_HOTKEY_PRESETS`). `off` binds no window keys at all.
+    #[serde(default = "default_window_hotkeys")]
+    pub window_hotkeys: String,
     /// Show a small HUD when a hotkey moves a window.
     #[serde(default = "default_true")]
     pub window_hud: bool,
@@ -581,6 +663,10 @@ fn default_window_portrait() -> String {
 
 fn default_window_cycle() -> String {
     "sizes".into()
+}
+
+fn default_window_hotkeys() -> String {
+    "off".into()
 }
 
 fn default_almost() -> f64 {
@@ -648,6 +734,7 @@ impl Default for General {
             window_cycle: default_window_cycle(),
             window_portrait: default_window_portrait(),
             almost_maximize: default_almost(),
+            window_hotkeys: default_window_hotkeys(),
             window_hud: true,
             drag_snap: false,
         }
@@ -1343,6 +1430,34 @@ impl Config {
                 });
             }
         }
+        // A preset fills in the standard window keys last, so anything written by
+        // hand wins: a binding on the same keys, or an explicit `hotkey =` for
+        // that command (which is how rebinding in the Settings app works).
+        if let Some(set) = window_hotkey_preset(&self.general.window_hotkeys) {
+            let norm = crate::keymap::normalize_hotkey;
+            let rebound = |id: &str| {
+                // An override may name the command by id or by title.
+                let title = id
+                    .strip_prefix("window:")
+                    .and_then(crate::engine::WindowAction::from_key)
+                    .map(|a| a.title().to_lowercase());
+                let mine = |c: &str| c == id || title.as_deref().is_some_and(|t| c.eq_ignore_ascii_case(t));
+                self.commands
+                    .iter()
+                    .any(|c| mine(&c.match_) && c.hotkey.as_deref().is_some_and(|k| !k.trim().is_empty()))
+                    || self.hotkeys.iter().any(|h| mine(&h.command))
+            };
+            for (key, id) in set {
+                let taken = rebound(id)
+                    || norm(key).is_some_and(|k| out.iter().any(|h| norm(&h.key).as_deref() == Some(k.as_str())));
+                if !taken {
+                    out.push(HotkeyBinding {
+                        key: (*key).into(),
+                        command: (*id).into(),
+                    });
+                }
+            }
+        }
         out
     }
 
@@ -1685,7 +1800,8 @@ mod writer_tests {
     fn command_hotkeys_set_replace_clear_and_conflict() {
         let dir = tempfile::tempdir().unwrap();
         let base = format!(
-            "{DEFAULT_CONFIG}\n[[hotkeys]]\nkey = \"Ctrl+Alt+Left\"\ncommand = \"Left Half\"\n\n[[commands]]\nmatch = \"builtin:clipboard\"\nalias = \"cb\"\n"
+            "{}\n[[hotkeys]]\nkey = \"Ctrl+Alt+Left\"\ncommand = \"Left Half\"\n\n[[commands]]\nmatch = \"builtin:clipboard\"\nalias = \"cb\"\n",
+            DEFAULT_CONFIG.replace("window_hotkeys = \"rectangle\"", "window_hotkeys = \"off\"")
         );
         std::fs::write(dir.path().join("config.toml"), &base).unwrap();
         set_command_hotkey(dir.path(), "builtin:clipboard", "Hyper+V").unwrap();
@@ -1781,5 +1897,115 @@ mod writer_tests {
         assert!(!glob_match("github__*", "gitlab__x"));
         assert!(glob_match("exact", "exact"));
         assert!(glob_match("*", "anything"));
+    }
+}
+
+#[cfg(test)]
+mod window_hotkey_tests {
+    use super::*;
+
+    /// Window bindings only, in normalized key form.
+    fn window_keys(cfg: &Config) -> Vec<(String, String)> {
+        cfg.all_hotkeys()
+            .into_iter()
+            .filter(|h| h.command.starts_with("window:"))
+            .map(|h| (crate::keymap::normalize_hotkey(&h.key).unwrap(), h.command))
+            .collect()
+    }
+
+    fn off(src: &str) -> String {
+        src.replace("window_hotkeys = \"rectangle\"", "window_hotkeys = \"off\"")
+    }
+
+    #[test]
+    fn no_window_keys_when_told_off() {
+        let c = Config::parse(&off(DEFAULT_CONFIG)).unwrap();
+        assert!(window_keys(&c).is_empty());
+    }
+
+    #[test]
+    fn the_rectangle_preset_binds_the_standard_set() {
+        let c = Config::parse(DEFAULT_CONFIG).unwrap();
+        assert_eq!(c.general.window_hotkeys, "rectangle", "the default config ships these");
+        let got = window_keys(&c);
+        assert_eq!(got.len(), 21, "{got:?}");
+        let find = |k: &str| {
+            got.iter()
+                .find(|(nk, _)| nk == k)
+                .map(|(_, id)| id.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(find("alt+ctrl+left"), "window:left-half");
+        assert_eq!(find("alt+ctrl+u"), "window:top-left");
+        assert_eq!(find("alt+ctrl+g"), "window:last-third");
+        assert_eq!(find("alt+ctrl+return"), "window:maximize");
+        assert_eq!(find("alt+ctrl+backspace"), "window:restore");
+        assert_eq!(find("alt+ctrl+="), "window:make-larger");
+        assert_eq!(find("alt+ctrl+-"), "window:make-smaller");
+        assert_eq!(find("alt+cmd+ctrl+right"), "window:next-display");
+        assert_eq!(find("alt+ctrl+shift+up"), "window:maximize-height");
+    }
+
+    #[test]
+    fn your_own_binding_beats_the_preset() {
+        let extra = "[[hotkeys]]\nkey = \"Ctrl+Alt+Left\"\ncommand = \"builtin:clipboard\"\n\n\
+                     [[commands]]\nmatch = \"window:maximize\"\nhotkey = \"Cmd+Alt+M\"\n";
+        let c = Config::parse(&format!("{DEFAULT_CONFIG}\n{extra}")).unwrap();
+        let got = window_keys(&c);
+        assert_eq!(
+            got.iter().filter(|(k, _)| k == "alt+ctrl+left").count(),
+            0,
+            "the preset took a key you already use: {got:?}"
+        );
+        assert_eq!(
+            got.iter()
+                .find(|(_, id)| id == "window:maximize")
+                .map(|(k, _)| k.as_str()),
+            Some("alt+cmd+m"),
+            "a rebind replaces the preset key instead of adding a second one"
+        );
+        assert!(got.iter().any(|(k, _)| k == "alt+ctrl+j"), "the rest of the set stays");
+    }
+
+    #[test]
+    fn a_rebind_by_title_replaces_the_preset_entry_too() {
+        let extra = "[[commands]]\nmatch = \"Top Left Quarter\"\nhotkey = \"Cmd+Alt+Q\"\n";
+        let c = Config::parse(&format!("{DEFAULT_CONFIG}\n{extra}")).unwrap();
+        let all: Vec<(String, String)> = c
+            .all_hotkeys()
+            .into_iter()
+            .map(|h| (crate::keymap::normalize_hotkey(&h.key).unwrap(), h.command))
+            .collect();
+        assert!(all.iter().any(|(k, cmd)| k == "alt+cmd+q" && cmd == "Top Left Quarter"));
+        assert!(!all.iter().any(|(_, cmd)| cmd == "window:top-left"), "{all:?}");
+    }
+
+    #[test]
+    fn the_spectacle_preset_is_a_different_set() {
+        let src = off(DEFAULT_CONFIG).replace("window_hotkeys = \"off\"", "window_hotkeys = \"spectacle\"");
+        let c = Config::parse(&src).unwrap();
+        let got = window_keys(&c);
+        assert_eq!(got.len(), 16, "{got:?}");
+        assert!(got
+            .iter()
+            .any(|(k, id)| k == "alt+cmd+down" && id == "window:bottom-half"));
+        assert!(got
+            .iter()
+            .any(|(k, id)| k == "cmd+ctrl+shift+right" && id == "window:bottom-right"));
+        assert!(!got.iter().any(|(k, _)| k == "alt+ctrl+u"));
+    }
+
+    #[test]
+    fn every_preset_key_parses_and_points_at_a_real_window_action() {
+        for (_, what, set) in WINDOW_HOTKEY_PRESETS {
+            for (key, id) in set.iter().copied() {
+                assert!(crate::keymap::normalize_hotkey(key).is_some(), "{key} in {what}");
+                let action = id.strip_prefix("window:").unwrap();
+                assert!(
+                    crate::engine::WindowAction::from_key(action).is_some(),
+                    "{id} in {what}"
+                );
+            }
+        }
     }
 }

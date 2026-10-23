@@ -176,4 +176,18 @@ mod tests {
         assert_ne!(hyper, toggle);
         assert_eq!(hyper, "Ctrl+Alt+Cmd+Shift+K".parse::<HotKey>().unwrap());
     }
+
+    /// A preset key the parser rejects would just never fire, silently.
+    #[test]
+    fn every_preset_window_key_parses() {
+        for (name, _, set) in opencast_core::config::WINDOW_HOTKEY_PRESETS {
+            let mut seen = std::collections::HashSet::new();
+            for &(key, id) in set.iter() {
+                let Ok(parsed) = key.parse::<HotKey>() else {
+                    panic!("{name} preset: `{key}` ({id}) is not a hotkey");
+                };
+                assert!(seen.insert(parsed), "{name} preset: `{key}` duplicates another entry");
+            }
+        }
+    }
 }

@@ -7,6 +7,14 @@ first tag is in `git log`.
 ## Unreleased
 
 ### Added
+- **Rectangle's window hotkeys, in one line**: `window_hotkeys = "rectangle"` in
+  `[general]` installs ⌃⌥ + arrows for the halves, U I J K for the quarters, D E
+  F T G for the thirds, ⌃⌥⌅ maximize, ⌃⌥⌫ put it back, ⌃⌥= / ⌃⌥- bigger and
+  smaller, ⌃⌥⌘ + arrows for displays. `"spectacle"` gives the ⌥⌘ set Rectangle
+  registers out of the box; `"off"` (the code default, and what configs written
+  before this keep) binds nothing, as before. Keys you bind yourself — in
+  `[[hotkeys]]` or by recording one in the Window tab — replace just that preset
+  entry. New installs get the Rectangle set from the example config.
 - **Full Screen** and **Exit Full Screen** window commands next to **Toggle
   Fullscreen**. Bind them to different hotkeys (⌃⌘F in, and whatever gets you
   out), and pressing one when it does not apply says so — “that window is
