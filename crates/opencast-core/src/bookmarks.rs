@@ -196,6 +196,123 @@ pub fn dedup(list: Vec<Bookmark>) -> Vec<Bookmark> {
     list.into_iter().filter(|b| seen.insert(b.url.clone())).collect()
 }
 
+/// What the bookmark stores on this machine look like, without reading them.
+/// A store that is there but cannot be opened means OpenCast lacks Full Disk
+/// Access — which is the usual reason "bookmarks don't work", and until now it
+/// failed silently: no cache, no results, no message.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Scan {
+    /// Stores found and readable.
+    pub found: Vec<String>,
+    /// Stores present but unreadable (permission denied).
+    pub blocked: Vec<String>,
+}
+
+/// `~/Library/Safari/Bookmarks.plist` — Safari's store, FDA-protected.
+pub fn safari_store(home: &Path) -> PathBuf {
+    home.join("Library/Safari/Bookmarks.plist")
+}
+
+/// Arc's sidebar store (older Arc; newer versions keep nothing readable).
+pub fn arc_store(app_support: &Path) -> PathBuf {
+    app_support.join("Arc/StorableSidebar.json")
+}
+
+/// Open it without reading the contents: TCC answers with a permission error.
+fn openable(path: &Path) -> bool {
+    match std::fs::File::open(path) {
+        Ok(_) => true,
+        Err(e) => {
+            // A missing file is not a blocked one.
+            e.kind() != std::io::ErrorKind::NotFound
+                && e.kind() != std::io::ErrorKind::PermissionDenied
+                // macOS reports `Operation not permitted` as Uncategorized.
+                && e.raw_os_error() != Some(1)
+        }
+    }
+}
+
+fn exists(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok()
+}
+
+/// Look at every store without reading it (a few `stat`s, safe on a hot path).
+pub fn scan(app_support: &Path, home: &Path) -> Scan {
+    let mut s = Scan::default();
+    for (name, rel) in CHROMIUM {
+        let base = app_support.join(rel);
+        if !exists(&base) {
+            continue;
+        }
+        if base.join("Bookmarks").is_file() {
+            // Opera keeps it at the top level.
+            s.found.push((*name).to_string());
+            continue;
+        }
+        match std::fs::read_dir(&base) {
+            Ok(entries) => {
+                if entries.flatten().any(|e| e.path().join("Bookmarks").is_file()) {
+                    s.found.push((*name).to_string());
+                }
+            }
+            // A browser folder you cannot list is a browser folder you cannot read.
+            Err(_) => s.blocked.push((*name).to_string()),
+        }
+    }
+    // Arc and Safari are single files.
+    for (name, path) in [("Arc", arc_store(app_support)), ("Safari", safari_store(home))] {
+        if !exists(&path) {
+            continue;
+        }
+        if openable(&path) {
+            s.found.push(name.to_string());
+        } else {
+            s.blocked.push(name.to_string());
+        }
+    }
+    s.found.sort();
+    s.blocked.sort();
+    s
+}
+
+/// The stores on this machine, wherever this OS keeps them. Non-macOS browsers
+/// live elsewhere, so the scan comes back empty and the message says so.
+pub fn scan_here() -> Scan {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/"));
+    if cfg!(target_os = "macos") {
+        scan(&home.join("Library/Application Support"), &home)
+    } else {
+        Scan::default()
+    }
+}
+
+/// Why a bookmark search would come up empty. Always worth showing when the
+/// cache is empty: "nothing found" is otherwise indistinguishable from a bug.
+pub fn why_empty(scan: &Scan) -> String {
+    let browsers = "Chrome, Brave, Edge, Vivaldi, Chromium, Opera, Arc and Safari";
+    if !scan.blocked.is_empty() {
+        let stores = scan.blocked.join(", ");
+        let many = if scan.blocked.len() == 1 { "" } else { "s" };
+        return format!(
+            "OpenCast cannot read your {stores} bookmark store{many}, so there is nothing to search. \
+             Grant Full Disk Access: run the \u{201c}Privacy: Full Disk Access\u{201d} command, switch OpenCast \
+             on in System Settings \u{2192} Privacy & Security \u{2192} Full Disk Access, then relaunch OpenCast. \
+             (Safari's bookmarks live in ~/Library/Safari, which macOS protects from every app.)"
+        );
+    }
+    if scan.found.is_empty() {
+        return format!(
+            "No browser bookmark store was found. OpenCast reads {browsers}; the cache is written to \
+             bookmarks.json in the config folder when OpenCast starts."
+        );
+    }
+    let stores = scan.found.join(", ");
+    let many = if scan.found.len() == 1 { "" } else { "s" };
+    format!("OpenCast read your {stores} bookmark store{many} but found no web bookmarks in them.")
+}
+
 /// `bm …` / `bookmarks …` lists bookmarks; a plain 3+ letter query shows a few.
 pub fn needle(query: &str) -> (Option<String>, bool) {
     let q = query.trim().to_lowercase();
@@ -246,9 +363,84 @@ pub fn matching(list: &[Bookmark], query: &str) -> Vec<crate::commands::Command>
         .collect()
 }
 
+/// Make a path unreadable (tests only; a no-op where the mode API is absent).
+#[cfg(test)]
+fn hide(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stores_are_found_or_blocked_by_permission() {
+        let root = tempfile::tempdir().unwrap();
+        let support = root.path().join("AppSupport");
+        let home = root.path().join("home");
+        // Chrome: a profile with a Bookmarks file.
+        let profile = support.join("Google/Chrome/Default");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(profile.join("Bookmarks"), "{}").unwrap();
+        // Safari: a plist that exists but may not be opened.
+        let safari = home.join("Library/Safari");
+        std::fs::create_dir_all(&safari).unwrap();
+        let plist = safari.join("Bookmarks.plist");
+        std::fs::write(&plist, "bookmarks").unwrap();
+        hide(&plist);
+
+        let scan = scan(&support, &home);
+        assert_eq!(scan.found, vec!["Chrome".to_string()]);
+        // Running as root would read it fine, so only assert what really failed.
+        if std::fs::File::open(&plist).is_err() {
+            assert_eq!(scan.blocked, vec!["Safari".to_string()]);
+            let why = why_empty(&scan);
+            assert!(why.contains("Safari") && why.contains("Full Disk Access"), "{why}");
+        } else {
+            assert_eq!(scan.found, vec!["Chrome".to_string(), "Safari".to_string()]);
+        }
+    }
+
+    #[test]
+    fn a_browser_folder_that_cannot_be_listed_is_blocked() {
+        let root = tempfile::tempdir().unwrap();
+        let support = root.path().join("AppSupport");
+        let chrome = support.join("Google/Chrome");
+        std::fs::create_dir_all(&chrome).unwrap();
+        hide(&chrome);
+        let scan = scan(&support, &root.path().join("home"));
+        if std::fs::read_dir(&chrome).is_err() {
+            assert_eq!(scan.blocked, vec!["Chrome".to_string()]);
+            assert!(why_empty(&scan).contains("Full Disk Access"));
+        }
+    }
+
+    #[test]
+    fn no_stores_at_all_names_the_browsers_it_tried() {
+        let root = tempfile::tempdir().unwrap();
+        let scan = scan(&root.path().join("nope"), &root.path().join("home"));
+        assert!(scan.found.is_empty() && scan.blocked.is_empty());
+        let why = why_empty(&scan);
+        assert!(why.contains("Chrome") && why.contains("Safari"), "{why}");
+    }
+
+    #[test]
+    fn readable_stores_with_nothing_in_them_say_that_too() {
+        let root = tempfile::tempdir().unwrap();
+        let support = root.path().join("AppSupport");
+        let profile = support.join("BraveSoftware/Brave-Browser/Default");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(profile.join("Bookmarks"), "{}").unwrap();
+        let scan = scan(&support, &root.path().join("home"));
+        assert_eq!(scan.found, vec!["Brave".to_string()]);
+        assert!(why_empty(&scan).contains("Brave"), "{}", why_empty(&scan));
+    }
 
     #[test]
     fn parses_chromium() {

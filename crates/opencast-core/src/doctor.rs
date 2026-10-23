@@ -199,6 +199,26 @@ pub fn run(engine: &Engine, load_time: Option<Duration>) -> Report {
         }
     }
 
+    // Bookmarks: an empty cache is usually a permission, not an empty browser.
+    let bm = engine.bookmark_count();
+    if bm > 0 {
+        report.push(
+            Level::Ok,
+            format!(
+                "{bm} bookmark(s) cached from {}",
+                if engine.bookmark_scan.found.is_empty() {
+                    "the cache file".to_string()
+                } else {
+                    engine.bookmark_scan.found.join(", ")
+                }
+            ),
+        );
+    } else if !engine.bookmark_scan.blocked.is_empty() {
+        report.push(Level::Warn, crate::bookmarks::why_empty(&engine.bookmark_scan));
+    } else {
+        report.push(Level::Ok, "no browser bookmarks cached");
+    }
+
     // Extensions.
     let exts = crate::extensions::list(&engine.scripts_dir());
     if !exts.is_empty() {

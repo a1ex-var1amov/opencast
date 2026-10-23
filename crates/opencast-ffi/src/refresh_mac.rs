@@ -28,17 +28,27 @@ fn plist_json(path: &Path) -> Option<String> {
 
 pub fn refresh_bookmarks(config_dir: &Path) -> bool {
     let support = home().join("Library/Application Support");
+    let scan = bookmarks::scan(&support, &home());
+    if !scan.blocked.is_empty() {
+        // Without Full Disk Access macOS answers "Operation not permitted";
+        // the launcher tells the user rather than caching nothing quietly.
+        eprintln!(
+            "opencast: bookmarks: cannot read {} — needs Full Disk Access (System Settings \u{2192} Privacy & Security \u{2192} Full Disk Access)",
+            scan.blocked.join(", ")
+        );
+    }
     let mut all: Vec<Bookmark> = Vec::new();
     for (name, file) in bookmarks::chromium_files(&support) {
         if let Ok(text) = std::fs::read_to_string(&file) {
             all.extend(bookmarks::parse_chromium(&text, &name));
         }
     }
-    if let Ok(text) = std::fs::read_to_string(support.join("Arc/StorableSidebar.json")) {
+    if let Ok(text) = std::fs::read_to_string(bookmarks::arc_store(&support)) {
         all.extend(bookmarks::parse_arc(&text));
     }
-    // Safari's folder needs Full Disk Access; without it this is silently skipped.
-    if let Some(json) = plist_json(&home().join("Library/Safari/Bookmarks.plist")) {
+    // Safari's folder needs Full Disk Access; without it this is skipped, and
+    // the scan above is what reports it.
+    if let Some(json) = plist_json(&bookmarks::safari_store(&home())) {
         all.extend(bookmarks::parse_safari(&json));
     }
     bookmarks::save_cache(config_dir, &bookmarks::dedup(all))

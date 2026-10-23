@@ -1162,6 +1162,9 @@ pub struct Engine {
     /// `mcp:<server>:prompt:<name>` → prompt template a server exposes.
     mcp_prompts: HashMap<String, crate::mcp::McpPrompt>,
     extras: Extras,
+    /// Which browser bookmark stores exist here, and which OpenCast may not read.
+    /// Lets the bookmarks command explain an empty result instead of showing none.
+    pub bookmark_scan: crate::bookmarks::Scan,
     sidecars: RwLock<Sidecars>,
     /// This Mac's time zone (`America/New_York`).
     local_tz: String,
@@ -1821,6 +1824,10 @@ impl Engine {
         }
 
         let sidecars = RwLock::new(Sidecars::load(&config_dir));
+        // Not a load-time warning: whether a browser store is readable depends on
+        // what this machine has and what TCC allows, and a fresh install must stay
+        // warning-free. Doctor and the Bookmarks command both say it out loud.
+        let bookmark_scan = crate::bookmarks::scan_here();
         let mut engine = Self {
             config,
             config_dir,
@@ -1840,6 +1847,7 @@ impl Engine {
             mcp_resources,
             mcp_prompts,
             extras,
+            bookmark_scan,
             sidecars,
             local_tz: crate::tz::local_zone_name(),
             zones: Default::default(),
@@ -2517,6 +2525,11 @@ impl Engine {
     }
 
     /// Every indexed app bundle, sorted by name (icon prefetch).
+    /// Bookmarks currently in the cache (search never reads the store files).
+    pub fn bookmark_count(&self) -> usize {
+        self.extras.bookmarks.len()
+    }
+
     pub fn app_paths(&self) -> Vec<&Path> {
         self.apps.iter().map(|a| a.1.as_path()).collect()
     }
@@ -2693,7 +2706,17 @@ impl Engine {
                     },
                     Builtin::StopFocus => Plan::Ui("focus-stop"),
                     Builtin::PauseFocus => Plan::Ui("focus-pause"),
-                    Builtin::SearchBookmarks => Plan::FillQuery("bm ".into()),
+                    Builtin::SearchBookmarks => {
+                        if self.extras.bookmarks.is_empty() {
+                            // Empty and silent looks broken; tell them why.
+                            Plan::ShowText {
+                                title: "Bookmarks".into(),
+                                text: crate::bookmarks::why_empty(&self.bookmark_scan),
+                            }
+                        } else {
+                            Plan::FillQuery("bm ".into())
+                        }
+                    }
                     Builtin::EditNote => Plan::UiArgs {
                         action: "note-editor",
                         args: vec![],
@@ -3858,6 +3881,33 @@ steps = ["ai:nope"]
         if std::path::Path::new("/usr/share/zoneinfo/Asia/Tokyo").exists() {
             assert!(e.search("time in tokyo", 5)[0].title.contains("Tokyo"));
         }
+    }
+
+    #[test]
+    fn an_empty_bookmark_cache_says_why() {
+        let mut e = engine_with(vec![], "");
+        e.bookmark_scan = Default::default();
+        match e.plan("builtin:bookmarks", &[]).unwrap() {
+            Plan::ShowText { title, text } => {
+                assert_eq!(title, "Bookmarks");
+                assert!(text.contains("No browser bookmark store"), "{text}");
+            }
+            other => panic!("{other:?}"),
+        }
+        // Stores that exist but cannot be opened are a permission, not a bug.
+        e.bookmark_scan.blocked = vec!["Chrome".into(), "Safari".into()];
+        match e.plan("builtin:bookmarks", &[]).unwrap() {
+            Plan::ShowText { text, .. } => assert!(
+                text.contains("Full Disk Access") && text.contains("Chrome") && text.contains("Safari"),
+                "{text}"
+            ),
+            other => panic!("{other:?}"),
+        }
+        // Cached bookmarks keep the old behaviour.
+        assert_eq!(
+            engine_with_extras("").plan("builtin:bookmarks", &[]).unwrap(),
+            Plan::FillQuery("bm ".into())
+        );
     }
 
     fn engine_with_extras(extra_toml: &str) -> Engine {
