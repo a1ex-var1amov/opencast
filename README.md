@@ -107,7 +107,10 @@ would fight over the same global hotkeys.
 ## Windows and layouts
 
 Type "half", "maximize", "third"… in the launcher to snap the window you were
-just using (Rectangle-style). **Remember Layout** saves every visible window's
+just using (Rectangle-style). Full screen has its own rows too — **Full Screen**,
+**Exit Full Screen** and the **Toggle Fullscreen** you may already have bound —
+so a hotkey does the one thing you expect and says so when it can't.
+**Remember Layout** saves every visible window's
 position under a name; **Restore Layout: \<name\>** puts everything back and
 launches apps that aren't running. Multi-monitor placement is restored as
 absolute coordinates, so a layout saved on your desk works best on your desk.

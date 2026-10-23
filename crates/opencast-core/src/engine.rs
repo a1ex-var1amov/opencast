@@ -756,6 +756,8 @@ pub enum WindowAction {
     NextDisplay,
     PreviousDisplay,
     ToggleFullscreen,
+    Fullscreen,
+    ExitFullscreen,
     RestoreSize,
     Undo,
 }
@@ -842,6 +844,10 @@ pub const WINDOW_ACTIONS: &[(WindowAction, &str, &str, &str)] = &[
     (WindowAction::MoveUp, "move-up", "Move Up", "⤒"),
     (WindowAction::MoveDown, "move-down", "Move Down", "⤓"),
     (WindowAction::ToggleFullscreen, "fullscreen", "Toggle Fullscreen", "⤢"),
+    // Explicit enter/exit: bindable separately, and they say what happened
+    // instead of silently doing the other thing.
+    (WindowAction::Fullscreen, "full-screen", "Full Screen", "⤢"),
+    (WindowAction::ExitFullscreen, "exit-fullscreen", "Exit Full Screen", "⤡"),
     (WindowAction::Undo, "undo", "Undo Window Move", "↶"),
     (WindowAction::NextDisplay, "next-display", "Next Display", "→"),
     (
@@ -3272,6 +3278,17 @@ steps = ["ai:nope"]
             e.plan("window:left-half", &[]).unwrap(),
             Plan::Window(WindowAction::LeftHalf)
         );
+        // Full screen has an enter and an exit, not only a toggle.
+        for (id, a) in [
+            ("window:fullscreen", WindowAction::ToggleFullscreen),
+            ("window:full-screen", WindowAction::Fullscreen),
+            ("window:exit-fullscreen", WindowAction::ExitFullscreen),
+        ] {
+            assert_eq!(e.plan(id, &[]).unwrap(), Plan::Window(a), "{id}");
+            assert!(e.registry.get(id).is_some(), "{id} has no row");
+        }
+        assert_eq!(e.search("exit full screen", 5)[0].id, "window:exit-fullscreen");
+        assert_eq!(e.search("full screen", 3)[0].kind, CommandKind::Window);
         assert!(e.plan("window:diagonal", &[]).is_err());
         assert_eq!(e.plan("seek", &[]).unwrap(), Plan::Seek);
         assert_eq!(

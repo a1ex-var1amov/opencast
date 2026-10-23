@@ -7,6 +7,10 @@ first tag is in `git log`.
 ## Unreleased
 
 ### Added
+- **Full Screen** and **Exit Full Screen** window commands next to **Toggle
+  Fullscreen**. Bind them to different hotkeys (⌃⌘F in, and whatever gets you
+  out), and pressing one when it does not apply says so — “that window is
+  already full screen” — instead of quietly doing the opposite.
 - MCP servers contribute more than tools. A server that advertises **resources**
   gets one command per document (Return reads it into the panel; the URI and MIME
   type show in the preview); one that advertises **prompt templates** gets a

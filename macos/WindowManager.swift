@@ -73,9 +73,18 @@ enum WindowManager {
         guard let current = frame(of: window) else { throw WMError.message("could not read the window frame") }
 
         switch action {
-        case "fullscreen":
+        case "fullscreen", "full-screen", "exit-fullscreen":
             let on = boolAttribute(window, "AXFullScreen")
-            AXUIElementSetAttributeValue(window, "AXFullScreen" as CFString, on ? kCFBooleanFalse : kCFBooleanTrue)
+            let want: Bool = switch action {
+            case "full-screen": true
+            case "exit-fullscreen": false
+            default: !on
+            }
+            if action != "fullscreen" && want == on {
+                let why = if want { "that window is already full screen" } else { "that window is not full screen" }
+                throw WMError.message(why)
+            }
+            AXUIElementSetAttributeValue(window, "AXFullScreen" as CFString, want ? kCFBooleanTrue : kCFBooleanFalse)
             return nil
         case "undo":
             guard let i = history.firstIndex(where: { CFEqual($0.window, window) }), let prev = history[i].frames.popLast() else {
@@ -98,7 +107,7 @@ enum WindowManager {
             break
         }
         if boolAttribute(window, "AXFullScreen") {
-            throw WMError.message("Can't move a fullscreen window — Toggle Fullscreen first")
+            throw WMError.message("Can't move a fullscreen window — Exit Full Screen first")
         }
         var cycle = 0
         if let l = lastSnap, l.action == action, CFEqual(l.window, window), current.near(l.target, 3) {
