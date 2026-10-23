@@ -78,6 +78,8 @@ struct Command: Identifiable, Equatable, Sendable {
         // and every MCP resource and prompt silently disappears from search.
         case mcpResource = "mcpresource"
         case mcpPrompt = "mcpprompt"
+        /// Engine sent a kind string the panel has not seen yet.
+        case unknown
 
         var label: String {
             switch self {
@@ -92,10 +94,11 @@ struct Command: Identifiable, Equatable, Sendable {
             case .file: "File"
             case .snippet: "Snippet"
             case .clipboard: "Clipboard"
-            case .shortcut: "Shortcut"
+            case .shortcut: "Shortcuts"
             case .mcp: "MCP Tool"
             case .mcpResource: "MCP Resource"
             case .mcpPrompt: "MCP Prompt"
+            case .unknown: "Unknown"
             }
         }
     }
@@ -103,12 +106,17 @@ struct Command: Identifiable, Equatable, Sendable {
     init?(_ raw: [String: Any]) {
         guard let id = raw["id"] as? String,
               let title = raw["title"] as? String,
-              let kind = (raw["kind"] as? String).flatMap(Kind.init(rawValue:))
+              let kindRaw = raw["kind"] as? String
         else { return nil }
+        let kind = Kind(rawValue: kindRaw) ?? .unknown
         self.id = id
         self.title = title
         self.kind = kind
-        subtitle = raw["subtitle"] as? String
+        var sub = raw["subtitle"] as? String
+        if kind == .unknown, sub == nil || sub?.isEmpty == true {
+            sub = "kind: \(kindRaw)"
+        }
+        subtitle = sub
         icon = raw["icon"] as? String
         arguments = (raw["arguments"] as? [[String: Any]])?.compactMap(Argument.init) ?? []
         hotkey = raw["hotkey"] as? String

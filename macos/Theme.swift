@@ -24,6 +24,7 @@ enum Theme {
     }
 
     /// Row/field font: the theme's family when it names one that exists.
+    // ponytail: fixed pt sizes; AX-2 upgrade path is @ScaledMetric(relativeTo:) on views.
     static func font(size: Double, weight: Font.Weight = .regular) -> Font {
         if let name = file.font, !name.isEmpty, NSFont(name: name, size: CGFloat(size)) != nil {
             return .custom(name, size: CGFloat(size)).weight(weight)
@@ -74,6 +75,16 @@ enum Theme {
     /// Accessibility → Display → Reduce transparency.
     static var reduceTransparency: Bool {
         NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+    }
+
+    /// Accessibility → Display → Reduce motion.
+    static var reduceMotion: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+
+    /// Accessibility → Display → Increase contrast.
+    static var increaseContrast: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
     }
 
     /// Opaque fallback when glass is off (Reduce transparency or solid toast contrast).
@@ -175,7 +186,7 @@ enum Theme {
         case .layout: return "square.stack.3d.up.fill"
         case .shortcut: return "square.2.layers.3d.fill"
         case .mcp, .mcpResource, .mcpPrompt: return "puzzlepiece.extension.fill"
-        case .builtin: break
+        case .builtin, .unknown: break
         }
         guard let icon = command.icon else { return nil }
         // Drop U+FE0F / U+FE0E so ⚙️ and ⚙ (and ☀️/☀) share one row.
@@ -231,18 +242,11 @@ enum Theme {
         "builtin:config": "folder.fill",
         "builtin:scripts": "folder.badge.gearshape",
         "builtin:quit": "power",
-        "builtin:theme-system": "desktopcomputer",
-        "builtin:theme-light": "sun.max.fill",
-        "builtin:theme-dark": "moon.stars.fill",
-        "builtin:presentation-island": "rectangle.topthird.inset.filled",
-        "builtin:presentation-spotlight": "circle.dashed",
+        "builtin:appearance": "circle.lefthalf.filled",
+        "builtin:panel-position": "rectangle.topthird.inset.filled",
         "builtin:settings": "gearshape.fill",
         "builtin:shortcuts": "keyboard.fill",
-        "builtin:stay-awake-off": "zzz",
-        "builtin:stay-awake-indefinite": "cup.and.saucer.fill",
-        "builtin:stay-awake-30m": "cup.and.saucer.fill",
-        "builtin:stay-awake-1h": "cup.and.saucer.fill",
-        "builtin:stay-awake-3h": "cup.and.saucer.fill",
+        "builtin:stay-awake": "cup.and.saucer.fill",
         "builtin:clipboard": "clipboard.fill",
         "builtin:screenshots": "photo.on.rectangle.angled",
         "builtin:paste-latest-screenshot": "photo.badge.arrow.down.fill",

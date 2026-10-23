@@ -243,14 +243,9 @@ pub async fn run_command(id: String, args: Vec<String>, ctx: ExecContext) -> Exe
             action: key,
             frac: None,
         },
-        Plan::Seek => match crate::window_mgmt::seek_scan().await {
-            Ok(scan) => {
-                host::emit(serde_json::json!({ "type": "seek", "scan": scan }));
-                // Not Hide: without `clicking` set, Hide would dismiss the island.
-                ExecResult::ClickMode
-            }
-            Err(e) => err(format!("{e:#}")),
-        },
+        // OCR runs in-process in the panel (SeekOCR / Vision). ClickMode keeps
+        // the island up; Swift starts the scan when it applies this result.
+        Plan::Seek => ExecResult::ClickMode,
         Plan::Layout(op) => match op {
             LayoutOp::Remember(name) => ExecResult::Layout {
                 op: "capture".into(),
@@ -434,16 +429,9 @@ pub async fn run_command(id: String, args: Vec<String>, ctx: ExecContext) -> Exe
                     err(format!("MCP · {n} tools · {}", errors.join(" · ")))
                 }
             }
-            Builtin::ThemeSystem
-            | Builtin::ThemeLight
-            | Builtin::ThemeDark
-            | Builtin::PresentationIsland
-            | Builtin::PresentationSpotlight
-            | Builtin::StayAwakeOff
-            | Builtin::StayAwakeIndefinite
-            | Builtin::StayAwake30m
-            | Builtin::StayAwake1h
-            | Builtin::StayAwake3h
+            Builtin::Appearance
+            | Builtin::PanelPosition
+            | Builtin::StayAwake
             | Builtin::Settings
             | Builtin::Shortcuts
             | Builtin::ClipboardHistory
@@ -493,6 +481,7 @@ pub async fn run_command(id: String, args: Vec<String>, ctx: ExecContext) -> Exe
             | Builtin::StopFocus
             | Builtin::PauseFocus
             | Builtin::SearchBookmarks
+            | Builtin::SearchHistory
             | Builtin::EditNote
             | Builtin::Restart
             | Builtin::ShutDown

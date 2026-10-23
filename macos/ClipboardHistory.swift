@@ -282,21 +282,50 @@ final class ClipboardHistory {
     }
 
     func delete(_ id: String) {
-        guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
-        removeFiles(entries[i])
-        entries.remove(at: i)
-        thumbCache.removeValue(forKey: id)
-        scheduleSave()
+        guard let taken = take(id) else { return }
+        discardFiles(taken.entry)
     }
 
     func deleteAll(keepPinned: Bool = true) {
-        let kept = keepPinned ? entries.filter(\.pinned) : []
-        for e in entries where !(keepPinned && e.pinned) {
-            removeFiles(e)
-            thumbCache.removeValue(forKey: e.id)
-        }
-        entries = kept
+        let removed = takeAll(keepPinned: keepPinned)
+        for e in removed { discardFiles(e) }
+    }
+
+    /// Soft-remove for undo: drop from the list, keep media files until `discardFiles`.
+    @discardableResult
+    func take(_ id: String) -> (entry: Entry, index: Int)? {
+        guard let i = entries.firstIndex(where: { $0.id == id }) else { return nil }
+        let e = entries.remove(at: i)
         scheduleSave()
+        return (e, i)
+    }
+
+    func restore(_ entry: Entry, at index: Int) {
+        let i = min(max(0, index), entries.count)
+        entries.insert(entry, at: i)
+        scheduleSave()
+    }
+
+    @discardableResult
+    func takeAll(keepPinned: Bool = true) -> [Entry] {
+        let removed = keepPinned ? entries.filter { !$0.pinned } : entries
+        entries = keepPinned ? entries.filter(\.pinned) : []
+        scheduleSave()
+        return removed
+    }
+
+    func restoreMany(_ removed: [Entry]) {
+        entries.append(contentsOf: removed)
+        entries.sort { a, b in
+            if a.pinned != b.pinned { return a.pinned && !b.pinned }
+            return a.at > b.at
+        }
+        scheduleSave()
+    }
+
+    func discardFiles(_ entry: Entry) {
+        removeFiles(entry)
+        thumbCache.removeValue(forKey: entry.id)
     }
 
     func pasteLatestScreenshot() -> String? {

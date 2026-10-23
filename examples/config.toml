@@ -13,7 +13,7 @@ script_timeout_secs = 30
 script_login_shell = true       # run scripts via `$SHELL -lc` so Homebrew/nvm/pyenv are on PATH
 # theme_file = "themes/mine.toml"   # colours, radius, sizes — see examples/themes/
 # What to show when a query has fewer than fallback_threshold strong hits, in order.
-# Entries: command ids/titles, "quicklinks" (every {query} quicklink), "files" (Spotlight).
+# Entries: command ids/titles, "quicklinks" (every {query} quicklink), "files" (Spotlight), "web" (DuckDuckGo).
 fallbacks = ["quicklinks", "files"]
 fallback_threshold = 3
 shortcuts = true                # list your Shortcuts.app shortcuts as commands
@@ -79,6 +79,7 @@ dictate = "Cmd+D"               # on-device dictation into the field
 quick_look = "Cmd+Y"
 preview = "Cmd+I"               # show / hide the preview pane
 large_type = "Cmd+L"            # show the typed text or answer huge on screen
+settings = "Cmd+,"              # open Settings
 
 # ---------------------------------------------------------------------------
 # AI providers. Three wire formats cover everything:
@@ -321,6 +322,10 @@ icon = "🔎"
 #   command/args      stdio server (npx, uvx, docker run -i …)
 #   url               Streamable HTTP server
 #   env / env_cmd     environment; env_cmd values are commands that print it
+#   headers / headers_cmd  static HTTP headers (or from a command)
+#   oauth_client_id / oauth_authorize_url / oauth_token_url / oauth_scopes
+#                     optional OAuth for HTTP servers (PKCE; tokens in Keychain).
+#                     Optional secret: Keychain service opencast-mcp-<id>-oauth-secret
 #   tools             only these tools ("get_*" prefix allowed); empty = all
 #   in_launcher       list tools as commands (default true)
 #   in_chat           offer tools to the AI chat (default true)
@@ -328,7 +333,7 @@ icon = "🔎"
 # Servers that also advertise resources or prompt templates get commands for
 # those too: Return reads a resource into the panel; a prompt opens a chat with
 # the server's own wording, unsent, so you can edit it first.
-# Run "Refresh MCP Tools" after editing.
+# Run "Refresh MCP Tools" after editing (or Sign in… in Settings for OAuth).
 # ---------------------------------------------------------------------------
 
 # [[mcp_servers]]
@@ -343,6 +348,14 @@ icon = "🔎"
 # command = "npx"
 # args = ["-y", "@modelcontextprotocol/server-filesystem", "/Users/you/Documents"]
 # in_launcher = false
+
+# [[mcp_servers]]
+# id = "remote"
+# url = "https://mcp.example/mcp"
+# oauth_client_id = "opencast"
+# oauth_authorize_url = "https://auth.example/authorize"
+# oauth_token_url = "https://auth.example/token"
+# oauth_scopes = ["openid", "mcp"]
 
 # ---------------------------------------------------------------------------
 # Snippets. Search by keyword; Return pastes into the frontmost app.

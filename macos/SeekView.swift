@@ -1,7 +1,132 @@
+import AppKit
+import CoreGraphics
 import SwiftUI
+import Vision
 
 struct SeekRect {
     var x, y, w, h: CGFloat
+}
+
+/// In-process Seek OCR (Vision). Replaces the old Rust→osascript JXA path.
+enum SeekOCR {
+    enum Failure: Error, LocalizedError {
+        case noMonitor
+        case screenRecording
+        case noText
+        case recognitionFailed
+
+        var errorDescription: String? {
+            switch self {
+            case .noMonitor: return "no monitors found"
+            case .screenRecording:
+                return "OpenCast needs the Screen Recording permission to find text on screen: "
+                    + "System Settings → Privacy & Security → Screen Recording → enable OpenCast, then try again"
+            case .noText: return "no readable text on screen"
+            case .recognitionFailed: return "text recognition failed"
+            }
+        }
+    }
+
+    /// Screenshot the display under the cursor and OCR it. Hits are screen points (CG), with word boxes.
+    static func scan() throws -> SeekScan {
+        let monitor = try cursorMonitor()
+        let image = try capture(monitor)
+        return try recognize(image, monitor: monitor)
+    }
+
+    private static func cursorMonitor() throws -> SeekRect {
+        let point = CGEvent(source: nil)?.location ?? .zero
+        var count: UInt32 = 16
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetActiveDisplayList(count, &ids, &count) == .success, count > 0 else {
+            throw Failure.noMonitor
+        }
+        let rects: [SeekRect] = (0..<Int(count)).map { i in
+            let b = CGDisplayBounds(ids[i])
+            return SeekRect(x: b.origin.x, y: b.origin.y, w: b.size.width, h: b.size.height)
+        }
+        if let hit = rects.first(where: {
+            point.x >= $0.x && point.x < $0.x + $0.w && point.y >= $0.y && point.y < $0.y + $0.h
+        }) {
+            return hit
+        }
+        return rects[0]
+    }
+
+    private static func capture(_ monitor: SeekRect) throws -> CGImage {
+        let path = NSTemporaryDirectory() + "opencast-seek-\(ProcessInfo.processInfo.processIdentifier).png"
+        let region = [monitor.x, monitor.y, monitor.w, monitor.h].map { "\(Int($0.rounded()))" }.joined(separator: ",")
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+        p.arguments = ["-x", "-R", region, path]
+        do {
+            try p.run()
+            p.waitUntilExit()
+        } catch {
+            throw Failure.screenRecording
+        }
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        guard p.terminationStatus == 0,
+              let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+              let image = NSImage(data: data),
+              let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        else {
+            throw Failure.screenRecording
+        }
+        return cg
+    }
+
+    private static func recognize(_ image: CGImage, monitor: SeekRect) throws -> SeekScan {
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = false
+        let handler = VNImageRequestHandler(cgImage: image, options: [:])
+        do {
+            try handler.perform([request])
+        } catch {
+            throw Failure.recognitionFailed
+        }
+        var hits: [SeekHit] = []
+        for obs in request.results ?? [] {
+            guard let cand = obs.topCandidates(1).first else { continue }
+            let s = cand.string
+            let b = obs.boundingBox
+            // Vision: normalized, origin bottom-left → top-left normalized, then screen points.
+            let nx = b.origin.x
+            let ny = 1 - b.origin.y - b.size.height
+            let nw = b.size.width
+            let nh = b.size.height
+            let words = wordBoxes(cand, in: s, monitor: monitor)
+            hits.append(SeekHit(
+                label: s,
+                x: monitor.x + nx * monitor.w,
+                y: monitor.y + ny * monitor.h,
+                w: nw * monitor.w,
+                h: nh * monitor.h,
+                words: words
+            ))
+        }
+        if hits.isEmpty { throw Failure.noText }
+        return SeekScan(monitor: monitor, hits: hits)
+    }
+
+    /// Per-word x extents (UTF-16 offsets), matching the old JXA Vision script.
+    private static func wordBoxes(_ cand: VNRecognizedText, in s: String, monitor: SeekRect) -> [SeekWord] {
+        let ns = s as NSString
+        guard let re = try? NSRegularExpression(pattern: "\\S+") else { return [] }
+        var words: [SeekWord] = []
+        re.enumerateMatches(in: s, options: [], range: NSRange(location: 0, length: ns.length)) { match, _, _ in
+            guard let match, let range = Range(match.range, in: s) else { return }
+            guard let box = try? cand.boundingBox(for: range)?.boundingBox else { return }
+            words.append(SeekWord(
+                at: match.range.location,
+                len: match.range.length,
+                x: monitor.x + box.origin.x * monitor.w,
+                w: box.size.width * monitor.w
+            ))
+        }
+        return words
+    }
 }
 
 struct SeekWord {

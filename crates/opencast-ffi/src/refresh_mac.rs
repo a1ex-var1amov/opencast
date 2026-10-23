@@ -1,12 +1,15 @@
-//! Background refreshes of the caches search reads: browser bookmarks and
-//! exchange rates. Run at startup (off the main thread); each returns whether
-//! its cache changed so the caller can reload once.
+//! Background refreshes of the caches search reads: browser bookmarks,
+//! browser history, recent documents, and exchange rates. Run at startup
+//! (off the main thread); each returns whether its cache changed so the
+//! caller can reload once.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use opencast_core::bookmarks::{self, Bookmark};
 use opencast_core::currency;
+use opencast_core::history;
+use opencast_core::recents;
 
 fn home() -> PathBuf {
     std::env::var_os("HOME")
@@ -52,6 +55,24 @@ pub fn refresh_bookmarks(config_dir: &Path) -> bool {
         all.extend(bookmarks::parse_safari(&json));
     }
     bookmarks::save_cache(config_dir, &bookmarks::dedup(all))
+}
+
+pub fn refresh_history(config_dir: &Path) -> bool {
+    let support = home().join("Library/Application Support");
+    let scan = history::scan(&support, &home());
+    if !scan.blocked.is_empty() {
+        eprintln!(
+            "opencast: history: cannot read {} — needs Full Disk Access (System Settings \u{2192} Privacy & Security \u{2192} Full Disk Access)",
+            scan.blocked.join(", ")
+        );
+    }
+    let all = history::collect(&support, &home());
+    history::save_cache(config_dir, &all)
+}
+
+pub fn refresh_recents(config_dir: &Path) -> bool {
+    let all = recents::collect(&home());
+    recents::save_cache(config_dir, &all)
 }
 
 /// Only when `currency = true`: the launcher makes no requests the user did not turn on.

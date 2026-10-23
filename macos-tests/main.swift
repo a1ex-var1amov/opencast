@@ -148,12 +148,15 @@ check(SpotifyTrack.rows(for: bare)[0].title == "Play", "a paused list starts wit
 check(SpotifyTrack.rows(for: SpotifyTrack()).contains(where: { $0.title == "Volume Up" && $0.subtitle == "+10" }),
       "with no volume read, the row just promises +10")
 
-// Rows as the engine sends them. The panel drops anything whose kind it cannot
-// name, which is once how every MCP resource and prompt row vanished.
+// Rows as the engine sends them. Unknown kinds decode as .unknown instead of
+// vanishing; missing kind still drops the row.
 let resource = Command(["id": "mcp:gh:res:issues", "title": "Open issues", "kind": "mcpresource", "icon": "🔌"])
-check(resource?.kind == .mcpResource, "an MCP resource row decodes — an unknown kind drops the row in silence")
+check(resource?.kind == .mcpResource, "an MCP resource row decodes")
 check(Command(["id": "mcp:gh:prompt:sum", "title": "Summarize", "kind": "mcpprompt"])?.kind == .mcpPrompt, "an MCP prompt row decodes")
-check(Command(["id": "x", "title": "Y", "kind": "notakind"]) == nil, "a kind the panel has not declared still drops the row")
+check(Command(["id": "x", "title": "Y"]) == nil, "a row with no kind string is dropped")
+let brandnew = Command(["id": "ext:foo", "title": "Foo", "kind": "brandnew"])
+check(brandnew?.kind == .unknown, "a future engine kind decodes as unknown")
+check(brandnew?.subtitle == "kind: brandnew", "unknown kind gets a kind: subtitle when empty")
 
 let appRow = Command([
     "id": "app:/Applications/Spotify.app", "title": "Spotify", "kind": "app",

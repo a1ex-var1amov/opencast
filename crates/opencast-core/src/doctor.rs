@@ -219,6 +219,26 @@ pub fn run(engine: &Engine, load_time: Option<Duration>) -> Report {
         report.push(Level::Ok, "no browser bookmarks cached");
     }
 
+    // History: same permission story as bookmarks (Safari / Full Disk Access).
+    let hist = engine.history_count();
+    if hist > 0 {
+        report.push(
+            Level::Ok,
+            format!(
+                "{hist} history visit(s) cached from {}",
+                if engine.history_scan.found.is_empty() {
+                    "the cache file".to_string()
+                } else {
+                    engine.history_scan.found.join(", ")
+                }
+            ),
+        );
+    } else if !engine.history_scan.blocked.is_empty() {
+        report.push(Level::Warn, crate::history::why_empty(&engine.history_scan));
+    } else {
+        report.push(Level::Ok, "no browser history cached");
+    }
+
     // Integrations: which app bridges are live. An integration whose app is
     // missing is absent by design, so say so rather than looking broken.
     if engine.integrations_on.is_empty() {

@@ -6,7 +6,7 @@ struct ShortcutAppEntry: Equatable {
     let name: String
 }
 
-/// Which apps the "Keyboard Shortcuts" list offers, and in what order.
+/// Which apps the "App Menu Shortcuts" list offers, and in what order.
 /// Only apps with a menu bar are candidates — the caller knows the activation
 /// policy, so this stays a pure ordering problem.
 enum ShortcutApps {

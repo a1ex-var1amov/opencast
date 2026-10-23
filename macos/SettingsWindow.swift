@@ -57,6 +57,12 @@ struct ProviderRow: Identifiable, Equatable {
     var local: Bool
 }
 
+struct SnippetRow: Identifiable, Equatable {
+    var id: String { keyword }
+    var keyword: String
+    var text: String
+}
+
 @MainActor
 @Observable
 final class SettingsState {
@@ -65,14 +71,23 @@ final class SettingsState {
     var tab: SettingsTab = .general
     var general: [String: Any] = [:]
     var providers: [ProviderRow] = []
-    var mcp: [String] = []
+    var snippets: [SnippetRow] = []
+    var mcp: [McpServerRow] = []
     var configDir = ""
     var version = ""
     var synced = false
     var status = ""
     var hotkeyDraft = ""
+    var hotkeyStatus = ""
     var updateRepoDraft = ""
+    var updateRepoStatus = ""
     var permissionTick = 0
+    /// Last `opencast_hotkeys_fix` lines (filled by `Model.checkHotkeys`).
+    var hotkeyProblems: [String] = []
+    /// In-flight "Test connection" stream id (routed from Model.accept).
+    var providerTestId: String?
+    var providerTestStarted: Date?
+    var providerTestStatus = ""
 
     func load() {
         Task.detached {
@@ -90,7 +105,18 @@ final class SettingsState {
                         local: $0["local"] as? Bool ?? false
                     )
                 }
-                s.mcp = (r["mcp"] as? [[String: Any]] ?? []).compactMap { $0["id"] as? String }
+                s.snippets = (r["snippets"] as? [[String: Any]] ?? []).compactMap { row in
+                    guard let k = row["keyword"] as? String, let t = row["text"] as? String else { return nil }
+                    return SnippetRow(keyword: k, text: t)
+                }
+                s.mcp = (r["mcp"] as? [[String: Any]] ?? []).compactMap { row in
+                    guard let id = row["id"] as? String else { return nil }
+                    return McpServerRow(
+                        id: id,
+                        oauth: row["oauth"] as? Bool ?? false,
+                        signedIn: row["signedIn"] as? Bool ?? false
+                    )
+                }
                 s.configDir = r["configDir"] as? String ?? ""
                 s.version = r["version"] as? String ?? ""
                 s.synced = r["synced"] as? Bool ?? false
@@ -115,6 +141,34 @@ final class SettingsState {
         }
     }
 
+    /// Open config.toml; optional section name in status (ponytail: no editor line-jump).
+    func openConfigSection(_ section: String? = nil) {
+        NSWorkspace.shared.open(URL(fileURLWithPath: configDir).appendingPathComponent("config.toml"))
+        if let section { status = "Edit the \(section) section in config.toml" }
+    }
+
+    func addSnippet(keyword: String, text: String) {
+        Task.detached {
+            let r = Engine.call(["op": "snippetAdd", "keyword": keyword, "text": text])
+            await MainActor.run {
+                SettingsState.shared.status = (r["error"] as? String) ?? (r["text"] as? String ?? "Saved")
+                SettingsState.shared.load()
+                SnippetExpander.shared.reload()
+            }
+        }
+    }
+
+    func removeSnippet(_ keyword: String) {
+        Task.detached {
+            let r = Engine.call(["op": "snippetRemove", "keyword": keyword])
+            await MainActor.run {
+                SettingsState.shared.status = (r["error"] as? String) ?? (r["text"] as? String ?? "Removed")
+                SettingsState.shared.load()
+                SnippetExpander.shared.reload()
+            }
+        }
+    }
+
     func removeProvider(_ id: String) {
         Task.detached {
             let r = Engine.call(["op": "providerRemove", "id": id])
@@ -125,7 +179,7 @@ final class SettingsState {
         }
     }
 
-    func addProvider(id: String, kind: String, baseUrl: String, model: String, key: String) {
+    func addProvider(id: String, kind: String, baseUrl: String, model: String, key: String, makeDefault: Bool) {
         var provider: [String: Any] = ["id": id, "kind": kind, "model": model]
         if !baseUrl.trimmingCharacters(in: .whitespaces).isEmpty { provider["base_url"] = baseUrl }
         if !key.isEmpty {
@@ -136,13 +190,70 @@ final class SettingsState {
             }
             provider["api_key_cmd"] = "security find-generic-password -s \(service) -w"
         }
+        let preferDefault = makeDefault || providers.isEmpty
         Task.detached {
             let r = Engine.call(["op": "providerAdd", "provider": provider])
+            if r["error"] == nil, preferDefault {
+                _ = Engine.call(["op": "configSet", "key": "default_provider", "value": id])
+            }
             await MainActor.run {
-                SettingsState.shared.status = (r["error"] as? String) ?? "Added \(id)"
-                SettingsState.shared.load()
+                let s = SettingsState.shared
+                s.status = (r["error"] as? String) ?? "Added \(id)"
+                if preferDefault { s.general["default_provider"] = id }
+                s.load()
+                Model.shared.refreshSettings()
             }
         }
+    }
+
+    /// Tiny stream ping; timing matches CompareModels (started → done).
+    func testProvider(_ p: ProviderRow) {
+        let id = UUID().uuidString
+        providerTestId = id
+        providerTestStarted = Date()
+        providerTestStatus = "Testing…"
+        Task.detached {
+            var body: [String: Any] = [
+                "op": "stream",
+                "requestId": id,
+                "messages": [["role": "user", "content": "Reply with exactly: ok"]],
+                "provider": p.id,
+                "tools": false,
+                "profile": false,
+            ]
+            if !p.model.isEmpty { body["model"] = p.model }
+            let r = Engine.call(body)
+            if let e = r["error"] as? String {
+                await MainActor.run {
+                    let s = SettingsState.shared
+                    s.providerTestId = nil
+                    s.providerTestStatus = e
+                    s.status = e
+                }
+            }
+        }
+    }
+
+    func handleProviderTest(_ obj: [String: Any]?) -> Bool {
+        guard let id = providerTestId, id == obj?["requestId"] as? String,
+              let event = obj?["event"] as? [String: Any], let kind = event["type"] as? String
+        else { return false }
+        let elapsed = providerTestStarted.map { Date().timeIntervalSince($0) } ?? 0
+        switch kind {
+        case "done":
+            providerTestId = nil
+            let msg = String(format: "OK · %.1fs", elapsed)
+            providerTestStatus = msg
+            status = msg
+        case "error":
+            providerTestId = nil
+            let msg = (event["text"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "Failed"
+            providerTestStatus = msg
+            status = msg
+        default:
+            break
+        }
+        return true
     }
 }
 
@@ -215,7 +326,7 @@ struct SettingsView: View {
     }
 }
 
-private struct PaneSection<Content: View>: View {
+struct PaneSection<Content: View>: View {
     var title: String
     @ViewBuilder var content: Content
 
@@ -230,18 +341,34 @@ private struct PaneSection<Content: View>: View {
 private struct GeneralPane: View {
     @Bindable var state: SettingsState
     @State private var loginItem = SMAppService.mainApp.status == .enabled
+    @State private var newKeyword = ""
+    @State private var newText = ""
 
     var body: some View {
         PaneSection(title: "Launcher") {
             HStack {
                 Text("Hotkey")
-                TextField("Alt+Space", text: $state.hotkeyDraft)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 180)
-                Button("Save") { state.set("hotkey", state.hotkeyDraft) }
+                Text(state.hotkeyDraft.isEmpty ? "Not set" : state.hotkeyDraft)
+                    .font(.system(.body, design: .monospaced))
+                    .frame(minWidth: 120, alignment: .leading)
+                Button(Model.shared.recordingLauncherHotkey ? "Listening…" : "Record…") {
+                    Model.shared.beginRecordLauncherHotkey()
+                }
+                .disabled(Model.shared.recordingLauncherHotkey)
+                if !state.hotkeyStatus.isEmpty {
+                    Text(state.hotkeyStatus).font(.caption).foregroundStyle(.secondary)
+                }
             }
             Text("Examples: Alt+Space, Cmd+Space, Ctrl+Alt+K, F18. With the hyper key on, Hyper+Space works too.")
                 .font(.caption).foregroundStyle(.secondary)
+            if !state.hotkeyProblems.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Hotkey problems").font(.subheadline.weight(.semibold)).foregroundStyle(.orange)
+                    ForEach(state.hotkeyProblems, id: \.self) { line in
+                        Text(line).font(.caption).foregroundStyle(.orange)
+                    }
+                }
+            }
             Picker("Position", selection: Binding(get: { state.string("presentation") }, set: { state.set("presentation", $0) })) {
                 Text("Island (top of screen)").tag("island")
                 Text("Spotlight (centered)").tag("spotlight")
@@ -257,13 +384,91 @@ private struct GeneralPane: View {
             }))
         }
         PaneSection(title: "Keyboard") {
-            Toggle("Caps Lock is a hyper key (⌃⌥⌘⇧ held, launcher when tapped) — restart to apply", isOn: Binding(get: { state.bool("hyperkey") }, set: { state.set("hyperkey", $0) }))
-            Toggle("Expand snippets while typing in any app (keywords starting with a symbol, like ;sig)", isOn: Binding(get: { state.bool("snippet_expansion") }, set: { state.set("snippet_expansion", $0) }))
+            VStack(alignment: .leading, spacing: 2) {
+                Toggle("Hyper key", isOn: Binding(get: { state.bool("hyperkey") }, set: { state.set("hyperkey", $0) }))
+                Text("Caps Lock becomes ⌃⌥⌘⇧ when held; tap opens the launcher. Restart to apply.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        PaneSection(title: "Snippets") {
+            VStack(alignment: .leading, spacing: 2) {
+                Toggle("Expand while typing", isOn: Binding(get: { state.bool("snippet_expansion") }, set: { state.set("snippet_expansion", $0) }))
+                Text("Keywords that start with a symbol (like ;sig) expand in any app.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if state.snippets.isEmpty {
+                Text("None yet.").foregroundStyle(.secondary)
+            }
+            ForEach(state.snippets) { s in
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(s.keyword).font(.system(size: 13, weight: .semibold))
+                        Text(s.text).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                    Spacer()
+                    Button(role: .destructive) { state.removeSnippet(s.keyword) } label: { Image(systemName: "trash") }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Remove snippet")
+                }
+                .padding(.vertical, 2)
+            }
+            HStack {
+                TextField(";sig", text: $newKeyword).textFieldStyle(.roundedBorder).frame(width: 100)
+                TextField("expansion text", text: $newText).textFieldStyle(.roundedBorder)
+                Button("Add") {
+                    let k = newKeyword.trimmingCharacters(in: .whitespaces)
+                    let t = newText
+                    guard !k.isEmpty, !t.isEmpty else { return }
+                    state.addSnippet(keyword: k, text: t)
+                    newKeyword = ""
+                    newText = ""
+                }
+                .disabled(newKeyword.trimmingCharacters(in: .whitespaces).isEmpty || newText.isEmpty)
+            }
+        }
+        PaneSection(title: "Config") {
+            Text("Everything else is in config.toml. These open the file at the right section.")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button("Open config.toml") { state.openConfigSection() }
+                Button("Global hotkeys…") { state.openConfigSection("[[hotkeys]]") }
+                Button("Snippets…") { state.openConfigSection("[[snippets]]") }
+                Button("MCP servers…") { state.openConfigSection("[[mcp_servers]]") }
+            }
         }
         PaneSection(title: "Search") {
-            Toggle("Include Shortcuts.app shortcuts", isOn: Binding(get: { state.bool("shortcuts") }, set: { state.set("shortcuts", $0) }))
-            Toggle("Show the next meeting at the top of the launcher", isOn: Binding(get: { state.bool("calendar") }, set: { state.set("calendar", $0) }))
-            Toggle("Run scripts through your login shell (Homebrew, nvm… on PATH)", isOn: Binding(get: { state.bool("script_login_shell") }, set: { state.set("script_login_shell", $0) }))
+            VStack(alignment: .leading, spacing: 2) {
+                Toggle("Shortcuts.app", isOn: Binding(get: { state.bool("shortcuts") }, set: { state.set("shortcuts", $0) }))
+                Text("Include Shortcuts.app shortcuts in search.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Toggle("Next meeting", isOn: Binding(get: { state.bool("calendar") }, set: { state.set("calendar", $0) }))
+                Text("Show the next meeting at the top of the launcher.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Toggle("Login shell for scripts", isOn: Binding(get: { state.bool("script_login_shell") }, set: { state.set("script_login_shell", $0) }))
+                Text("Run scripts through your login shell (Homebrew, nvm… on PATH).")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        PaneSection(title: "iCloud Sync") {
+            if state.synced {
+                Label("config.toml, scripts, notes, layouts and pins sync through your synced folder", systemImage: "checkmark.icloud")
+            } else {
+                Text("Keep config.toml, scripts, notes, layouts and pins in iCloud Drive so every Mac shares them. Clipboard history, chats and usage stay on this Mac.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Sync with iCloud Drive") {
+                    Task.detached {
+                        let r = Engine.call(["op": "execute", "id": "builtin:sync-icloud", "args": [String](), "quiet": true])
+                        await MainActor.run {
+                            SettingsState.shared.status = (r["text"] as? String) ?? (r["message"] as? String) ?? "Done"
+                            SettingsState.shared.load()
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -279,10 +484,10 @@ private struct Preset: Identifiable {
         Preset(id: "openai", kind: "openai", baseUrl: "", model: "gpt-5-mini", needsKey: true),
         Preset(id: "claude", kind: "anthropic", baseUrl: "", model: "claude-sonnet-5-5", needsKey: true),
         Preset(id: "gemini", kind: "gemini", baseUrl: "", model: "gemini-2.5-flash", needsKey: true),
-        Preset(id: "openrouter", kind: "openai", baseUrl: "https://openrouter.ai/api/v1", model: "", needsKey: true),
-        Preset(id: "groq", kind: "openai", baseUrl: "https://api.groq.com/openai/v1", model: "", needsKey: true),
+        Preset(id: "openrouter", kind: "openai", baseUrl: "https://openrouter.ai/api/v1", model: "meta-llama/llama-3.3-70b-instruct", needsKey: true),
+        Preset(id: "groq", kind: "openai", baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile", needsKey: true),
         Preset(id: "ollama", kind: "openai", baseUrl: "http://localhost:11434/v1", model: "llama3.2", needsKey: false),
-        Preset(id: "lmstudio", kind: "openai", baseUrl: "http://localhost:1234/v1", model: "", needsKey: false),
+        Preset(id: "lmstudio", kind: "openai", baseUrl: "http://localhost:1234/v1", model: "local-model", needsKey: false),
         Preset(id: "custom", kind: "openai", baseUrl: "", model: "", needsKey: true),
     ]
 }
@@ -295,6 +500,13 @@ private struct AIPane: View {
     @State private var baseUrl = ""
     @State private var model = "claude-sonnet-5-5"
     @State private var key = ""
+    @State private var makeDefault = true
+
+    private var addBlockedReason: String? {
+        if newId.trimmingCharacters(in: .whitespaces).isEmpty { return "Id is required." }
+        if model.trimmingCharacters(in: .whitespaces).isEmpty { return "Model is required." }
+        return nil
+    }
 
     var body: some View {
         PaneSection(title: "Providers") {
@@ -303,10 +515,15 @@ private struct AIPane: View {
             }
             ForEach(state.providers) { p in
                 HStack {
-                    Image(systemName: p.id == state.string("default_provider") ? "star.fill" : "star")
-                        .foregroundStyle(p.id == state.string("default_provider") ? Color.accentColor : Color.secondary)
-                        .onTapGesture { state.set("default_provider", p.id) }
-                        .help("Make default")
+                    Button {
+                        state.set("default_provider", p.id)
+                    } label: {
+                        Image(systemName: p.id == state.string("default_provider") ? "star.fill" : "star")
+                            .foregroundStyle(p.id == state.string("default_provider") ? Color.accentColor : Color.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Make default")
+                    .help("Make default")
                     VStack(alignment: .leading) {
                         Text(p.id).font(.system(size: 13, weight: .semibold))
                         Text("\(p.kind) · \(p.model)\(p.baseUrl.map { " · \($0)" } ?? "")")
@@ -316,10 +533,18 @@ private struct AIPane: View {
                     if !p.hasKey && !p.local {
                         Text("no key").font(.caption).foregroundStyle(.orange)
                     }
+                    Button("Test connection") { state.testProvider(p) }
+                        .buttonStyle(.borderless)
+                        .disabled(state.providerTestId != nil)
+                        .accessibilityLabel("Test connection")
                     Button(role: .destructive) { state.removeProvider(p.id) } label: { Image(systemName: "trash") }
                         .buttonStyle(.borderless)
+                        .accessibilityLabel("Remove provider")
                 }
                 .padding(.vertical, 2)
+            }
+            if !state.providerTestStatus.isEmpty {
+                Text(state.providerTestStatus).font(.caption).foregroundStyle(.secondary)
             }
         }
         PaneSection(title: "Add a provider") {
@@ -363,68 +588,38 @@ private struct AIPane: View {
                         .textFieldStyle(.roundedBorder)
                 }
             }
+            Toggle("Make default", isOn: $makeDefault)
             Button("Add Provider") {
-                state.addProvider(id: newId.trimmingCharacters(in: .whitespaces), kind: kind, baseUrl: baseUrl, model: model, key: key)
+                state.addProvider(
+                    id: newId.trimmingCharacters(in: .whitespaces),
+                    kind: kind,
+                    baseUrl: baseUrl,
+                    model: model,
+                    key: key,
+                    makeDefault: makeDefault
+                )
                 key = ""
+                makeDefault = false
             }
-            .disabled(newId.trimmingCharacters(in: .whitespaces).isEmpty || model.trimmingCharacters(in: .whitespaces).isEmpty)
+            .disabled(addBlockedReason != nil)
+            if let reason = addBlockedReason {
+                Text(reason).font(.caption).foregroundStyle(.secondary)
+            }
         }
+        .onAppear { makeDefault = state.providers.isEmpty }
     }
 }
 
 private struct ExtensionsPane: View {
     @Bindable var state: SettingsState
-    @State private var refreshing = false
 
     var body: some View {
-        PaneSection(title: "MCP servers") {
-            if state.mcp.isEmpty {
-                Text("None configured. Add [[mcp_servers]] to config.toml — their tools become launcher commands and AI chat tools.")
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(state.mcp, id: \.self) { Label($0, systemImage: "powerplug") }
-            }
-            HStack {
-                Button("Edit config.toml") {
-                    NSWorkspace.shared.open(URL(fileURLWithPath: state.configDir).appendingPathComponent("config.toml"))
-                }
-                Button(refreshing ? "Refreshing…" : "Refresh MCP Tools") {
-                    refreshing = true
-                    Task.detached {
-                        let r = Engine.call(["op": "mcpRefresh"])
-                        await MainActor.run {
-                            refreshing = false
-                            let n = r["tools"] as? Int ?? 0
-                            let errors = r["errors"] as? [String] ?? []
-                            SettingsState.shared.status = errors.isEmpty ? "\(n) MCP tools" : errors.joined(separator: "\n")
-                        }
-                    }
-                }
-                .disabled(refreshing)
-            }
-        }
+        McpServersPaneSection(state: state)
         PaneSection(title: "Script commands") {
             Text("Executable files in the scripts folder, with Raycast-style headers. `@opencast.mode list` makes a Script Filter.")
                 .foregroundStyle(.secondary)
             Button("Open Scripts Folder") {
                 NSWorkspace.shared.open(URL(fileURLWithPath: state.configDir).appendingPathComponent("scripts"))
-            }
-        }
-        PaneSection(title: "Sync") {
-            if state.synced {
-                Label("config.toml, scripts, notes, layouts and pins sync through your synced folder", systemImage: "checkmark.icloud")
-            } else {
-                Text("Keep config.toml, scripts, notes, layouts and pins in iCloud Drive so every Mac shares them. Clipboard history, chats and usage stay on this Mac.")
-                    .foregroundStyle(.secondary)
-                Button("Sync with iCloud Drive") {
-                    Task.detached {
-                        let r = Engine.call(["op": "execute", "id": "builtin:sync-icloud", "args": [String](), "quiet": true])
-                        await MainActor.run {
-                            SettingsState.shared.status = (r["text"] as? String) ?? (r["message"] as? String) ?? "Done"
-                            SettingsState.shared.load()
-                        }
-                    }
-                }
             }
         }
     }
@@ -450,7 +645,7 @@ private struct PermissionsPane: View {
             )
             PermissionRow(
                 title: "Screen Recording",
-                detail: "Click Text (on-screen OCR) and attaching screen text to chats",
+                detail: "Click Text (on-screen OCR) and attaching screen text to chats. Rebuilt or dev binaries often need the checkbox toggled off and on again.",
                 granted: CGPreflightScreenCaptureAccess(),
                 pane: "Privacy_ScreenCapture",
                 request: { _ = CGRequestScreenCaptureAccess() }
@@ -536,14 +731,25 @@ private struct AboutPane: View {
                     }
                 }
             }
-            HStack {
-                Text("Releases from GitHub repo")
-                TextField("owner/repo", text: $state.updateRepoDraft)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 220)
-                Button("Save") { state.set("update_repo", state.updateRepoDraft) }
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Releases from GitHub repo")
+                    TextField("owner/repo", text: $state.updateRepoDraft)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 220)
+                        .onSubmit {
+                            state.set("update_repo", state.updateRepoDraft)
+                            state.updateRepoStatus = "Saved"
+                        }
+                }
+                Text(state.updateRepoStatus.isEmpty ? "Press Return to save." : state.updateRepoStatus)
+                    .font(.caption).foregroundStyle(.secondary)
             }
-            Toggle("Check for updates once a week", isOn: Binding(get: { state.bool("check_updates") }, set: { state.set("check_updates", $0) }))
+            VStack(alignment: .leading, spacing: 2) {
+                Toggle("Weekly update check", isOn: Binding(get: { state.bool("check_updates") }, set: { state.set("check_updates", $0) }))
+                Text("Check for updates once a week.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 }

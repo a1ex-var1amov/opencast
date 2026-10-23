@@ -509,6 +509,9 @@ pub struct Keys {
     /// Show the search text (or selected row) in Large Type.
     #[serde(default = "d_large_type")]
     pub large_type: String,
+    /// Open the Settings window.
+    #[serde(default = "d_settings")]
+    pub settings: String,
 }
 
 fn d_ask_ai() -> String {
@@ -550,6 +553,9 @@ fn d_preview() -> String {
 fn d_large_type() -> String {
     "Cmd+L".into()
 }
+fn d_settings() -> String {
+    "Cmd+,".into()
+}
 
 impl Default for Keys {
     fn default() -> Self {
@@ -567,6 +573,7 @@ impl Default for Keys {
             quick_look: d_quick_look(),
             preview: d_preview(),
             large_type: d_large_type(),
+            settings: d_settings(),
         }
     }
 }
@@ -588,6 +595,7 @@ impl Keys {
             ("quick_look", &self.quick_look),
             ("preview", &self.preview),
             ("large_type", &self.large_type),
+            ("settings", &self.settings),
         ]
     }
 }
@@ -616,7 +624,8 @@ pub struct General {
     pub presentation: String,
     /// Rows appended when a query has fewer than `fallback_threshold` strong
     /// hits. Entries are command ids/titles, or the tokens `quicklinks`
-    /// (every `{query}` quicklink) and `files` (Spotlight expand).
+    /// (every `{query}` quicklink), `files` (Spotlight expand), and `web`
+    /// (DuckDuckGo `{query}` search).
     #[serde(default = "default_fallbacks")]
     pub fallbacks: Vec<String>,
     #[serde(default = "default_fallback_threshold")]
@@ -1003,6 +1012,32 @@ pub fn add_snippet(dir: &Path, keyword: &str, text: &str, name: Option<&str>) ->
     let updated = doc.to_string();
     Config::parse(&updated).context("the snippet makes config.toml invalid")?;
     std::fs::write(&path, updated).with_context(|| format!("writing {}", path.display()))
+}
+
+/// Drop a `[[snippets]]` entry by keyword. Returns whether one was removed.
+pub fn remove_snippet(dir: &Path, keyword: &str) -> Result<bool> {
+    let keyword = keyword.trim();
+    anyhow::ensure!(!keyword.is_empty(), "a snippet needs a keyword");
+    let path = dir.join("config.toml");
+    let src = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let mut doc: toml_edit::Document = src.parse().context("config.toml is not valid TOML")?;
+    let Some(arr) = doc.get_mut("snippets").and_then(|s| s.as_array_of_tables_mut()) else {
+        return Ok(false);
+    };
+    let keep: Vec<toml_edit::Table> = arr
+        .iter()
+        .filter(|t| t.get("keyword").and_then(|v| v.as_str()) != Some(keyword))
+        .cloned()
+        .collect();
+    if keep.len() == arr.len() {
+        return Ok(false);
+    }
+    arr.clear();
+    for t in keep {
+        arr.push(t);
+    }
+    std::fs::write(&path, doc.to_string()).with_context(|| format!("writing {}", path.display()))?;
+    Ok(true)
 }
 
 /// Add many `[[snippets]]` in one write (an imported collection). Keywords
@@ -1998,6 +2033,12 @@ mod writer_tests {
             .snippets
             .iter()
             .any(|s| s.keyword == ";hi" && s.text == "Hello {cursor}"));
+        assert!(remove_snippet(dir.path(), ";hi").unwrap());
+        assert!(!Config::load_from(&dir.path().join("config.toml"))
+            .unwrap()
+            .snippets
+            .iter()
+            .any(|s| s.keyword == ";hi"));
     }
 
     #[test]

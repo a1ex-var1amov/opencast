@@ -24,18 +24,11 @@ pub enum Builtin {
     OpenConfig,
     OpenScripts,
     Quit,
-    ThemeSystem,
-    ThemeLight,
-    ThemeDark,
-    PresentationIsland,
-    PresentationSpotlight,
+    Appearance,
+    PanelPosition,
     Settings,
     Shortcuts,
-    StayAwakeOff,
-    StayAwakeIndefinite,
-    StayAwake30m,
-    StayAwake1h,
-    StayAwake3h,
+    StayAwake,
     EmptyTrash,
     LockScreen,
     Sleep,
@@ -90,6 +83,7 @@ pub enum Builtin {
     StopFocus,
     PauseFocus,
     SearchBookmarks,
+    SearchHistory,
     EditNote,
     Restart,
     ShutDown,
@@ -144,88 +138,57 @@ const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
     ),
     (Builtin::Quit, "quit", "Quit OpenCast", "⏻", &["exit"]),
     (
-        Builtin::ThemeSystem,
-        "theme-system",
-        "Appearance: System",
+        Builtin::Appearance,
+        "appearance",
+        "Appearance",
         "🖥️",
-        &["theme", "appearance", "dark", "light", "color", "settings"],
+        &["theme", "appearance", "dark", "light", "color", "system", "settings"],
     ),
     (
-        Builtin::ThemeLight,
-        "theme-light",
-        "Appearance: Light",
-        "☀️",
-        &["theme", "appearance", "light", "color", "settings"],
-    ),
-    (
-        Builtin::ThemeDark,
-        "theme-dark",
-        "Appearance: Dark",
-        "🌙",
-        &["theme", "appearance", "dark", "color", "settings"],
-    ),
-    (
-        Builtin::PresentationIsland,
-        "presentation-island",
-        "Presentation: Island",
+        Builtin::PanelPosition,
+        "panel-position",
+        "Panel Position",
         "🏝️",
-        &["presentation", "island", "layout", "panel", "settings"],
-    ),
-    (
-        Builtin::PresentationSpotlight,
-        "presentation-spotlight",
-        "Presentation: Spotlight",
-        "🔦",
-        &["presentation", "spotlight", "layout", "panel", "centered", "settings"],
+        &[
+            "presentation",
+            "position",
+            "island",
+            "spotlight",
+            "layout",
+            "panel",
+            "centered",
+            "settings",
+        ],
     ),
     (
         Builtin::Settings,
         "settings",
         "Settings",
         "⚙️",
-        &["config", "preferences", "theme", "appearance", "presentation", "awake"],
+        &["config", "preferences", "theme", "appearance", "presentation", "position", "awake"],
     ),
     (
         Builtin::Shortcuts,
         "shortcuts",
-        "Shortcuts",
+        "OpenCast Keys",
         "⌨️",
-        &["hotkey", "keys", "keymap", "tab", "click", "shortcut"],
+        &["hotkey", "keys", "keymap", "tab", "click", "shortcut", "opencast"],
     ),
     (
-        Builtin::StayAwakeOff,
-        "stay-awake-off",
-        "Stay Awake: Off",
-        "💤",
-        &["awake", "caffeine", "sleep", "amphetamine", "keepingyouawake", "off"],
-    ),
-    (
-        Builtin::StayAwakeIndefinite,
-        "stay-awake-indefinite",
-        "Stay Awake: Indefinite",
+        Builtin::StayAwake,
+        "stay-awake",
+        "Stay Awake",
         "☕️",
-        &["awake", "caffeine", "sleep", "amphetamine", "keepingyouawake"],
-    ),
-    (
-        Builtin::StayAwake30m,
-        "stay-awake-30m",
-        "Stay Awake: 30 minutes",
-        "☕️",
-        &["awake", "caffeine", "sleep", "amphetamine", "keepingyouawake", "30"],
-    ),
-    (
-        Builtin::StayAwake1h,
-        "stay-awake-1h",
-        "Stay Awake: 1 hour",
-        "☕️",
-        &["awake", "caffeine", "sleep", "amphetamine", "keepingyouawake", "60"],
-    ),
-    (
-        Builtin::StayAwake3h,
-        "stay-awake-3h",
-        "Stay Awake: 3 hours",
-        "☕️",
-        &["awake", "caffeine", "sleep", "amphetamine", "keepingyouawake"],
+        &[
+            "awake",
+            "caffeine",
+            "sleep",
+            "amphetamine",
+            "keepingyouawake",
+            "indefinite",
+            "30",
+            "60",
+        ],
     ),
     (
         Builtin::ClipboardHistory,
@@ -525,6 +488,13 @@ const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
         &["bm", "browser", "safari", "chrome", "arc", "favorites"],
     ),
     (
+        Builtin::SearchHistory,
+        "history",
+        "Search History",
+        "🕘",
+        &["hist", "browser history", "visited", "chrome", "safari"],
+    ),
+    (
         Builtin::EditNote,
         "edit-note",
         "Notes Editor",
@@ -621,7 +591,7 @@ const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
     (
         Builtin::CheatSheet,
         "cheat-sheet",
-        "Keyboard Shortcuts",
+        "App Menu Shortcuts",
         "⌨️",
         &[
             "cheat sheet",
@@ -631,6 +601,7 @@ const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
             "hotkeys",
             "menu",
             "keys",
+            "app menu",
         ],
     ),
     (
@@ -755,7 +726,7 @@ const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
     ),
 ];
 
-/// In-app key rows. Searchable via the Shortcuts command (`query` = `shortcut`).
+/// In-app key rows. Searchable via OpenCast Keys (`query` = `shortcut`).
 const SHORTCUT_ROWS: &[(&str, &str, &str, &[&str])] = &[
     (
         "shortcut:return",
@@ -779,209 +750,9 @@ const SHORTCUT_ROWS: &[(&str, &str, &str, &[&str])] = &[
     ),
 ];
 
-/// Rectangle-style window actions on the frontmost window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WindowAction {
-    LeftHalf,
-    RightHalf,
-    TopHalf,
-    BottomHalf,
-    CenterHalf,
-    TopLeft,
-    TopRight,
-    BottomLeft,
-    BottomRight,
-    FirstThird,
-    CenterThird,
-    LastThird,
-    FirstTwoThirds,
-    LastTwoThirds,
-    TopThird,
-    MiddleThird,
-    BottomThird,
-    TopTwoThirds,
-    BottomTwoThirds,
-    MiddleHalf,
-    TopLeftSixth,
-    TopCenterSixth,
-    TopRightSixth,
-    BottomLeftSixth,
-    BottomCenterSixth,
-    BottomRightSixth,
-    MiddleLeftSixth,
-    MiddleRightSixth,
-    Maximize,
-    AlmostMaximize,
-    MaximizeHeight,
-    MaximizeWidth,
-    ReasonableSize,
-    MakeLarger,
-    MakeSmaller,
-    Center,
-    MoveLeft,
-    MoveRight,
-    MoveUp,
-    MoveDown,
-    NextDisplay,
-    PreviousDisplay,
-    ToggleFullscreen,
-    Fullscreen,
-    ExitFullscreen,
-    RestoreSize,
-    Undo,
-    SpaceNext,
-    SpacePrev,
-    SpaceMoveNext,
-    SpaceMovePrev,
-    /// The panel lists every space and switches (or moves the window) from there.
-    SpaceSwitcher,
-}
-
-pub const WINDOW_ACTIONS: &[(WindowAction, &str, &str, &str)] = &[
-    (WindowAction::LeftHalf, "left-half", "Left Half", "◧"),
-    (WindowAction::RightHalf, "right-half", "Right Half", "◨"),
-    (WindowAction::TopHalf, "top-half", "Top Half", "⬒"),
-    (WindowAction::BottomHalf, "bottom-half", "Bottom Half", "⬓"),
-    (WindowAction::TopLeft, "top-left", "Top Left Quarter", "◰"),
-    (WindowAction::TopRight, "top-right", "Top Right Quarter", "◳"),
-    (WindowAction::BottomLeft, "bottom-left", "Bottom Left Quarter", "◱"),
-    (WindowAction::BottomRight, "bottom-right", "Bottom Right Quarter", "◲"),
-    (WindowAction::CenterHalf, "center-half", "Center Half", "◫"),
-    (WindowAction::FirstThird, "first-third", "First Third", "⅓"),
-    (WindowAction::CenterThird, "center-third", "Center Third", "⅓"),
-    (WindowAction::LastThird, "last-third", "Last Third", "⅓"),
-    (
-        WindowAction::FirstTwoThirds,
-        "first-two-thirds",
-        "First Two Thirds",
-        "⅔",
-    ),
-    (WindowAction::LastTwoThirds, "last-two-thirds", "Last Two Thirds", "⅔"),
-    (WindowAction::TopThird, "top-third", "Top Third", "⅓"),
-    (WindowAction::MiddleThird, "middle-third", "Middle Third", "⅓"),
-    (WindowAction::BottomThird, "bottom-third", "Bottom Third", "⅓"),
-    (WindowAction::TopTwoThirds, "top-two-thirds", "Top Two Thirds", "⅔"),
-    (
-        WindowAction::BottomTwoThirds,
-        "bottom-two-thirds",
-        "Bottom Two Thirds",
-        "⅔",
-    ),
-    (WindowAction::MiddleHalf, "middle-half", "Middle Half", "⊟"),
-    (WindowAction::TopLeftSixth, "top-left-sixth", "Top Left Sixth", "▦"),
-    (
-        WindowAction::TopCenterSixth,
-        "top-center-sixth",
-        "Top Center Sixth",
-        "▦",
-    ),
-    (WindowAction::TopRightSixth, "top-right-sixth", "Top Right Sixth", "▦"),
-    (
-        WindowAction::BottomLeftSixth,
-        "bottom-left-sixth",
-        "Bottom Left Sixth",
-        "▦",
-    ),
-    (
-        WindowAction::BottomCenterSixth,
-        "bottom-center-sixth",
-        "Bottom Center Sixth",
-        "▦",
-    ),
-    (
-        WindowAction::BottomRightSixth,
-        "bottom-right-sixth",
-        "Bottom Right Sixth",
-        "▦",
-    ),
-    (
-        WindowAction::MiddleLeftSixth,
-        "middle-left-sixth",
-        "Middle Left Sixth",
-        "▦",
-    ),
-    (
-        WindowAction::MiddleRightSixth,
-        "middle-right-sixth",
-        "Middle Right Sixth",
-        "▦",
-    ),
-    (WindowAction::Maximize, "maximize", "Maximize", "⛶"),
-    (WindowAction::AlmostMaximize, "almost-maximize", "Almost Maximize", "❐"),
-    (WindowAction::MaximizeHeight, "maximize-height", "Maximize Height", "↕"),
-    (WindowAction::MaximizeWidth, "maximize-width", "Maximize Width", "↔"),
-    (WindowAction::ReasonableSize, "reasonable-size", "Reasonable Size", "▢"),
-    (WindowAction::MakeLarger, "make-larger", "Make Larger", "⊕"),
-    (WindowAction::MakeSmaller, "make-smaller", "Make Smaller", "⊖"),
-    (WindowAction::Center, "center", "Center", "◎"),
-    (WindowAction::MoveLeft, "move-left", "Move Left", "⇤"),
-    (WindowAction::MoveRight, "move-right", "Move Right", "⇥"),
-    (WindowAction::MoveUp, "move-up", "Move Up", "⤒"),
-    (WindowAction::MoveDown, "move-down", "Move Down", "⤓"),
-    (WindowAction::ToggleFullscreen, "fullscreen", "Toggle Fullscreen", "⤢"),
-    // Explicit enter/exit: bindable separately, and they say what happened
-    // instead of silently doing the other thing.
-    (WindowAction::Fullscreen, "full-screen", "Full Screen", "⤢"),
-    (WindowAction::ExitFullscreen, "exit-fullscreen", "Exit Full Screen", "⤡"),
-    (WindowAction::Undo, "undo", "Undo Window Move", "↶"),
-    (WindowAction::NextDisplay, "next-display", "Next Display", "→"),
-    (
-        WindowAction::PreviousDisplay,
-        "previous-display",
-        "Previous Display",
-        "←",
-    ),
-    (WindowAction::RestoreSize, "restore", "Restore Window Size", "↩"),
-    // Spaces: one glyph for the whole family, the title carries the verb.
-    (WindowAction::SpaceNext, "space-next", "Next Space", "🗔"),
-    (WindowAction::SpacePrev, "space-prev", "Previous Space", "🗔"),
-    (
-        WindowAction::SpaceMoveNext,
-        "space-move-next",
-        "Move Window to Next Space",
-        "🗔",
-    ),
-    (
-        WindowAction::SpaceMovePrev,
-        "space-move-prev",
-        "Move Window to Previous Space",
-        "🗔",
-    ),
-    (WindowAction::SpaceSwitcher, "spaces", "Switch Space", "🗔"),
-];
-
-impl WindowAction {
-    pub fn key(self) -> &'static str {
-        WINDOW_ACTIONS.iter().find(|(a, ..)| *a == self).unwrap().1
-    }
-
-    pub fn title(self) -> &'static str {
-        WINDOW_ACTIONS.iter().find(|(a, ..)| *a == self).unwrap().2
-    }
-
-    /// Target rectangle as fractions `(x, y, w, h)` of the work area for
-    /// tiling commands (first cycle step), or `None` for the rest.
-    pub fn frac(self) -> Option<(f64, f64, f64, f64)> {
-        crate::window::frac(self, 0, 0.9)
-    }
-
-    pub fn from_key(key: &str) -> Option<Self> {
-        WINDOW_ACTIONS.iter().find(|(_, k, ..)| *k == key).map(|(a, ..)| *a)
-    }
-
-    pub fn is_display_move(self) -> bool {
-        matches!(self, Self::NextDisplay | Self::PreviousDisplay)
-    }
-
-    pub fn is_restore(self) -> bool {
-        matches!(self, Self::RestoreSize)
-    }
-
-    /// Move the window itself between spaces (as opposed to switching view).
-    pub fn is_space_move(self) -> bool {
-        matches!(self, Self::SpaceMoveNext | Self::SpaceMovePrev)
-    }
-}
+// Window geometry actions live in `window`; re-export so Plan / FFI keep
+// compiling via `engine::WindowAction`.
+pub use crate::window::{WindowAction, WINDOW_ACTIONS};
 
 /// Operations on saved window layouts.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1136,6 +907,10 @@ pub struct Extras {
     pub mcp_extras: crate::mcp::ExtrasCache,
     /// Browser bookmarks (`bookmarks.json`).
     pub bookmarks: Vec<crate::bookmarks::Bookmark>,
+    /// Browser history (`history.json`).
+    pub history: Vec<crate::history::Visit>,
+    /// Recent documents (`recents.json`).
+    pub recents: Vec<crate::recents::Visit>,
     /// Exchange rates (`rates.json`).
     pub rates: Option<crate::currency::Rates>,
 }
@@ -1152,6 +927,8 @@ impl Extras {
             mcp_tools: crate::mcp::load_cache(config_dir),
             mcp_extras: crate::mcp::load_extras(config_dir),
             bookmarks: crate::bookmarks::load_cache(config_dir),
+            history: crate::history::load_cache(config_dir),
+            recents: crate::recents::load_cache(config_dir),
             rates: crate::currency::load(config_dir),
         }
     }
@@ -1234,6 +1011,8 @@ pub struct Engine {
     /// Which browser bookmark stores exist here, and which OpenCast may not read.
     /// Lets the bookmarks command explain an empty result instead of showing none.
     pub bookmark_scan: crate::bookmarks::Scan,
+    /// Same idea for browser history stores.
+    pub history_scan: crate::history::Scan,
     /// Integrations switched on (`spotify`) — Doctor reports these.
     pub integrations_on: Vec<&'static str>,
     /// Command id → ⌘-menu actions an integration adds to it (app rows).
@@ -1937,6 +1716,7 @@ impl Engine {
         // what this machine has and what TCC allows, and a fresh install must stay
         // warning-free. Doctor and the Bookmarks command both say it out loud.
         let bookmark_scan = crate::bookmarks::scan_here();
+        let history_scan = crate::history::scan_here();
         let mut engine = Self {
             config,
             config_dir,
@@ -1957,6 +1737,7 @@ impl Engine {
             mcp_prompts,
             extras,
             bookmark_scan,
+            history_scan,
             integrations_on,
             app_actions,
             sidecars,
@@ -2254,12 +2035,31 @@ impl Engine {
         *self.sidecars.write().unwrap() = Sidecars::load(&self.config_dir);
     }
 
+    const WEB_FALLBACK_ID: &'static str = "fallback:web";
+    const WEB_FALLBACK_URL: &'static str = "https://duckduckgo.com/?q={query}";
+
     /// Fallback entries that are not special tokens, resolved to commands.
     fn fallback_commands(&self) -> Vec<Command> {
         let mut out = Vec::new();
         for f in &self.config.general.fallbacks {
             match f.trim().to_lowercase().as_str() {
                 "files" => {}
+                "web" => {
+                    out.push(Command {
+                        id: Self::WEB_FALLBACK_ID.into(),
+                        title: "Search the Web".into(),
+                        subtitle: Some(host_of(Self::WEB_FALLBACK_URL)),
+                        icon: Some("🔗".into()),
+                        kind: CommandKind::Quicklink,
+                        arguments: vec![Argument {
+                            placeholder: "Query".into(),
+                            optional: false,
+                            secure: false,
+                        }],
+                        hotkey: None,
+                        keywords: vec![],
+                    });
+                }
                 "quicklinks" => {
                     for link in &self.config.quicklinks {
                         if link.url.contains("{query}") {
@@ -2552,6 +2352,34 @@ impl Engine {
                     }
                 }
             }
+            let hist = crate::history::matching(&self.extras.history, q);
+            if crate::history::needle(q).1 {
+                // `hist …` / `history …`: history only, first.
+                out.retain(|c| c.kind != CommandKind::Calculator);
+                let rest = std::mem::take(&mut out);
+                out = hist;
+                out.extend(rest);
+            } else {
+                for row in hist {
+                    if !out.iter().any(|c| c.id == row.id) {
+                        out.push(row);
+                    }
+                }
+            }
+            let rec = crate::recents::matching(&self.extras.recents, q);
+            if crate::recents::needle(q).1 {
+                // `recent …` / `recents …`: recents only, first.
+                out.retain(|c| c.kind != CommandKind::Calculator);
+                let rest = std::mem::take(&mut out);
+                out = rec;
+                out.extend(rest);
+            } else {
+                for row in rec {
+                    if !out.iter().any(|c| c.id == row.id) {
+                        out.push(row);
+                    }
+                }
+            }
             // `chats …` lists saved chats first.
             let chat_rows = crate::chats::matching_in(&s.chats, q, 30);
             if !chat_rows.is_empty() {
@@ -2639,6 +2467,10 @@ impl Engine {
     /// Bookmarks currently in the cache (search never reads the store files).
     pub fn bookmark_count(&self) -> usize {
         self.extras.bookmarks.len()
+    }
+
+    pub fn history_count(&self) -> usize {
+        self.extras.history.len()
     }
 
     /// ⌘-menu actions an integration added to this command (the app row of a
@@ -2780,16 +2612,9 @@ impl Engine {
                 .iter()
                 .find(|(_, k, ..)| *k == key)
                 .map(|(b, ..)| match b {
-                    Builtin::ThemeSystem => Plan::SetTheme("system"),
-                    Builtin::ThemeLight => Plan::SetTheme("light"),
-                    Builtin::ThemeDark => Plan::SetTheme("dark"),
-                    Builtin::PresentationIsland => Plan::SetPresentation("island"),
-                    Builtin::PresentationSpotlight => Plan::SetPresentation("spotlight"),
-                    Builtin::StayAwakeOff => Plan::StayAwake("off"),
-                    Builtin::StayAwakeIndefinite => Plan::StayAwake("indefinite"),
-                    Builtin::StayAwake30m => Plan::StayAwake("30m"),
-                    Builtin::StayAwake1h => Plan::StayAwake("1h"),
-                    Builtin::StayAwake3h => Plan::StayAwake("3h"),
+                    Builtin::Appearance => Plan::Ui("appearance-menu"),
+                    Builtin::PanelPosition => Plan::Ui("panel-position-menu"),
+                    Builtin::StayAwake => Plan::Ui("stay-awake-menu"),
                     Builtin::Settings => Plan::Ui("settings"),
                     Builtin::InstallExtension => {
                         Plan::Extensions(ExtensionOp::Install(args.first().cloned().unwrap_or_default()))
@@ -2840,6 +2665,16 @@ impl Engine {
                             }
                         } else {
                             Plan::FillQuery("bm ".into())
+                        }
+                    }
+                    Builtin::SearchHistory => {
+                        if self.extras.history.is_empty() {
+                            Plan::ShowText {
+                                title: "History".into(),
+                                text: crate::history::why_empty(&self.history_scan),
+                            }
+                        } else {
+                            Plan::FillQuery("hist ".into())
                         }
                     }
                     Builtin::EditNote => Plan::UiArgs {
@@ -2977,6 +2812,9 @@ impl Engine {
         if let Some(url) = id.strip_prefix("bm:") {
             return Ok(Plan::OpenUrl(url.to_string()));
         }
+        if let Some(url) = id.strip_prefix("hist:") {
+            return Ok(Plan::OpenUrl(url.to_string()));
+        }
         if let Some(word) = id.strip_prefix("spell:") {
             return Ok(Plan::UiArgs {
                 action: "spell",
@@ -3107,6 +2945,15 @@ impl Engine {
                 meta: meta.clone(),
                 args: args.to_vec(),
             });
+        }
+        if id == Self::WEB_FALLBACK_ID {
+            let q = args.first().map(String::as_str).unwrap_or("");
+            if q.trim().is_empty() {
+                bail!("`Search the Web` needs a query");
+            }
+            return Ok(Plan::OpenUrl(
+                Self::WEB_FALLBACK_URL.replace("{query}", &url_encode(q)),
+            ));
         }
         if let Some(link) = self.links.get(id) {
             let q = args.first().map(String::as_str).unwrap_or("");
@@ -3308,18 +3155,7 @@ fn host_of(url: &str) -> String {
         .to_string()
 }
 
-/// Percent-encode for a query-string value.
-pub fn url_encode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
-            b' ' => out.push('+'),
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
-}
+pub use crate::encode::url_encode;
 
 /// `spotify:search:<query>` — the app exposes no search command over Apple
 /// Events, so the deep link is the only way in without API credentials.
@@ -3979,6 +3815,26 @@ steps = ["ai:nope"]
     }
 
     #[test]
+    fn web_fallback_injects_and_plans() {
+        let src = DEFAULT_CONFIG.replace(
+            "fallbacks = [\"quicklinks\", \"files\"]",
+            "fallbacks = [\"web\"]",
+        );
+        let cfg = Config::parse(&src).unwrap();
+        let e = Engine::assemble(cfg, "/cfg".into(), vec![], vec![], vec![], vec![]);
+        let rows = e.search("zzqqxx", 10);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "fallback:web");
+        assert_eq!(rows[0].title, "Search the Web");
+        assert_eq!(rows[0].kind, CommandKind::Quicklink);
+        assert_eq!(
+            e.plan("fallback:web", &["rust & tauri".into()]).unwrap(),
+            Plan::OpenUrl("https://duckduckgo.com/?q=rust+%26+tauri".into())
+        );
+        assert!(e.plan("fallback:web", &[]).is_err());
+    }
+
+    #[test]
     fn sidecars_live_in_memory_and_persist() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = Config::parse(DEFAULT_CONFIG).unwrap();
@@ -4140,6 +3996,16 @@ steps = ["ai:nope"]
                 source: "Chrome".into(),
                 folder: String::new(),
             }],
+            history: vec![crate::history::Visit {
+                title: "Rust Lang".into(),
+                url: "https://www.rust-lang.org/".into(),
+                source: "Chrome".into(),
+            }],
+            recents: vec![crate::recents::Visit {
+                path: "/Users/me/Documents/notes.md".into(),
+                name: "notes.md".into(),
+                last_used: None,
+            }],
             rates: Some(crate::currency::Rates {
                 base: "USD".into(),
                 rates: [("EUR".to_string(), 0.5)].into_iter().collect(),
@@ -4194,6 +4060,13 @@ steps = ["ai:nope"]
         let bm = e.search("bm graf", 10);
         assert_eq!(bm[0].id, "bm:https://grafana.example.com");
         assert!(e.search("grafana", 10).iter().any(|c| c.id.starts_with("bm:")));
+        let hist = e.search("hist rust", 10);
+        assert_eq!(hist[0].id, "hist:https://www.rust-lang.org/");
+        assert!(hist[0].subtitle.as_ref().unwrap().starts_with("History · Chrome"));
+        assert_eq!(
+            e.plan(&hist[0].id, &[]).unwrap(),
+            Plan::OpenUrl("https://www.rust-lang.org/".into())
+        );
         let d = &e.search("define serendipity", 5)[0];
         assert_eq!(
             e.plan(&d.id, &[]).unwrap(),
@@ -4422,6 +4295,13 @@ steps = ["ai:nope"]
         assert_eq!(e.plan("builtin:settings", &[]).unwrap(), Plan::Ui("settings"));
         assert_eq!(e.plan("builtin:dictate", &[]).unwrap(), Plan::Ui("dictate"));
         assert_eq!(e.plan("builtin:schedule", &[]).unwrap(), Plan::Ui("schedule"));
+        assert_eq!(e.plan("builtin:appearance", &[]).unwrap(), Plan::Ui("appearance-menu"));
+        assert_eq!(e.plan("builtin:panel-position", &[]).unwrap(), Plan::Ui("panel-position-menu"));
+        assert_eq!(e.plan("builtin:stay-awake", &[]).unwrap(), Plan::Ui("stay-awake-menu"));
+        assert_eq!(e.search("OpenCast Keys", 3)[0].id, "builtin:shortcuts");
+        assert_eq!(e.search("App Menu Shortcuts", 3)[0].id, "builtin:cheat-sheet");
+        assert!(e.search("Appearance: Dark", 5).iter().all(|c| c.id != "builtin:theme-dark"));
+        assert_eq!(e.search("Appearance", 5)[0].id, "builtin:appearance");
         let exp = e.expanding_snippets();
         let keys: Vec<&str> = exp.iter().map(|(k, _)| k.as_str()).collect();
         assert!(keys.contains(&";addr") && keys.contains(&"forced"));

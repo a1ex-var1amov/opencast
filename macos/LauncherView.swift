@@ -77,7 +77,8 @@ struct LauncherView: View {
         if reduceTransparency || Theme.file.glass == false {
             Theme.island(scheme)
         } else {
-            Rectangle().fill(.ultraThinMaterial)
+            // ponytail: thinMaterial reads clearer than ultraThin; opaque island when Reduce transparency.
+            Rectangle().fill(.thinMaterial)
         }
     }
 
@@ -118,7 +119,7 @@ struct LauncherView: View {
                     }
                 ),
                 prompt: Text(fieldPrompt)
-                    .foregroundStyle(Theme.tertiary(scheme))
+                    .foregroundStyle(Theme.secondary(scheme))
             )
             .textFieldStyle(.plain)
             .font(Theme.font(size: Theme.file.titleFontSize ?? 19))
@@ -130,7 +131,7 @@ struct LauncherView: View {
             if model.dictating {
                 Image(systemName: "mic.fill")
                     .foregroundStyle(Theme.danger)
-                    .symbolEffect(.pulse)
+                    .symbolEffect(.pulse, isActive: !Theme.reduceMotion)
                     .help("Listening — Esc to stop")
             }
             if model.busy {
@@ -152,7 +153,12 @@ struct LauncherView: View {
     private var list: some View {
         Group {
             if model.rows.isEmpty {
-                Text("No results")
+                let q = model.query.trimmingCharacters(in: .whitespacesAndNewlines)
+                Text(
+                    q.isEmpty
+                        ? "No results"
+                        : "No results for “\(q)” · Tab asks AI · / browses files"
+                )
                     .foregroundStyle(Theme.secondary(scheme))
                     .frame(maxWidth: .infinity, minHeight: model.rowHeight)
                     .padding(.vertical, 6)
@@ -161,9 +167,10 @@ struct LauncherView: View {
                 let visible = Array(model.rows.enumerated()).dropFirst(start).prefix(8)
                 VStack(spacing: 0) {
                     ForEach(Array(visible), id: \.element.id) { index, row in
-                        rowView(row, index: index)
+                        rowView(row, index: index, hideKind: hideKindLabels(in: visible))
                     }
                 }
+                .accessibilityElement(children: .contain)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
             }
@@ -228,8 +235,29 @@ struct LauncherView: View {
         }
     }
 
-    private func rowView(_ row: Model.Row, index: Int) -> some View {
-        HStack(spacing: 12) {
+    private func hideKindLabels(in visible: ArraySlice<(offset: Int, element: Model.Row)>) -> Bool {
+        let kinds = visible.compactMap { pair -> Command.Kind? in
+            guard case .command(let c) = pair.element else { return nil }
+            return c.kind
+        }
+        guard !kinds.isEmpty else { return false }
+        if Set(kinds).count == 1 { return true }
+        return kinds.filter { $0 == .app }.count * 2 > kinds.count
+    }
+
+    private func rowView(_ row: Model.Row, index: Int, hideKind: Bool = false) -> some View {
+        let on = index == model.selected
+        let axLabel: String
+        let axValue: String
+        switch row {
+        case .ask:
+            axLabel = "Ask AI “\(model.trimmedQuery)”"
+            axValue = "AI"
+        case .command(let command):
+            axLabel = [command.title, command.subtitle].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ", ")
+            axValue = command.kind.label
+        }
+        return HStack(spacing: 12) {
             switch row {
             case .ask:
                 Image(systemName: "sparkles")
@@ -264,17 +292,29 @@ struct LauncherView: View {
                         .background(Theme.kbd(scheme), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                         .foregroundStyle(Theme.secondary(scheme))
                 }
-                Text(command.kind.label)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.tertiary(scheme))
+                if !hideKind {
+                    Text(command.kind.label)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.tertiary(scheme))
+                }
             }
         }
         .padding(.horizontal, 10)
         .frame(height: model.rowHeight)
         .background {
-            if index == model.selected {
+            if on {
+                let fill = Theme.increaseContrast
+                    ? Theme.accent.opacity(scheme == .light ? 0.28 : 0.40)
+                    : Theme.accent.opacity(scheme == .light ? 0.14 : 0.22)
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Theme.accent.opacity(scheme == .light ? 0.14 : 0.22))
+                    .fill(fill)
+                    .overlay(alignment: .leading) {
+                        // 2pt leading accent; inset so it clears the continuous corner.
+                        Rectangle()
+                            .fill(Theme.accent)
+                            .frame(width: 2)
+                            .padding(.vertical, 6)
+                    }
                     .overlay(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .stroke(Theme.accent.opacity(0.35), lineWidth: 1)
@@ -282,6 +322,10 @@ struct LauncherView: View {
             }
         }
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(axLabel)
+        .accessibilityValue(axValue)
+        .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
         .onHover { inside in
             guard inside else { return }
             let loc = NSEvent.mouseLocation
@@ -359,23 +403,31 @@ struct LauncherView: View {
                         .controlSize(.mini)
                     Text("Searching files…")
                         .font(.system(size: 12))
-                        .foregroundStyle(Theme.tertiary(scheme))
+                        .foregroundStyle(Theme.secondary(scheme))
                 }
             } else if !model.fileBuffer.isEmpty {
-                Text("📎 File Buffer · \(model.fileBuffer.count) · ⌘K acts on all · ⌥← clears")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.secondary(scheme))
-                    .lineLimit(1)
+                Label(
+                    "File Buffer · \(model.fileBuffer.count) · ⌘K acts on all · ⌥← clears",
+                    systemImage: "paperclip"
+                )
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.secondary(scheme))
+                .labelStyle(.titleAndIcon)
+                .lineLimit(1)
             } else if FocusController.shared.isActive {
                 let f = FocusController.shared
-                Text("\(f.isPaused ? "⏸ Focus paused" : "🎯 Focus") · \(f.minutesLeft) min left\(f.goal.isEmpty ? "" : " · " + f.goal)")
-                    .lineLimit(1)
+                Label(
+                    "\(f.isPaused ? "Focus paused" : "Focus") · \(f.minutesLeft) min left\(f.goal.isEmpty ? "" : " · " + f.goal)",
+                    systemImage: f.isPaused ? "pause.fill" : "target"
+                )
+                .lineLimit(1)
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.secondary(scheme))
+                .labelStyle(.titleAndIcon)
+            } else {
+                Text(footerLeftLabel)
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.secondary(scheme))
-            } else {
-                Text("OpenCast")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.tertiary(scheme))
             }
             Spacer()
             HStack(spacing: 14) {
@@ -396,13 +448,26 @@ struct LauncherView: View {
                     }
                     hint("Actions", Theme.keyLabel(model.keymap["actions"], "⌘K"))
                     if !model.isListMode {
-                        hint("Click", Theme.keyLabel(model.keymap["click_text"], "`"))
+                        hint("Click Text", Theme.keyLabel(model.keymap["click_text"], "`"))
                     }
                 }
             }
         }
         .padding(.horizontal, 14)
         .frame(height: 38)
+    }
+
+    private var footerLeftLabel: String {
+        if model.clicking { return "OpenCast" }
+        let q = model.query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if q.isEmpty, model.warningCount > 0 {
+            return model.warningCount == 1 ? "1 warning" : "\(model.warningCount) warnings"
+        }
+        guard !q.isEmpty else { return "OpenCast" }
+        let total = model.rows.count
+        if total == 0 { return "0 results" }
+        let shown = min(8, max(0, total - model.listStart))
+        return "\(shown) of \(total)"
     }
 
     private func hint(_ label: String, _ key: String) -> some View {
@@ -448,7 +513,7 @@ private struct ActionsPane: View {
         return Theme.scheme(preference: model.themePreference, system: systemScheme)
     }
 
-    private var actions: [Model.ActionRow] { model.actionRows(for: command) }
+    private var actions: [Model.ActionRow] { model.filteredActionRows(for: command) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -458,6 +523,12 @@ private struct ActionsPane: View {
                     .font(.system(size: 15, weight: .semibold))
                     .lineLimit(1)
                 Spacer()
+                if !model.trimmedQuery.isEmpty {
+                    Text("Filter “\(model.trimmedQuery)”")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.secondary(scheme))
+                        .lineLimit(1)
+                }
                 Text("Actions")
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.tertiary(scheme))
@@ -494,20 +565,7 @@ private struct ActionsPane: View {
             .onChange(of: model.selected) { _, i in proxy.scrollTo(i) }
             }
             Spacer(minLength: 0)
-            HStack {
-                Text("Esc back")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.tertiary(scheme))
-                Spacer()
-                Text("Return")
-                    .font(.system(size: 12))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Theme.kbd(scheme), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                    .foregroundStyle(Theme.secondary(scheme))
-            }
-            .padding(.horizontal, 14)
-            .frame(height: 38)
+            HintBar(left: "OpenCast", hints: [("Back", "Esc"), ("Run", "Return")])
         }
         .frame(height: 52 + CGFloat(min(actions.count, 10)) * 36 + 38)
     }
@@ -543,7 +601,7 @@ struct HintBar: View {
         HStack {
             Text(left)
                 .font(.system(size: 12))
-                .foregroundStyle(Theme.tertiary(scheme))
+                .foregroundStyle(Theme.secondary(scheme))
             Spacer()
             HStack(spacing: 14) {
                 ForEach(Array(hints.enumerated()), id: \.offset) { _, hint in
@@ -552,7 +610,7 @@ struct HintBar: View {
                         Text(hint.1)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Theme.kbd(scheme), in: RoundedRectangle(cornerRadius: 5))
+                            .background(Theme.kbd(scheme), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                     }
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.secondary(scheme))
@@ -631,7 +689,7 @@ private struct ArgsForm: View {
     @ViewBuilder private func field(_ index: Int) -> some View {
         let spec = command.arguments[index]
         let placeholder = spec.placeholder + (spec.optional ? " (optional)" : "")
-        let prompt = Text(placeholder).foregroundStyle(Theme.tertiary(scheme))
+        let prompt = Text(placeholder).foregroundStyle(Theme.secondary(scheme))
         Group {
             if spec.secure {
                 SecureField("", text: $model.argDrafts[index], prompt: prompt)

@@ -33,7 +33,7 @@ pub fn dispatch(engine: &Engine, request: &str) -> String {
             serde_json::json!({ "commands": commands })
         }
         "settings" => {
-            // Prefer the file so Appearance / Presentation commands stick without Reload.
+            // Prefer the file so Appearance / Panel Position stick without Reload.
             let path = engine.config_dir.join("config.toml");
             let (theme, presentation) = Config::load_from(&path)
                 .map(|c| (c.general.theme, c.general.presentation))

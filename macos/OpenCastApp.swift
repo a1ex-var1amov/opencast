@@ -100,6 +100,16 @@ final class Model {
     var focusTick = 0
     var toastText: String?
     var toastIsError = false
+    /// Return while the toast is visible runs this (permission deep-links).
+    var toastAction: (() -> Void)?
+    /// Last 20 toast strings (Doctor / debug).
+    var recentToasts: [String] = []
+    /// Config/engine warnings kept for the footer count (FS-1).
+    var warnings: [String] = []
+    var warningCount: Int { warnings.count }
+    /// Soft-delete undo (⌘Z) while the grace toast is up.
+    private var undoAction: (() -> Void)?
+    private var undoCommit: (() -> Void)?
     var seekQuery = ""
     var seekIndex = 0
     var seekScan: SeekScan?
@@ -162,24 +172,26 @@ final class Model {
     /// App that was frontmost when the panel opened (AX target for selection / snaps).
     private(set) var previousApp: NSRunningApplication?
 
-    private var silentOutput: AiOutput?
-    private var silentBuffer = ""
-    private var chatTemperature: Double?
-    private var chatMaxTokens: Int?
+    var silentOutput: AiOutput?
+    var silentBuffer = ""
+    var chatTemperature: Double?
+    var chatMaxTokens: Int?
 
-    private var chatRequestId: String?
-    private var chatSystem: String?
-    private var providerGen = 0
+    var chatRequestId: String?
+    var chatSystem: String?
+    var providerGen = 0
 
     private(set) var launcher: IslandPanel?
     /// The next blur (e.g. an open panel) must not hide the launcher.
     var keepOnBlurOnce = false
-    private var seek: IslandPanel?
+    var seek: IslandPanel?
     private var screen: NSScreen?
     private var dropped = false
     private var readKeep = false
     private var keepOnBlur = false
     private var hiding = false
+    /// Hotkey-problem flash — once per process when problems are non-empty.
+    private var didFlashHotkeyProblem = false
     private var searchGen = 0
     private var fileSearchTask: Task<Void, Never>?
     private var toastTask: Task<Void, Never>?
@@ -242,7 +254,7 @@ final class Model {
         case .search, .list:
             return 58 + listHeight + 38
         case .actions(let command):
-            let n = actionRows(for: command).count
+            let n = filteredActionRows(for: command).count
             return 52 + CGFloat(min(max(n, 1), 10)) * 36 + 38
         case .args, .output, .chat:
             return 480
@@ -274,12 +286,40 @@ final class Model {
         guard rows.indices.contains(selected) else { return nil }
         switch rows[selected] {
         case .ask:
-            return "Ask AI"
+            return (providersReady && providers.isEmpty) ? "Set up AI" : "Ask AI"
         case .command(let command):
             if case .list = mode { return "Run" }
-            if command.kind == .calculator { return "Copy" }
             if !command.arguments.isEmpty { return "Continue" }
-            if command.kind == .app { return "Open" }
+            return Self.returnVerb(for: command)
+        }
+    }
+
+    /// Footer Return verb from kind + id prefix (MC-3).
+    private static func returnVerb(for command: Command) -> String {
+        switch command.kind {
+        case .calculator: return "Copy"
+        case .app: return "Open"
+        case .clipboard: return "Show"
+        case .builtin:
+            let key = command.id.hasPrefix("builtin:") ? String(command.id.dropFirst(8)) : command.id
+            if key.hasPrefix("theme-") || key.hasPrefix("presentation-") || key.hasPrefix("stay-awake")
+                || key.hasPrefix("set-")
+            {
+                return "Set"
+            }
+            if key == "clipboard" || key == "doctor" || key.hasPrefix("show-") || key == "check-updates" {
+                return "Show"
+            }
+            if key == "settings" || key == "shortcuts" || key.hasPrefix("open-")
+                || key.contains("extension") || key == "sync-icloud" || key == "notes"
+                || key == "chat-history" || key == "schedule" || key == "menu-items"
+                || key == "bookmarks" || key == "selection" || key == "arrange-window"
+                || key.hasPrefix("space")
+            {
+                return "Open"
+            }
+            return "Run"
+        default:
             return "Run"
         }
     }
@@ -321,7 +361,7 @@ final class Model {
             ("copy_answer", ["cmd", "shift"], "c"), ("new_chat", ["cmd"], "n"),
             ("next", ["ctrl"], "n"), ("previous", ["ctrl"], "p"),
             ("dictate", ["cmd"], "d"), ("quick_look", ["cmd"], "y"), ("preview", ["cmd"], "i"),
-            ("large_type", ["cmd"], "l"),
+            ("large_type", ["cmd"], "l"), ("settings", ["cmd"], ","),
         ]
         var out: [String: KeyBinding] = [:]
         for (name, mods, key) in specs {
@@ -417,6 +457,7 @@ final class Model {
                 apply(ExecOutcome(result))
             }
         case "ai":
+            if SettingsState.shared.handleProviderTest(obj) { return }
             if CompareController.shared.handle(obj) { return }
             applyAI(obj)
         case "progress":
@@ -441,7 +482,13 @@ final class Model {
                 guard let out = opencast_hotkeys_fix() else { return }
                 let problems = String(cString: out)
                 opencast_free(out)
-                for line in problems.split(separator: "\n") { NSLog("opencast: hotkeys: \(line)") }
+                let lines = problems.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+                for line in lines { NSLog("opencast: hotkeys: \(line)") }
+                SettingsState.shared.hotkeyProblems = lines
+                if let first = lines.first, !self.didFlashHotkeyProblem {
+                    self.didFlashHotkeyProblem = true
+                    self.flash(first, error: true, thenHide: false)
+                }
             }
         }
     }
@@ -463,16 +510,22 @@ final class Model {
         self.screen = screen
         let final = frame(on: screen, height: islandHeight)
         if !dropped {
-            var start = final
-            start.origin.y = screen.frame.maxY
-            launcher.setFrame(start, display: false)
             dropped = true
-            NSApp.activate(ignoringOtherApps: true)
-            launcher.makeKeyAndOrderFront(nil)
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.16
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                launcher.animator().setFrame(final, display: true)
+            if Theme.reduceMotion {
+                launcher.setFrame(final, display: true)
+                NSApp.activate(ignoringOtherApps: true)
+                launcher.makeKeyAndOrderFront(nil)
+            } else {
+                var start = final
+                start.origin.y = screen.frame.maxY
+                launcher.setFrame(start, display: false)
+                NSApp.activate(ignoringOtherApps: true)
+                launcher.makeKeyAndOrderFront(nil)
+                NSAnimationContext.runAnimationGroup { ctx in
+                    ctx.duration = 0.16
+                    ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                    launcher.animator().setFrame(final, display: true)
+                }
             }
         } else {
             launcher.setFrame(final, display: true)
@@ -687,6 +740,10 @@ final class Model {
 
     func handleKey(_ event: NSEvent) -> Bool {
         lastKeyDownAt = event.timestamp
+        if recordingLauncherHotkey {
+            finishRecordLauncherHotkey(event)
+            return true
+        }
         if let target = recordingHotkeyFor, launcher?.isKeyWindow == true {
             recordHotkey(event, for: target)
             return true
@@ -697,8 +754,27 @@ final class Model {
         }
         guard launcher?.isKeyWindow == true else { return false }
         let mods = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        // Soft-delete undo while the grace toast is up (FR-8).
+        if mods == .command, event.charactersIgnoringModifiers?.lowercased() == "z", undoAction != nil {
+            performUndoDelete()
+            return true
+        }
         if event.keyCode == 53, mods.isEmpty {
             escape()
+            return true
+        }
+        if keyMatches(event, "settings") {
+            SettingsWindowController.shared.show()
+            return true
+        }
+        // Actionable toast: Return runs toastAction before normal Return handling.
+        if toastText != nil, let action = toastAction, mods.isEmpty,
+           event.keyCode == 36 || event.keyCode == 76
+        {
+            toastAction = nil
+            toastText = nil
+            toastTask?.cancel()
+            action()
             return true
         }
         switch mode {
@@ -717,7 +793,25 @@ final class Model {
 
     private func actionsKey(_ event: NSEvent, _ mods: NSEvent.ModifierFlags) -> Bool {
         guard case .actions(let command) = mode else { return false }
-        let actions = actionRows(for: command)
+        // Type-to-filter (Raycast/Alfred): printable keys narrow the action list.
+        if mods.isEmpty, event.keyCode == 51 { // backspace
+            if !query.isEmpty {
+                query.removeLast()
+                selected = 0
+                noteContentChanged()
+            }
+            return true
+        }
+        if mods.isEmpty || mods == .shift,
+           let chars = event.charactersIgnoringModifiers, chars.count == 1,
+           let ch = chars.first, ch.isLetter || ch.isNumber || ch == " " || ch == "-" || ch == "_"
+        {
+            query += chars
+            selected = 0
+            noteContentChanged()
+            return true
+        }
+        let actions = filteredActionRows(for: command)
         if !mods.isEmpty, let hit = actions.first(where: { $0.matches(event) }) {
             runAction(hit.id, for: command)
             return true
@@ -748,6 +842,7 @@ final class Model {
     }
 
     func showWarnings(_ warnings: [String]) {
+        self.warnings = warnings
         guard let first = warnings.first else { return }
         let more = warnings.count > 1 ? " (+\(warnings.count - 1) more)" : ""
         flash(first + more, error: true, thenHide: false)
@@ -828,26 +923,6 @@ final class Model {
             let paths = raw["paths"] as? [String] ?? []
             await MainActor.run { Model.shared.loadIcons(paths) }
         }
-    }
-
-    private func startClick() {
-        guard !clicking, !busy else { return }
-        clicking = true
-        seekQuery = ""
-        seekIndex = 0
-        noteContentChanged()
-        focusTick += 1
-        execute(id: "seek", args: [])
-    }
-
-    private func cancelClick() {
-        clicking = false
-        seekScan = nil
-        seekQuery = ""
-        seekIndex = 0
-        seek?.orderOut(nil)
-        noteContentChanged()
-        focusTick += 1
     }
 
     func perform(_ id: String) {
@@ -1158,7 +1233,7 @@ final class Model {
         case .presentation(let mode):
             presentation = mode
             noteContentChanged()
-            flash("Presentation: \(mode.capitalized)", error: false, thenHide: false)
+            flash("Panel Position: \(mode.capitalized)", error: false, thenHide: false)
         case .stayAwake(let mode):
             StayAwakeController.shared.apply(mode)
             let label: String = switch mode {
@@ -1178,14 +1253,8 @@ final class Model {
         case .askAi:
             openPlainChat(prompt: trimmedQuery.isEmpty ? nil : trimmedQuery)
         case .clickMode:
-            // Seek event attaches the overlay. Keep the island up.
-            if !clicking {
-                clicking = true
-                seekQuery = ""
-                seekIndex = 0
-                noteContentChanged()
-                focusTick += 1
-            }
+            // Hotkey Seek: same Screen Recording gate as the in-panel binding.
+            startClick()
         }
     }
 
@@ -1215,7 +1284,12 @@ final class Model {
                 if let v = raw["windowHud"] as? Bool { Model.shared.windowHud = v }
                 let drag = raw["dragSnap"] as? Bool ?? false
                 if drag && !WindowManager.accessibilityTrusted {
-                    Model.shared.flash("Drag to snap needs Accessibility access", error: true, thenHide: false)
+                    Model.shared.flash(
+                        "Drag to snap needs Accessibility access",
+                        error: true,
+                        thenHide: false,
+                        action: { SettingsWindowController.shared.show(tab: .permissions) }
+                    )
                 }
                 DragSnap.shared.setEnabled(drag)
                 WindowGlyphs.reset()
@@ -1228,44 +1302,6 @@ final class Model {
                 Model.shared.noteContentChanged()
             }
         }
-    }
-
-    /// Tab / Ask AI: a fresh chat with the default provider settings.
-    /// Reopen a saved chat with its provider and model.
-    private func resumeChat(id: String, provider: String?, model: String?, system: String?, turns: [ChatTurn]) {
-        chatPreset = nil
-        openChat(prompt: nil, system: system, provider: provider, model: model, autoSend: false)
-        chatId = id
-        chatTurns = turns
-    }
-
-    private func openPlainChat(prompt: String?) {
-        chatTemperature = nil
-        chatMaxTokens = nil
-        chatPreset = nil
-        openChat(prompt: prompt, system: nil, provider: nil, model: nil, autoSend: prompt != nil)
-    }
-
-    func openChat(prompt: String?, system: String?, provider: String?, model: String?, autoSend: Bool) {
-        stopStream()
-        providerGen += 1
-        chatTurns = []
-        chatId = "chat:\(UUID().uuidString)"
-        chatAttachments = []
-        pendingApproval = nil
-        chatInput = ""
-        chatSystem = system
-        chatProviderId = provider
-        chatModel = model
-        providers = []
-        providersReady = false
-        mode = .chat(prompt: prompt, system: system, provider: provider, model: model, autoSend: autoSend)
-        noteContentChanged()
-        focusTick += 1
-        if let prompt, !prompt.isEmpty {
-            if autoSend { sendChat(prompt) } else { chatInput = prompt }
-        }
-        loadProviders()
     }
 
     private func showArgs(_ command: Command) {
@@ -1312,8 +1348,14 @@ final class Model {
             Dictation.shared.stop()
             return
         }
+        // Esc dismisses a toast first (FS-4); never clears the query as a side effect.
+        if toastText != nil {
+            dismissToast()
+            return
+        }
         switch mode {
         case .search:
+            // Root: first Esc clears query; second (empty) closes. Never clear when backing.
             if query.isEmpty { hide() } else { query = "" }
         case .list:
             if let back = localListBack {
@@ -1321,7 +1363,7 @@ final class Model {
                 localListBack = nil
                 back()
             } else {
-                backToSearch(clearQuery: true)
+                backToSearch(clearQuery: false)
             }
         case .chat where pendingApproval != nil:
             answerApproval(false)
@@ -1329,7 +1371,7 @@ final class Model {
             // Cancel does not emit `done`. Drop the flag first so a late token is ignored.
             stopStream()
         case .chat:
-            backToSearch(clearQuery: true)
+            backToSearch(clearQuery: false)
         default:
             backToSearch(clearQuery: false)
         }
@@ -1415,8 +1457,10 @@ final class Model {
             return true
         }
         if case .list = mode {
-            // Tab: autocomplete the selected item when it offers one.
-            if event.keyCode == 48, mods.isEmpty, case .list(_, let items, _) = mode,
+            // Right Arrow (or ⌘→) autocompletes. Tab stays Ask AI in search only —
+            // list mode must not steal Tab from that binding (CO-2).
+            let right = event.keyCode == 124
+            if right, mods.isEmpty || mods == .command, case .list(_, let items, _) = mode,
                rows.indices.contains(selected), case .command(let row) = rows[selected],
                let i = Int(row.id.dropFirst("item:".count)), let auto = items[safe: i]?.autocomplete
             {
@@ -1432,6 +1476,9 @@ final class Model {
             return true
         }
         if keyMatches(event, "click_text") {
+            // Backtick is a typing character when the field has text; only enter
+            // Click Text on an empty query so ` is not swallowed mid-search.
+            guard trimmedQuery.isEmpty else { return false }
             startClick()
             return true
         }
@@ -1513,6 +1560,7 @@ final class Model {
     private func openListActions() {
         guard let list = activeList, rows.indices.contains(selected), case .command(let row) = rows[selected] else { return }
         listBeforeActions = list
+        query = "" // type-to-filter starts empty
         mode = .actions(row)
         selected = 0
         listStart = 0
@@ -1710,7 +1758,12 @@ final class Model {
 
     private func showArrangeWindow() {
         guard WindowManager.accessibilityTrusted else {
-            flash("Window commands need Accessibility access", error: true, thenHide: false)
+            flash(
+                "Window commands need Accessibility access",
+                error: true,
+                thenHide: false,
+                action: { SettingsWindowController.shared.show(tab: .permissions) }
+            )
             return
         }
         // On a rotated monitor, the stacking commands come first.
@@ -1736,7 +1789,12 @@ final class Model {
     /// every desktop also gets a row that takes the covered app's window with it.
     func showSpaces() {
         guard WindowManager.accessibilityTrusted else {
-            flash(WindowManager.permissionHint, error: true, thenHide: false)
+            flash(
+                WindowManager.permissionHint,
+                error: true,
+                thenHide: false,
+                action: { SettingsWindowController.shared.show(tab: .permissions) }
+            )
             return
         }
         let spaces = Spaces.list()
@@ -1788,6 +1846,12 @@ final class Model {
         case "settings":
             hide()
             SettingsWindowController.shared.show()
+        case "appearance-menu":
+            showAppearanceMenu()
+        case "panel-position-menu":
+            showPanelPositionMenu()
+        case "stay-awake-menu":
+            showStayAwakeMenu()
         case "menu-items":
             showMenuItems()
         case "dictate":
@@ -1999,6 +2063,8 @@ final class Model {
     var windowHud = true
     var pendingConfirm: String?
     var recordingHotkeyFor: Command?
+    /// Settings "Record…" for `general.hotkey` (any OpenCast window may be key).
+    var recordingLauncherHotkey = false
     @ObservationIgnored var lastKeyDownAt: TimeInterval = 0
     @ObservationIgnored var shiftDownAt: TimeInterval?
 
@@ -2023,21 +2089,43 @@ final class Model {
         79: "F18", 80: "F19", 90: "F20",
     ]
 
-    private func recordHotkey(_ event: NSEvent, for command: Command) {
+    /// Settings: capture the next chord into `general.hotkey` via configSet.
+    func beginRecordLauncherHotkey() {
+        recordingHotkeyFor = nil
+        recordingLauncherHotkey = true
+        SettingsState.shared.hotkeyStatus = "Press keys… Esc cancels"
+    }
+
+    private func finishRecordLauncherHotkey(_ event: NSEvent) {
         if event.keyCode == 53 {
-            recordingHotkeyFor = nil
-            flash("Cancelled", error: false, thenHide: false)
+            recordingLauncherHotkey = false
+            SettingsState.shared.hotkeyStatus = "Cancelled"
             return
         }
-        guard let key = Self.keyNames[event.keyCode] else {
-            flash("That key can't be a hotkey — try another", error: true, thenHide: false)
-            return
+        switch Self.hotkeySpec(from: event) {
+        case .ok(let spec):
+            recordingLauncherHotkey = false
+            SettingsState.shared.hotkeyDraft = spec
+            SettingsState.shared.set("hotkey", spec)
+            SettingsState.shared.hotkeyStatus = "Saved \(spec)"
+        case .bad(let msg):
+            SettingsState.shared.hotkeyStatus = msg
+        }
+    }
+
+    private enum HotkeyParse {
+        case ok(String)
+        case bad(String)
+    }
+
+    private static func hotkeySpec(from event: NSEvent) -> HotkeyParse {
+        guard let key = keyNames[event.keyCode] else {
+            return .bad("That key can't be a hotkey — try another")
         }
         let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
         let isF = key.hasPrefix("F") && key.count <= 3 && Int(key.dropFirst()) != nil
         guard isF || flags.contains(.command) || flags.contains(.control) || flags.contains(.option) else {
-            flash("Use ⌘, ⌃ or ⌥ (or an F-key)", error: true, thenHide: false)
-            return
+            return .bad("Use ⌘, ⌃ or ⌥ (or an F-key)")
         }
         var parts: [String] = []
         if flags == [.command, .shift, .option, .control] {
@@ -2048,8 +2136,22 @@ final class Model {
             if flags.contains(.shift) { parts.append("Shift") }
             if flags.contains(.command) { parts.append("Cmd") }
         }
-        recordingHotkeyFor = nil
-        setHotkey((parts + [key]).joined(separator: "+"), for: command)
+        return .ok((parts + [key]).joined(separator: "+"))
+    }
+
+    private func recordHotkey(_ event: NSEvent, for command: Command) {
+        if event.keyCode == 53 {
+            recordingHotkeyFor = nil
+            flash("Cancelled", error: false, thenHide: false)
+            return
+        }
+        switch Self.hotkeySpec(from: event) {
+        case .ok(let spec):
+            recordingHotkeyFor = nil
+            setHotkey(spec, for: command)
+        case .bad(let msg):
+            flash(msg, error: true, thenHide: false)
+        }
     }
 
     private func setHotkey(_ spec: String, for command: Command) {
@@ -2183,8 +2285,8 @@ final class Model {
         return out.sorted { $0.1 > $1.1 }.prefix(25).map { (path: $0.0, used: $0.1) }
     }
 
-    /// Chat ⌘⇧R: add what's in the input (or your last message) to profile.md.
-    private func rememberInProfile() {
+    /// Chat ⌘⇧R: add what's in the input (or your last message) to the AI profile.
+    func rememberInProfile() {
         let typed = chatInput.trimmingCharacters(in: .whitespacesAndNewlines)
         let text = typed.isEmpty ? (chatTurns.last { $0.role == "user" }?.content ?? "") : typed
         guard !text.isEmpty else {
@@ -2196,7 +2298,7 @@ final class Model {
             flash(e, error: true, thenHide: false)
         } else {
             if !typed.isEmpty { chatInput = "" }
-            flash("Remembered in profile.md", error: false, thenHide: false)
+            flash("Added to your AI profile", error: false, thenHide: false)
         }
     }
 
@@ -2351,7 +2453,7 @@ final class Model {
             if verb == "copy" {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(track.line, forType: .string)
-                self.flash("copied: \(track.line)", error: false, thenHide: false)
+                self.flash("Copied: \(track.line)", error: false, thenHide: false)
                 return
             }
             if verb == "open" {
@@ -2383,11 +2485,56 @@ final class Model {
         mode = .output(title: "Now Playing", text: text)
     }
 
-    /// "Keyboard Shortcuts": every running app with a menu bar. Pick one and you
+    /// Appearance: System / Light / Dark. Writes config, then applies.
+    func showAppearanceMenu() {
+        let choices: [(String, String)] = [("system", "System"), ("light", "Light"), ("dark", "Dark")]
+        let items = choices.map { ListItem(title: $0.1, subtitle: nil, icon: "🖥️", arg: $0.0) }
+        showLocalList(id: "appearance", title: "Appearance", icon: "🖥️", items: items) { i in
+            guard choices.indices.contains(i) else { return }
+            let value = choices[i].0
+            _ = Engine.call(["op": "configSet", "key": "theme", "value": value])
+            self.apply(.theme(value))
+        }
+    }
+
+    /// Panel Position: Island / Spotlight.
+    func showPanelPositionMenu() {
+        let choices: [(String, String)] = [("island", "Island"), ("spotlight", "Spotlight")]
+        let items = choices.map { ListItem(title: $0.1, subtitle: nil, icon: "🏝️", arg: $0.0) }
+        showLocalList(id: "panel-position", title: "Panel Position", icon: "🏝️", items: items) { i in
+            guard choices.indices.contains(i) else { return }
+            let value = choices[i].0
+            _ = Engine.call(["op": "configSet", "key": "presentation", "value": value])
+            self.apply(.presentation(value))
+        }
+    }
+
+    /// Stay Awake: Off / Indefinite / 30m / 1h / 3h.
+    func showStayAwakeMenu() {
+        let choices: [(String, String)] = [
+            ("off", "Off"),
+            ("indefinite", "Indefinite"),
+            ("30m", "30m"),
+            ("1h", "1h"),
+            ("3h", "3h"),
+        ]
+        let items = choices.map { ListItem(title: $0.1, subtitle: nil, icon: "☕️", arg: $0.0) }
+        showLocalList(id: "stay-awake", title: "Stay Awake", icon: "☕️", items: items) { i in
+            guard choices.indices.contains(i) else { return }
+            self.apply(.stayAwake(choices[i].0))
+        }
+    }
+
+    /// App Menu Shortcuts: every running app with a menu bar. Pick one and you
     /// get its shortcuts; pick a shortcut and it runs in that app.
     func showShortcutApps() {
         guard WindowManager.accessibilityTrusted else {
-            flash(WindowManager.permissionHint, error: true, thenHide: false)
+            flash(
+                WindowManager.permissionHint,
+                error: true,
+                thenHide: false,
+                action: { SettingsWindowController.shared.show(tab: .permissions) }
+            )
             return
         }
         let front = previousApp?.processIdentifier ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
@@ -2409,7 +2556,7 @@ final class Model {
                 arg: String(i)
             )
         }
-        showLocalList(id: "shortcuts", title: "Keyboard Shortcuts", icon: "⌨️", items: items) { i in
+        showLocalList(id: "shortcuts", title: "App Menu Shortcuts", icon: "⌨️", items: items) { i in
             guard entries.indices.contains(i) else { return }
             self.showAppShortcuts(NSRunningApplication(processIdentifier: entries[i].pid), name: entries[i].name)
         }
@@ -2450,7 +2597,12 @@ final class Model {
 
     func showMenuItems() {
         guard WindowManager.accessibilityTrusted else {
-            flash(WindowManager.permissionHint, error: true, thenHide: false)
+            flash(
+                WindowManager.permissionHint,
+                error: true,
+                thenHide: false,
+                action: { SettingsWindowController.shared.show(tab: .permissions) }
+            )
             return
         }
         guard let app = previousApp else {
@@ -2534,11 +2686,20 @@ final class Model {
               case .command(let command) = rows[selected]
         else { return }
         openWithFor = nil
+        query = "" // type-to-filter starts empty
         mode = .actions(command)
         selected = 0
         listStart = 0
         noteContentChanged()
         focusTick += 1
+    }
+
+    /// Actions mode type-to-filter: same order as the pane, selected indexes these.
+    func filteredActionRows(for command: Command) -> [ActionRow] {
+        let all = actionRows(for: command)
+        guard !trimmedQuery.isEmpty else { return all }
+        // Match ActionsPane scoring (title only) so Return hits the visible row.
+        return ListFilter.order(all, query: query) { ($0.title, nil) }.map(\.item)
     }
 
     /// "Open With…" sub-list for this command id, when showing it.
@@ -2586,7 +2747,7 @@ final class Model {
             ]
             rows.append(ActionRow(id: "recent-docs", title: "Recent Documents", key: "cmd+r"))
             if runningApp(for: command) != nil {
-                rows.append(ActionRow(id: "shortcuts-app", title: "Keyboard Shortcuts"))
+                rows.append(ActionRow(id: "shortcuts-app", title: "App Menu Shortcuts"))
                 rows.append(ActionRow(id: "quit-app", title: "Quit \(command.title)", key: "cmd+q"))
                 rows.append(ActionRow(id: "hide-app", title: "Hide \(command.title)", key: "cmd+h"))
             }
@@ -2845,23 +3006,31 @@ final class Model {
                 _ = Engine.call(["op": "paste", "text": text])
             }
         case "delete-note":
-            Task.detached {
-                _ = Engine.call(["op": "noteDelete", "id": command.id])
-                await MainActor.run {
-                    Model.shared.flash("Deleted note", error: false, thenHide: false)
-                    if Model.shared.ready { Model.shared.search() }
-                }
-            }
+            let id = command.id
             mode = .search
+            commands.removeAll { $0.id == id }
+            offerUndoDelete(
+                commit: {
+                    Task.detached {
+                        _ = Engine.call(["op": "noteDelete", "id": id])
+                        await MainActor.run { if Model.shared.ready { Model.shared.search() } }
+                    }
+                },
+                undo: { if Model.shared.ready { Model.shared.search() } }
+            )
         case "delete-chat":
-            Task.detached {
-                _ = Engine.call(["op": "chatDelete", "id": command.id])
-                await MainActor.run {
-                    Model.shared.flash("Deleted chat", error: false, thenHide: false)
-                    if Model.shared.ready { Model.shared.search() }
-                }
-            }
+            let id = command.id
             mode = .search
+            commands.removeAll { $0.id == id }
+            offerUndoDelete(
+                commit: {
+                    Task.detached {
+                        _ = Engine.call(["op": "chatDelete", "id": id])
+                        await MainActor.run { if Model.shared.ready { Model.shared.search() } }
+                    }
+                },
+                undo: { if Model.shared.ready { Model.shared.search() } }
+            )
         case "pin":
             Task.detached {
                 let r = Engine.call(["op": "pin", "id": command.id])
@@ -2942,13 +3111,26 @@ final class Model {
             }
             mode = .search
         case "clip-delete":
-            ClipboardHistory.shared.delete(command.id)
-            flash("Deleted", error: false, thenHide: false)
+            if let taken = ClipboardHistory.shared.take(command.id) {
+                offerUndoDelete(
+                    commit: { ClipboardHistory.shared.discardFiles(taken.entry) },
+                    undo: {
+                        ClipboardHistory.shared.restore(taken.entry, at: taken.index)
+                        if Model.shared.ready { Model.shared.search() }
+                    }
+                )
+            }
             mode = .search
             search()
         case "clip-delete-all":
-            ClipboardHistory.shared.deleteAll(keepPinned: true)
-            flash("Cleared clipboard history", error: false, thenHide: false)
+            let removed = ClipboardHistory.shared.takeAll(keepPinned: true)
+            offerUndoDelete(
+                commit: { for e in removed { ClipboardHistory.shared.discardFiles(e) } },
+                undo: {
+                    ClipboardHistory.shared.restoreMany(removed)
+                    if Model.shared.ready { Model.shared.search() }
+                }
+            )
             mode = .search
             search()
         default:
@@ -3051,52 +3233,6 @@ final class Model {
         return false
     }
 
-    private func chatKey(_ event: NSEvent, _ mods: NSEvent.ModifierFlags) -> Bool {
-        if pendingApproval != nil, mods.isEmpty, event.keyCode == 36 || event.keyCode == 76 {
-            answerApproval(true)
-            return true
-        }
-        let chars = event.charactersIgnoringModifiers?.lowercased()
-        if mods == .command, chars == "o" {
-            attachFile()
-            return true
-        }
-        if mods == [.command, .shift], chars == "v" {
-            attachClipboard()
-            return true
-        }
-        if mods == [.command, .shift], chars == "s" {
-            attachScreen()
-            return true
-        }
-        if keyMatches(event, "paste_answer") {
-            pasteLastAnswer()
-            return true
-        }
-        if keyMatches(event, "copy_answer") {
-            copyAnswer()
-            return true
-        }
-        if mods == [.command, .shift], event.charactersIgnoringModifiers?.lowercased() == "r" {
-            rememberInProfile()
-            return true
-        }
-        if keyMatches(event, "new_chat") {
-            newChat()
-            return true
-        }
-        if keyMatches(event, "dictate") {
-            toggleDictation()
-            return true
-        }
-        if mods.isEmpty, event.keyCode == 36 || event.keyCode == 76 {
-            if fieldIsComposing { return false }
-            sendChat(chatInput)
-            return true
-        }
-        return false
-    }
-
     private func submitArgs() {
         guard case .args(let command) = mode else { return }
         if let missing = command.arguments.enumerated().first(where: { index, spec in
@@ -3114,391 +3250,9 @@ final class Model {
         argDrafts.indices.contains(index) ? argDrafts[index] : ""
     }
 
-    func sendChat(_ text: String) {
-        let content = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !content.isEmpty, !chatStreaming else { return }
-        let temperature = chatTemperature
-        let maxTokens = chatMaxTokens
-        let history = chatTurns.filter { turn in
-            !(turn.role == "assistant" && (turn.error != nil || turn.content.isEmpty))
-        }
-        let attached = chatAttachments
-        chatAttachments = []
-        let context = attached.filter { !$0.text.isEmpty }
-            .map { "<attachment name=\"\($0.name)\">\n\($0.text)\n</attachment>" }.joined(separator: "\n\n")
-        let images = attached.compactMap { a -> [String: String]? in
-            guard let b64 = a.imageB64, let mime = a.imageMime else { return nil }
-            return ["mime": mime, "b64": b64]
-        }
-        let userTurn = ChatTurn(
-            role: "user", content: content, context: context,
-            attachmentNames: attached.map(\.name), images: images)
-        // Images ride along on every later turn too: "what about the box in the
-        // top-left?" only makes sense if the model can still see the shot.
-        let messages: [[String: Any]] = (history + [userTurn]).map { turn in
-            var m: [String: Any] = ["role": turn.role, "content": turn.wireContent]
-            if !turn.images.isEmpty { m["images"] = turn.images }
-            return m
-        }
-        let id = UUID().uuidString
-        chatRequestId = id
-        chatStreaming = true
-        chatTurns = history + [userTurn, ChatTurn(role: "assistant", content: "")]
-        chatInput = ""
-        let provider = chatProviderId
-        let model = chatModel
-        let system = chatSystem
-        let preset = chatPreset
-        Task.detached {
-            var body: [String: Any] = [
-                "op": "stream",
-                "requestId": id,
-                "messages": messages,
-            ]
-            if let preset { body["preset"] = preset }
-            if let provider { body["provider"] = provider }
-            if let model { body["model"] = model }
-            if let system { body["system"] = system }
-            if let temperature { body["temperature"] = temperature }
-            if let maxTokens { body["maxTokens"] = maxTokens }
-            let result = Engine.call(body)
-            if let error = result["error"] as? String {
-                await MainActor.run { Model.shared.failStream(id, error) }
-            }
-        }
-    }
-
-    /// `output = replace | paste | copy`: stream without opening chat, then act.
-    private func runSilentAi(prompt: String, system: String?, provider: String?, model: String?, output: AiOutput) {
-        stopStream()
-        let id = UUID().uuidString
-        chatRequestId = id
-        chatStreaming = true
-        silentOutput = output
-        silentBuffer = ""
-        busy = true
-        flash("Thinking…", error: false, thenHide: false)
-        let temperature = chatTemperature
-        let maxTokens = chatMaxTokens
-        Task.detached {
-            var body: [String: Any] = [
-                "op": "stream",
-                "requestId": id,
-                "messages": [["role": "user", "content": prompt]],
-                // A rewrite/paste command: no tools, no profile.
-                "tools": false,
-                "profile": false,
-            ]
-            if let provider { body["provider"] = provider }
-            if let model { body["model"] = model }
-            if let system { body["system"] = system }
-            if let temperature { body["temperature"] = temperature }
-            if let maxTokens { body["maxTokens"] = maxTokens }
-            let result = Engine.call(body)
-            if let error = result["error"] as? String {
-                await MainActor.run { Model.shared.failStream(id, error) }
-            }
-        }
-    }
-
-    private func finishSilentAi(error: String?) {
-        let output = silentOutput
-        let text = silentBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
-        silentOutput = nil
-        silentBuffer = ""
-        busy = false
-        toastText = nil
-        if let error {
-            flash(error, error: true, thenHide: false)
-            return
-        }
-        guard !text.isEmpty else {
-            flash("The model returned nothing", error: true, thenHide: false)
-            return
-        }
-        switch output {
-        case .copy:
-            copyToClipboard(text, toast: "Copied answer")
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 900_000_000)
-                self.apply(.hide)
-            }
-        default:
-            // replace / paste: ⌘V over the still-selected text in the previous app.
-            query = ""
-            mode = .search
-            Task.detached { _ = Engine.call(["op": "paste", "text": text]) }
-        }
-    }
-
-    private func loadProviders() {
-        let gen = providerGen
-        Task.detached {
-            let result = Engine.call(["op": "providers"])
-            let parsed = (result["providers"] as? [[String: Any]])?.compactMap(Provider.init) ?? []
-            await MainActor.run {
-                guard Model.shared.providerGen == gen, case .chat = Model.shared.mode else { return }
-                Model.shared.providers = parsed
-                Model.shared.providersReady = true
-                if Model.shared.chatProviderId == nil {
-                    Model.shared.chatProviderId = parsed.first { $0.isDefault }?.id ?? parsed.first?.id
-                }
-            }
-        }
-    }
-
-    private func applyAI(_ obj: [String: Any]?) {
-        guard let requestId = obj?["requestId"] as? String, requestId == chatRequestId,
-              let event = obj?["event"] as? [String: Any],
-              let kind = event["type"] as? String
-        else { return }
-        if silentOutput != nil {
-            switch kind {
-            case "delta":
-                silentBuffer += event["text"] as? String ?? ""
-            case "error":
-                endStream()
-                finishSilentAi(error: event["text"] as? String ?? "Error")
-            case "done":
-                endStream()
-                finishSilentAi(error: nil)
-            default:
-                break
-            }
-            return
-        }
-        switch kind {
-        case "delta":
-            guard !chatTurns.isEmpty else { return }
-            var turns = chatTurns
-            turns[turns.count - 1].content += event["text"] as? String ?? ""
-            chatTurns = turns
-        case "tool":
-            guard !chatTurns.isEmpty else { return }
-            var turns = chatTurns
-            turns[turns.count - 1].tools.append(event["text"] as? String ?? "tool")
-            chatTurns = turns
-            if pendingApproval?.callId == event["callId"] as? String { pendingApproval = nil }
-        case "approve":
-            let args: String = {
-                guard let a = event["arguments"], let data = try? JSONSerialization.data(withJSONObject: a, options: [.prettyPrinted, .sortedKeys]) else { return "{}" }
-                return String(data: data, encoding: .utf8) ?? "{}"
-            }()
-            pendingApproval = ToolApproval(
-                requestId: requestId,
-                callId: event["callId"] as? String ?? "",
-                title: event["text"] as? String ?? "tool",
-                arguments: args
-            )
-            NSSound(named: "Tink")?.play()
-        case "error":
-            if !chatTurns.isEmpty {
-                var turns = chatTurns
-                turns[turns.count - 1].error = event["text"] as? String ?? "Error"
-                chatTurns = turns
-            }
-            pendingApproval = nil
-            endStream()
-        case "done":
-            pendingApproval = nil
-            endStream()
-            saveChat()
-        default:
-            break
-        }
-    }
-
-    private func failStream(_ id: String, _ message: String) {
-        guard chatRequestId == id else { return }
-        if silentOutput != nil {
-            endStream()
-            finishSilentAi(error: message)
-            return
-        }
-        if !chatTurns.isEmpty {
-            var turns = chatTurns
-            turns[turns.count - 1].error = message
-            chatTurns = turns
-        }
-        endStream()
-    }
-
-    private func endStream() {
-        chatRequestId = nil
-        chatStreaming = false
-        focusTick += 1
-    }
-
-    /// Clears the streaming flag, then asks Rust to abort. No `done` follows.
-    private func stopStream() {
-        let id = chatRequestId
-        chatRequestId = nil
-        chatStreaming = false
-        if silentOutput != nil {
-            silentOutput = nil
-            silentBuffer = ""
-            busy = false
-        }
-        guard let id else { return }
-        Task.detached { _ = Engine.call(["op": "cancel", "requestId": id]) }
-    }
-
-    /// Answer the pending tool approval.
-    func answerApproval(_ allow: Bool) {
-        guard let a = pendingApproval else { return }
-        pendingApproval = nil
-        Task.detached {
-            _ = Engine.call(["op": "approveTool", "requestId": a.requestId, "callId": a.callId, "allow": allow])
-        }
-    }
-
-    /// Persist the current chat (after each finished answer).
-    private func saveChat() {
-        let turns = chatTurns.filter { !$0.content.isEmpty && $0.error == nil }
-        guard turns.contains(where: { $0.role == "assistant" }) else { return }
-        let messages: [[String: Any]] = turns.map { ["role": $0.role, "content": $0.wireContent] }
-        var chat: [String: Any] = [
-            "id": chatId,
-            "title": "",
-            "updated": Int(Date().timeIntervalSince1970),
-            "messages": messages,
-        ]
-        if let p = chatProviderId { chat["provider"] = p }
-        if let m = activeChatModel { chat["model"] = m }
-        if let s = chatSystem { chat["system"] = s }
-        let body: [String: Any] = ["op": "chatSave", "chat": chat]
-        Task.detached { _ = Engine.call(body) }
-    }
-
-    func attach(_ attachment: ChatAttachment) {
-        chatAttachments.append(attachment)
-        focusTick += 1
-    }
-
-    /// Does the provider this chat would use take image attachments? When it
-    /// does, screenshots go as pixels; otherwise the panel OCRs them on-device.
-    var chatVision: Bool {
-        if providers.isEmpty {
-            // Cheap: reads config, no network. Attachments can be added before
-            // the chat view has loaded its provider list.
-            providers = ((Engine.call(["op": "providers"])["providers"]) as? [[String: Any]])?
-                .compactMap(Provider.init) ?? []
-        }
-        let p = providers.first { $0.id == chatProviderId } ?? providers.first { $0.isDefault } ?? providers.first
-        return p?.vision ?? false
-    }
-
-    func attachFile() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = true
-        panel.canChooseDirectories = false
-        keepOnBlurOnce = true
-        guard panel.runModal() == .OK else { return }
-        for url in panel.urls {
-            let vision = chatVision
-            let name = url.lastPathComponent
-            Task.detached {
-                // Pixels for a vision model (layout, colour, a chart's shape);
-                // everything else gets on-device OCR text, as before.
-                if vision, let img = Attachments.imageData(of: url) {
-                    await MainActor.run {
-                        Model.shared.attach(ChatAttachment(name: name, text: "", imageB64: img.b64, imageMime: img.mime))
-                    }
-                    return
-                }
-                let text = Attachments.text(of: url)
-                await MainActor.run {
-                    if let text {
-                        Model.shared.attach(ChatAttachment(name: name, text: text))
-                    } else {
-                        Model.shared.flash("Could not read \(name)", error: true, thenHide: false)
-                    }
-                }
-            }
-        }
-        launcher?.makeKeyAndOrderFront(nil)
-    }
-
-    func attachClipboard() {
-        if let text = NSPasteboard.general.string(forType: .string), !text.isEmpty {
-            attach(ChatAttachment(name: "Clipboard", text: text))
-            return
-        }
-        if let data = NSPasteboard.general.data(forType: .png) ?? NSPasteboard.general.data(forType: .tiff) {
-            let vision = chatVision
-            Task.detached {
-                if vision, let img = Attachments.imageData(data) {
-                    await MainActor.run {
-                        Model.shared.attach(
-                            ChatAttachment(name: "Clipboard image", text: "", imageB64: img.b64, imageMime: img.mime))
-                    }
-                    return
-                }
-                let text = Attachments.ocr(data: data) ?? ""
-                await MainActor.run {
-                    if text.isEmpty {
-                        Model.shared.flash("No text in the clipboard image", error: true, thenHide: false)
-                    } else {
-                        Model.shared.attach(ChatAttachment(name: "Clipboard image", text: text))
-                    }
-                }
-            }
-            return
-        }
-        flash("The clipboard is empty", error: true, thenHide: false)
-    }
-
-    /// The screen under the panel: pixels for a vision model, OCR text otherwise
-    /// (needs Screen Recording).
-    func attachScreen() {
-        let target = previousApp?.localizedName ?? "Screen"
-        let vision = chatVision
-        launcher?.alphaValue = 0
-        Task.detached {
-            try? await Task.sleep(nanoseconds: 120_000_000)
-            if vision, let shot = Attachments.screenCaptureData(), let img = Attachments.imageData(shot) {
-                await MainActor.run {
-                    Model.shared.launcher?.alphaValue = 1
-                    Model.shared.attach(
-                        ChatAttachment(name: "\(target) (screen)", text: "", imageB64: img.b64, imageMime: img.mime))
-                }
-                return
-            }
-            let text = Attachments.screenText()
-            await MainActor.run {
-                Model.shared.launcher?.alphaValue = 1
-                if let text, !text.isEmpty {
-                    Model.shared.attach(ChatAttachment(name: "\(target) (screen)", text: text))
-                } else {
-                    Model.shared.flash("No text on screen (Screen Recording permission?)", error: true, thenHide: false)
-                }
-            }
-        }
-    }
-
-    private func newChat() {
-        stopStream()
-        chatTurns = []
-        focusTick += 1
-    }
-
     private func copyOutput() {
         guard case .output(_, let text) = mode else { return }
         copyToClipboard(text, toast: "Copied output")
-    }
-
-    private func copyAnswer() {
-        guard let text = lastAnswer else { return }
-        copyToClipboard(text, toast: "Copied answer")
-    }
-
-    private func pasteLastAnswer() {
-        guard let text = lastAnswer else { return }
-        Task.detached { _ = Engine.call(["op": "paste", "text": text]) }
-    }
-
-    private var fieldIsComposing: Bool {
-        (NSApp.keyWindow?.firstResponder as? NSTextView)?.hasMarkedText() == true
     }
 
     private var textHasSelection: Bool {
@@ -3506,106 +3260,64 @@ final class Model {
         return view.selectedRange().length > 0
     }
 
-    func flash(_ text: String, error: Bool, thenHide: Bool) {
+    /// Soft delete: toast `Deleted · ⌘Z undo` for ~5s; ⌘Z restores; expiry commits.
+    private func offerUndoDelete(commit: @escaping () -> Void, undo: @escaping () -> Void) {
+        finalizeUndoDelete()
+        // Flash first so it does not treat this as "replace undo toast → commit".
+        flash("Deleted · ⌘Z undo", error: false, thenHide: false, durationMs: 5_000)
+        undoCommit = commit
+        undoAction = { [weak self] in
+            guard let self else { return }
+            self.undoCommit = nil
+            self.undoAction = nil
+            self.toastTask?.cancel()
+            self.toastText = nil
+            self.toastAction = nil
+            undo()
+        }
+    }
+
+    private func performUndoDelete() {
+        undoAction?()
+    }
+
+    private func finalizeUndoDelete() {
+        undoAction = nil
+        if let commit = undoCommit {
+            undoCommit = nil
+            commit()
+        }
+    }
+
+    private func dismissToast() {
+        toastTask?.cancel()
+        toastText = nil
+        toastAction = nil
+        finalizeUndoDelete()
+    }
+
+    func flash(
+        _ text: String, error: Bool, thenHide: Bool, action: (() -> Void)? = nil,
+        durationMs: Int? = nil
+    ) {
+        // A new toast ends soft-delete grace (commit the pending delete).
+        if undoAction != nil { finalizeUndoDelete() }
         toastText = text
         toastIsError = error
+        toastAction = action
+        recentToasts.append(text)
+        if recentToasts.count > 20 { recentToasts.removeFirst(recentToasts.count - 20) }
         toastTask?.cancel()
-        let ms = error ? 4_000 : 1_300
+        // Errors scale with length so long permission strings stay readable (FS-4).
+        let ms = durationMs ?? (error ? max(1_300, min(8_000, 1_300 + text.count * 40)) : 1_300)
         toastTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(ms))
             guard !Task.isCancelled else { return }
             self.toastText = nil
+            self.toastAction = nil
+            if self.undoCommit != nil { self.finalizeUndoDelete() }
             if thenHide { self.hide() }
         }
-    }
-
-    var seekSpans: [SeekSpan] {
-        guard let seekScan else { return [] }
-        return matchSpans(scan: seekScan, query: seekQuery)
-    }
-
-    var seekCursor: Int {
-        let n = seekSpans.count
-        guard n > 0 else { return 0 }
-        return ((seekIndex % n) + n) % n
-    }
-
-    var seekCount: String {
-        let n = seekSpans.count
-        if n == 0 {
-            return seekQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : "0 of 0"
-        }
-        return "\(seekCursor + 1) of \(n)"
-    }
-
-    private func presentSeek(_ scan: SeekScan) {
-        guard let seek else { return }
-        clicking = true
-        seekScan = scan
-        let anchor = NSScreen.screens.max(by: { $0.frame.maxY < $1.frame.maxY }) ?? NSScreen.main!
-        let x = scan.monitor.x
-        let y = anchor.frame.maxY - scan.monitor.y - scan.monitor.h
-        seek.setFrame(NSRect(x: x, y: y, width: scan.monitor.w, height: scan.monitor.h), display: true)
-        // The line starts under the search field when it is on this display.
-        if let f = launcher?.frame, f.midX >= x, f.midX <= x + scan.monitor.w, f.minY >= y, f.minY <= y + scan.monitor.h {
-            seekLeaderFrom = CGPoint(x: f.midX - x, y: y + scan.monitor.h - f.minY)
-        } else {
-            seekLeaderFrom = nil
-        }
-        seek.orderFront(nil)
-        launcher?.orderFront(nil)
-    }
-
-    private func endSeek() {
-        cancelClick()
-    }
-
-    private func seekKey(_ event: NSEvent) -> Bool {
-        let mods = event.modifierFlags.intersection([.command, .shift, .option, .control])
-        if event.keyCode == 53, mods.isEmpty {
-            endSeek()
-            return true
-        }
-        if seekScan == nil {
-            // OCR still running: swallow Return/Tab so we do not activate a command.
-            return event.keyCode == 36 || event.keyCode == 76 || event.keyCode == 48
-        }
-        if event.keyCode == 48, mods.isEmpty || mods == .shift {
-            stepSeek(mods == .shift ? -1 : 1)
-            return true
-        }
-        if mods.isEmpty, event.characters == ";" {
-            stepSeek(1)
-            return true
-        }
-        if mods.isEmpty, event.keyCode == 36 || event.keyCode == 76 {
-            clickSeek()
-            return true
-        }
-        return false
-    }
-
-    private func stepSeek(_ delta: Int) {
-        let n = seekSpans.count
-        guard n > 0 else { return }
-        seekIndex = ((seekIndex + delta) % n + n) % n
-    }
-
-    private func clickSeek() {
-        guard let scan = seekScan else { return }
-        let spans = seekSpans
-        let cursor = seekCursor
-        guard spans.indices.contains(cursor) else { return }
-        let match = spans[cursor]
-        let x = Double(scan.monitor.x + match.x + match.w / 2)
-        let y = Double(scan.monitor.y + match.y + match.h / 2)
-        clicking = false
-        seekScan = nil
-        seekQuery = ""
-        seekIndex = 0
-        seek?.orderOut(nil)
-        hide(fromRust: true)
-        Task.detached { _ = Engine.call(["op": "seekClick", "x": x, "y": y]) }
     }
 
     private func frame(on screen: NSScreen, height: CGFloat) -> NSRect {
@@ -3618,186 +3330,3 @@ final class Model {
     }
 }
 
-final class IslandPanel: NSPanel {
-    init() {
-        super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 760, height: 200),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: true
-        )
-        isOpaque = false
-        backgroundColor = .clear
-        hasShadow = false
-        level = NSWindow.Level(rawValue: 25)
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        hidesOnDeactivate = false
-        becomesKeyOnlyIfNeeded = false
-        isReleasedWhenClosed = false
-        isMovableByWindowBackground = false
-        titleVisibility = .hidden
-        titlebarAppearsTransparent = true
-        acceptsMouseMovedEvents = true
-    }
-
-    /// The match overlay must not take the key window from the search island.
-    var refusesKey = false
-
-    override var canBecomeKey: Bool { !refusesKey }
-    override var canBecomeMain: Bool { true }
-}
-
-final class ClearHost<Content: View>: NSHostingView<Content> {
-    override var isOpaque: Bool { false }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        wantsLayer = true
-        layer?.isOpaque = false
-        layer?.backgroundColor = NSColor.clear.cgColor
-    }
-}
-
-/// One copy at a time. Two panels mean two global-hotkey grabbers, and the
-/// second copy's hotkeys would silently do nothing; they also fight over the
-/// usage/pins files. The lock is held by the fd until the process exits.
-enum SingleInstance {
-    private static var fd: Int32 = -1
-
-    /// Takes the lock, or returns false when another OpenCast holds it.
-    static func acquire() -> Bool {
-        let dir = ProcessInfo.processInfo.environment["OPENCAST_CONFIG_DIR"]
-            ?? (NSHomeDirectory() as NSString).appendingPathComponent(".config/opencast")
-        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        let path = (dir as NSString).appendingPathComponent(".instance.lock")
-        let handle = open(path, O_RDWR | O_CREAT | O_CLOEXEC, S_IRUSR | S_IWUSR)
-        guard handle >= 0 else { return true } // no lockfile possible: do not block the app
-        if flock(handle, LOCK_EX | LOCK_NB) != 0 {
-            close(handle)
-            return false
-        }
-        fd = handle
-        return true
-    }
-}
-
-@main
-struct OpenCastApp {
-    static func main() {
-        let app = NSApplication.shared
-        let delegate = AppDelegate()
-        app.setActivationPolicy(.accessory)
-        app.delegate = delegate
-        guard SingleInstance.acquire() else {
-            FileHandle.standardError.write("OpenCast is already running — this copy is quitting\n".data(using: .utf8) ?? Data())
-            NSApp.activate(ignoringOtherApps: true)
-            let alert = NSAlert()
-            alert.messageText = "OpenCast is already running"
-            alert.informativeText = "This copy quit: two launchers would fight over the same hotkeys. Use the one already in your menu bar."
-            alert.alertStyle = .warning
-            alert.runModal()
-            return
-        }
-        app.run()
-    }
-}
-
-final class AppDelegate: NSObject, NSApplicationDelegate {
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        // LSUIElement / .accessory has no default menu; Edit items make Cmd+C/V/X/A work in fields.
-        Self.installEditMenu()
-        MainActor.assumeIsolated {
-            Model.shared.install()
-            StayAwakeController.shared.install()
-            ClipboardHistory.shared.install()
-        }
-        Task.detached {
-            opencast_start(opencastCallback)
-            let dir = Engine.call(["op": "configDir"])["path"] as? String ?? ""
-            let settings = Engine.call(["op": "settings"])
-            await MainActor.run {
-                if let p = settings["presentation"] as? String { Model.shared.presentation = p }
-                Model.shared.refreshSettings()
-                Model.shared.ready = true
-                // First show happens here, with the right presentation (the engine used to show too early).
-                Model.shared.show()
-                Model.shared.checkHotkeys()
-                Model.shared.prefetchAppIcons()
-                SnippetExpander.shared.reload()
-                ConfigWatcher.shared.start(configDir: dir)
-                if Schedule.shared.authorized { Schedule.shared.refresh(force: true) }
-                AppDelegate.onboardIfNeeded()
-                if settings["checkUpdates"] as? Bool == true { AppDelegate.weeklyUpdateCheck() }
-            }
-            let warnings = Engine.call(["op": "warnings"])["warnings"] as? [String] ?? []
-            await MainActor.run { Model.shared.showWarnings(warnings) }
-        }
-    }
-
-    func application(_ application: NSApplication, open urls: [URL]) {
-        MainActor.assumeIsolated {
-            for url in urls {
-                Model.shared.handleDeepLink(url)
-            }
-        }
-    }
-
-    func applicationWillTerminate(_ notification: Notification) {
-        MainActor.assumeIsolated {
-            StayAwakeController.shared.shutdown()
-            ClipboardHistory.shared.shutdown()
-        }
-        // Undo the Caps Lock remap (hyper key) and anything else that outlives us.
-        _ = Engine.call(["op": "shutdown"])
-    }
-
-    /// First run: walk through permissions once.
-    @MainActor
-    static func onboardIfNeeded() {
-        let key = "OpenCastOnboarded"
-        guard !UserDefaults.standard.bool(forKey: key) else { return }
-        UserDefaults.standard.set(true, forKey: key)
-        if !AXIsProcessTrusted() {
-            SettingsWindowController.shared.show(tab: .permissions)
-        }
-    }
-
-    /// Opt-in (`check_updates = true`): at most once a week, quietly.
-    @MainActor
-    static func weeklyUpdateCheck() {
-        let key = "OpenCastLastUpdateCheck"
-        let last = UserDefaults.standard.double(forKey: key)
-        guard Date().timeIntervalSince1970 - last > 7 * 86_400 else { return }
-        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: key)
-        Task.detached {
-            let r = Engine.call(["op": "updateCheck"])
-            guard let version = r["newer"] as? String else { return }
-            await MainActor.run {
-                Model.shared.flash("OpenCast \(version) is available — run Check for Updates", error: false, thenHide: false)
-            }
-        }
-    }
-
-    /// ponytail: Edit menu only — enough for text-field key equivalents; full app menu if we leave accessory.
-    private static func installEditMenu() {
-        let main = NSMenu()
-        let edit = NSMenuItem()
-        let submenu = NSMenu(title: "Edit")
-        submenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
-        submenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
-        submenu.addItem(.separator())
-        submenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
-        submenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        submenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        submenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
-        edit.submenu = submenu
-        main.addItem(edit)
-        NSApp.mainMenu = main
-    }
-}
-
-extension Array {
-    subscript(safe index: Int) -> Element? {
-        indices.contains(index) ? self[index] : nil
-    }
-}

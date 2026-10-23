@@ -6,12 +6,15 @@
 //! - **stdio** (`command` + `args`): newline-delimited JSON-RPC over the
 //!   child's stdin/stdout — how `npx`, `uvx` and `docker run -i` servers work;
 //! - **HTTP** (`url`): Streamable HTTP; a POST per request, the reply is JSON
-//!   or a short SSE stream. Static headers only (no OAuth yet).
+//!   or a short SSE stream. Optional OAuth (`oauth_*`) stores tokens in the
+//!   Keychain and sends `Authorization: Bearer …`.
 //!
 //! Tool lists are cached in `<config dir>/mcp-tools.json` so the launcher can
 //! list MCP commands at startup without starting every server.
 
 use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -49,6 +52,15 @@ pub struct McpServerConfig {
     /// Header values from a command, e.g. `Authorization = "echo Bearer $(op read …)"`.
     #[serde(default)]
     pub headers_cmd: HashMap<String, String>,
+    /// OAuth (HTTP only): public-client PKCE when no Keychain secret is set.
+    #[serde(default)]
+    pub oauth_client_id: Option<String>,
+    #[serde(default)]
+    pub oauth_authorize_url: Option<String>,
+    #[serde(default)]
+    pub oauth_token_url: Option<String>,
+    #[serde(default)]
+    pub oauth_scopes: Vec<String>,
     /// Only these tools (exact names or `prefix*`). Empty = all.
     #[serde(default)]
     pub tools: Vec<String>,
@@ -96,6 +108,17 @@ impl McpServerConfig {
     pub fn auto_approves(&self, tool: &str) -> bool {
         self.auto_approve.iter().any(|p| glob(p, tool))
     }
+
+    /// True when authorize/token/client_id are all set (HTTP OAuth).
+    pub fn oauth_configured(&self) -> bool {
+        nonempty(self.oauth_client_id.as_deref())
+            && nonempty(self.oauth_authorize_url.as_deref())
+            && nonempty(self.oauth_token_url.as_deref())
+    }
+}
+
+fn nonempty(s: Option<&str>) -> bool {
+    s.is_some_and(|s| !s.trim().is_empty())
 }
 
 /// `*` = anything, `read_*` = prefix, otherwise exact.
@@ -500,6 +523,14 @@ impl McpClient {
                     k.clone(),
                     run_cmd(cmd).with_context(|| format!("mcp `{}`: header {k}", server.id))?,
                 ));
+            }
+            if server.oauth_configured()
+                && !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+            {
+                let token = oauth_ensure_token(&server)
+                    .await
+                    .with_context(|| format!("mcp `{}`: oauth", server.id))?;
+                headers.push(("Authorization".into(), format!("Bearer {token}")));
             }
             let client = reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(10))
@@ -1005,6 +1036,381 @@ impl McpHub {
     }
 }
 
+// ---- OAuth (minimal PKCE + Keychain) ---------------------------------------
+
+fn oauth_access_service(id: &str) -> String {
+    format!("opencast-mcp-{id}-access")
+}
+fn oauth_refresh_service(id: &str) -> String {
+    format!("opencast-mcp-{id}-refresh")
+}
+fn oauth_secret_service(id: &str) -> String {
+    format!("opencast-mcp-{id}-oauth-secret")
+}
+
+/// True when a refresh token is already in the Keychain.
+pub fn oauth_signed_in(server: &McpServerConfig) -> bool {
+    server.oauth_configured() && keychain_get(&oauth_refresh_service(&server.id)).is_some()
+}
+
+/// Refresh if possible; otherwise browser + loopback. Returns an access token.
+pub async fn oauth_ensure_token(server: &McpServerConfig) -> Result<String> {
+    if !server.oauth_configured() {
+        bail!("mcp `{}`: oauth_* fields are incomplete", server.id);
+    }
+    let client_id = server.oauth_client_id.as_deref().unwrap().trim();
+    let token_url = server.oauth_token_url.as_deref().unwrap().trim();
+    let authorize_url = server.oauth_authorize_url.as_deref().unwrap().trim();
+    let secret = keychain_get(&oauth_secret_service(&server.id));
+
+    if let Some(refresh) = keychain_get(&oauth_refresh_service(&server.id)) {
+        match token_request(
+            token_url,
+            &[
+                ("grant_type", "refresh_token"),
+                ("refresh_token", refresh.as_str()),
+                ("client_id", client_id),
+            ],
+            secret.as_deref(),
+        )
+        .await
+        {
+            Ok(tok) => {
+                store_tokens(&server.id, &tok)?;
+                return Ok(tok.access_token);
+            }
+            Err(e) => {
+                eprintln!("opencast: mcp `{}`: refresh failed ({e:#}); signing in again", server.id);
+            }
+        }
+    }
+
+    interactive_auth(server, client_id, authorize_url, token_url, secret.as_deref()).await
+}
+
+struct TokenSet {
+    access_token: String,
+    refresh_token: Option<String>,
+}
+
+async fn interactive_auth(
+    server: &McpServerConfig,
+    client_id: &str,
+    authorize_url: &str,
+    token_url: &str,
+    secret: Option<&str>,
+) -> Result<String> {
+    let listener = TcpListener::bind("127.0.0.1:0").context("oauth loopback bind")?;
+    let port = listener.local_addr()?.port();
+    let redirect_uri = format!("http://127.0.0.1:{port}/callback");
+    let state = random_b64url(16)?;
+    let verifier = random_b64url(32)?;
+    let challenge = pkce_challenge(&verifier)?;
+    let scope = server.oauth_scopes.join(" ");
+    let url = build_authorize_url(authorize_url, client_id, &redirect_uri, &state, &challenge, &scope);
+    open_browser(&url).with_context(|| format!("mcp `{}`: open authorize URL", server.id))?;
+
+    let expect = state.clone();
+    let code = tokio::task::spawn_blocking(move || wait_for_code(listener, &expect, Duration::from_secs(180)))
+        .await
+        .context("oauth listener task")??;
+
+    let tok = token_request(
+        token_url,
+        &[
+            ("grant_type", "authorization_code"),
+            ("code", code.as_str()),
+            ("redirect_uri", redirect_uri.as_str()),
+            ("client_id", client_id),
+            ("code_verifier", verifier.as_str()),
+        ],
+        secret,
+    )
+    .await
+    .with_context(|| format!("mcp `{}`: token exchange", server.id))?;
+    store_tokens(&server.id, &tok)?;
+    Ok(tok.access_token)
+}
+
+fn build_authorize_url(
+    authorize_url: &str,
+    client_id: &str,
+    redirect_uri: &str,
+    state: &str,
+    challenge: &str,
+    scope: &str,
+) -> String {
+    let sep = if authorize_url.contains('?') { '&' } else { '?' };
+    let mut q = format!(
+        "response_type=code&client_id={}&redirect_uri={}&state={}&code_challenge={}&code_challenge_method=S256",
+        crate::encode::url_encode(client_id),
+        crate::encode::url_encode(redirect_uri),
+        crate::encode::url_encode(state),
+        crate::encode::url_encode(challenge),
+    );
+    if !scope.is_empty() {
+        q.push_str("&scope=");
+        q.push_str(&crate::encode::url_encode(scope));
+    }
+    format!("{authorize_url}{sep}{q}")
+}
+
+fn wait_for_code(listener: TcpListener, expect_state: &str, timeout: Duration) -> Result<String> {
+    listener.set_nonblocking(true)?;
+    let start = std::time::Instant::now();
+    let (mut stream, _) = loop {
+        match listener.accept() {
+            Ok(c) => break c,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                if start.elapsed() > timeout {
+                    bail!("oauth: timed out waiting for browser redirect");
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => return Err(e.into()),
+        }
+    };
+    stream.set_nonblocking(false)?;
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+    let mut buf = [0u8; 4096];
+    let n = stream.read(&mut buf).unwrap_or(0);
+    let req = String::from_utf8_lossy(&buf[..n]);
+    let path = req.lines().next().unwrap_or("").split_whitespace().nth(1).unwrap_or("");
+    let query = path.split_once('?').map(|(_, q)| q).unwrap_or("");
+    let params = parse_query(query);
+    let body = if params.get("state").map(String::as_str) != Some(expect_state) {
+        "OAuth state mismatch. You can close this tab."
+    } else if params.get("error").is_some() {
+        "Authorization denied. You can close this tab."
+    } else {
+        "Signed in to OpenCast. You can close this tab."
+    };
+    let _ = write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    if params.get("state").map(String::as_str) != Some(expect_state) {
+        bail!("oauth: state mismatch");
+    }
+    if let Some(err) = params.get("error") {
+        bail!("oauth: provider returned {err}");
+    }
+    params
+        .get("code")
+        .cloned()
+        .ok_or_else(|| anyhow!("oauth: redirect missing code"))
+}
+
+fn parse_query(q: &str) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    for part in q.split('&') {
+        let Some((k, v)) = part.split_once('=') else { continue };
+        out.insert(url_decode(k), url_decode(v));
+    }
+    out
+}
+
+fn url_decode(s: &str) -> String {
+    let mut out = Vec::new();
+    let b = s.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < b.len() => {
+                let h = |c: u8| -> Option<u8> {
+                    match c {
+                        b'0'..=b'9' => Some(c - b'0'),
+                        b'a'..=b'f' => Some(c - b'a' + 10),
+                        b'A'..=b'F' => Some(c - b'A' + 10),
+                        _ => None,
+                    }
+                };
+                if let (Some(hi), Some(lo)) = (h(b[i + 1]), h(b[i + 2])) {
+                    out.push((hi << 4) | lo);
+                    i += 3;
+                } else {
+                    out.push(b[i]);
+                    i += 1;
+                }
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+async fn token_request(token_url: &str, fields: &[(&str, &str)], secret: Option<&str>) -> Result<TokenSet> {
+    let mut body = fields
+        .iter()
+        .map(|(k, v)| format!("{}={}", crate::encode::url_encode(k), crate::encode::url_encode(v)))
+        .collect::<Vec<_>>()
+        .join("&");
+    if let Some(s) = secret {
+        body.push_str("&client_secret=");
+        body.push_str(&crate::encode::url_encode(s));
+    }
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .build()?;
+    let resp = client
+        .post(token_url)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("accept", "application/json")
+        .body(body)
+        .send()
+        .await
+        .context("token endpoint")?;
+    let status = resp.status();
+    let v: Value = resp.json().await.context("token JSON")?;
+    if !status.is_success() {
+        let msg = v["error_description"]
+            .as_str()
+            .or_else(|| v["error"].as_str())
+            .unwrap_or("token request failed");
+        bail!("{msg} (HTTP {status})");
+    }
+    let access = v["access_token"]
+        .as_str()
+        .ok_or_else(|| anyhow!("token response missing access_token"))?
+        .to_string();
+    let refresh = v["refresh_token"].as_str().map(str::to_string);
+    Ok(TokenSet {
+        access_token: access,
+        refresh_token: refresh,
+    })
+}
+
+fn store_tokens(id: &str, tok: &TokenSet) -> Result<()> {
+    keychain_set(&oauth_access_service(id), &tok.access_token)?;
+    if let Some(r) = &tok.refresh_token {
+        keychain_set(&oauth_refresh_service(id), r)?;
+    }
+    Ok(())
+}
+
+fn keychain_get(service: &str) -> Option<String> {
+    // ponytail: shell out like api_key_cmd; SecItem from Rust needs a macOS-only crate.
+    let out = std::process::Command::new("security")
+        .args(["find-generic-password", "-s", service, "-w"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+fn keychain_set(service: &str, secret: &str) -> Result<()> {
+    let account = std::env::var("USER").unwrap_or_else(|_| "opencast".into());
+    let _ = std::process::Command::new("security")
+        .args(["delete-generic-password", "-s", service, "-a", &account])
+        .output();
+    let out = std::process::Command::new("security")
+        .args([
+            "add-generic-password",
+            "-s",
+            service,
+            "-a",
+            &account,
+            "-w",
+            secret,
+            "-l",
+            &format!("OpenCast · {service}"),
+        ])
+        .output()
+        .context("security add-generic-password")?;
+    if !out.status.success() {
+        bail!(
+            "Keychain write failed for {service}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+fn open_browser(url: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let st = std::process::Command::new("open").arg(url).status()?;
+        if !st.success() {
+            bail!("open failed");
+        }
+        return Ok(());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let st = std::process::Command::new("xdg-open").arg(url).status()?;
+        if !st.success() {
+            bail!("xdg-open failed");
+        }
+        return Ok(());
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = url;
+        bail!("oauth browser open is only supported on macOS/Linux");
+    }
+}
+
+fn random_b64url(n_bytes: usize) -> Result<String> {
+    let mut buf = vec![0u8; n_bytes];
+    std::fs::File::open("/dev/urandom")
+        .context("urandom")?
+        .read_exact(&mut buf)?;
+    Ok(base64url_nopad(&buf))
+}
+
+fn pkce_challenge(verifier: &str) -> Result<String> {
+    // ponytail: openssl CLI instead of a sha2 crate; upgrade if openssl is absent on a target.
+    let mut child = std::process::Command::new("openssl")
+        .args(["dgst", "-sha256", "-binary"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("openssl (OAuth PKCE)")?;
+    child.stdin.take().unwrap().write_all(verifier.as_bytes())?;
+    let out = child.wait_with_output()?;
+    if !out.status.success() {
+        bail!("openssl sha256 failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(base64url_nopad(&out.stdout))
+}
+
+fn base64url_nopad(data: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::new();
+    for chunk in data.chunks(3) {
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |acc, (i, b)| acc | (*b as u32) << (16 - 8 * i));
+        out.push(T[((n >> 18) & 63) as usize] as char);
+        out.push(T[((n >> 12) & 63) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(T[((n >> 6) & 63) as usize] as char);
+        }
+        if chunk.len() > 2 {
+            out.push(T[(n & 63) as usize] as char);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1075,6 +1481,10 @@ mod tests {
             url: None,
             headers: HashMap::new(),
             headers_cmd: HashMap::new(),
+            oauth_client_id: None,
+            oauth_authorize_url: None,
+            oauth_token_url: None,
+            oauth_scopes: vec![],
             tools: vec!["get_*".into(), "create_issue".into()],
             in_launcher: true,
             in_chat: true,
@@ -1138,6 +1548,10 @@ done
             url: None,
             headers: HashMap::new(),
             headers_cmd: HashMap::new(),
+            oauth_client_id: None,
+            oauth_authorize_url: None,
+            oauth_token_url: None,
+            oauth_scopes: vec![],
             tools: vec!["echo".into()],
             in_launcher: true,
             in_chat: true,
@@ -1221,6 +1635,69 @@ done
         let e = p.arguments_from(&[]).unwrap_err().to_string();
         assert!(e.contains("needs 1 argument(s): day"), "{e}");
         assert_eq!(p.arguments_from(&["fri".into()]).unwrap()["day"], json!("fri"));
+    }
+
+    #[test]
+    fn oauth_authorize_url_and_pkce_shape() {
+        let url = build_authorize_url(
+            "https://auth.example/authorize",
+            "cid",
+            "http://127.0.0.1:9/callback",
+            "st",
+            "chal",
+            "openid tools",
+        );
+        assert!(url.starts_with("https://auth.example/authorize?"));
+        assert!(url.contains("response_type=code"));
+        assert!(url.contains("client_id=cid"));
+        assert!(url.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A9%2Fcallback"));
+        assert!(url.contains("state=st"));
+        assert!(url.contains("code_challenge=chal"));
+        assert!(url.contains("code_challenge_method=S256"));
+        assert!(url.contains("scope=openid+tools"));
+
+        let with_q = build_authorize_url(
+            "https://auth.example/authorize?x=1",
+            "c",
+            "http://127.0.0.1/cb",
+            "s",
+            "ch",
+            "",
+        );
+        assert!(with_q.contains("authorize?x=1&response_type=code"));
+
+        assert_eq!(base64url_nopad(b"f"), "Zg");
+        assert_eq!(base64url_nopad(b"fo"), "Zm8");
+        assert_eq!(base64url_nopad(b"foo"), "Zm9v");
+        assert_eq!(parse_query("code=a%2Bb&state=st")["code"], "a+b");
+        // S256(verifier); RFC 7636 App. B cites a different challenge for this
+        // string (errata) — assert the real SHA-256 digest instead.
+        let ch = pkce_challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk").unwrap();
+        assert_eq!(ch, "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
+
+        let s = McpServerConfig {
+            id: "r".into(),
+            command: None,
+            args: vec![],
+            env: HashMap::new(),
+            env_cmd: HashMap::new(),
+            url: Some("https://mcp.example".into()),
+            headers: HashMap::new(),
+            headers_cmd: HashMap::new(),
+            oauth_client_id: Some("c".into()),
+            oauth_authorize_url: Some("https://a".into()),
+            oauth_token_url: Some("https://t".into()),
+            oauth_scopes: vec!["x".into()],
+            tools: vec![],
+            in_launcher: true,
+            in_chat: true,
+            auto_approve: vec![],
+            timeout_secs: 5,
+        };
+        assert!(s.oauth_configured());
+        let mut incomplete = s.clone();
+        incomplete.oauth_token_url = None;
+        assert!(!incomplete.oauth_configured());
     }
 
     #[test]

@@ -270,6 +270,11 @@ fn handle(request: &str) -> String {
                     })).collect::<Vec<_>>(),
                     "mcp": e.config.mcp_servers.iter().map(|m| serde_json::json!({
                         "id": m.id, "command": m.command, "url": m.url,
+                        "oauth": m.oauth_configured(),
+                        "signedIn": opencast_core::mcp::oauth_signed_in(m),
+                    })).collect::<Vec<_>>(),
+                    "snippets": e.config.snippets.iter().map(|s| serde_json::json!({
+                        "keyword": s.keyword, "text": s.text,
                     })).collect::<Vec<_>>(),
                     "configDir": e.config_dir.display().to_string(),
                     "version": env!("CARGO_PKG_VERSION"),
@@ -277,6 +282,24 @@ fn handle(request: &str) -> String {
                 })
                 .to_string()
             }),
+            "snippetAdd" => {
+                let keyword = v.get("keyword").and_then(|x| x.as_str()).unwrap_or("");
+                let text = v.get("text").and_then(|x| x.as_str()).unwrap_or("");
+                let dir = with_engine(|e| e.config_dir.clone());
+                match opencast_core::config::add_snippet(&dir, keyword, text, None) {
+                    Ok(()) => serde_json::json!({ "text": crate::exec::reload() }).to_string(),
+                    Err(e) => serde_json::json!({ "error": format!("{e:#}") }).to_string(),
+                }
+            }
+            "snippetRemove" => {
+                let keyword = v.get("keyword").and_then(|x| x.as_str()).unwrap_or("");
+                let dir = with_engine(|e| e.config_dir.clone());
+                match opencast_core::config::remove_snippet(&dir, keyword) {
+                    Ok(true) => serde_json::json!({ "text": crate::exec::reload() }).to_string(),
+                    Ok(false) => serde_json::json!({ "error": format!("no snippet `{keyword}`") }).to_string(),
+                    Err(e) => serde_json::json!({ "error": format!("{e:#}") }).to_string(),
+                }
+            }
             "configSet" => {
                 let key = v.get("key").and_then(|x| x.as_str()).unwrap_or("");
                 let value = match v.get("value") {
@@ -330,6 +353,20 @@ fn handle(request: &str) -> String {
             "mcpRefresh" => {
                 let (n, errors) = runtime().block_on(crate::agent::refresh_tools());
                 serde_json::json!({ "tools": n, "errors": errors }).to_string()
+            }
+            "mcpOauthSignIn" => {
+                let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("");
+                let server = with_engine(|e| e.config.mcp_servers.iter().find(|s| s.id == id).cloned());
+                match server {
+                    Some(s) if s.oauth_configured() => {
+                        match runtime().block_on(opencast_core::mcp::oauth_ensure_token(&s)) {
+                            Ok(_) => serde_json::json!({ "ok": true }).to_string(),
+                            Err(e) => serde_json::json!({ "error": format!("{e:#}") }).to_string(),
+                        }
+                    }
+                    Some(_) => serde_json::json!({ "error": format!("mcp `{id}` has no oauth_* config") }).to_string(),
+                    None => serde_json::json!({ "error": format!("unknown mcp server `{id}`") }).to_string(),
+                }
             }
             "stream" => stream(&v),
             "cancel" => cancel(&v),
@@ -449,15 +486,15 @@ pub fn install(cb: Callback) {
     let _ = runtime();
     crate::hotkeys::listen();
     install_signal_handlers();
+    crate::hyperkey::register_exit_restore();
+    // Crash or kill may leave Caps Lock remapped; clear before (re)enabling hyper key.
+    crate::hyperkey::restore_caps_lock_if_ours();
     if hyperkey {
         crate::hyperkey::remap_caps_lock(true);
         // The tap callback must return before Swift `hide`. A slow tap is disabled.
         crate::hyperkey::start(|| {
             std::thread::spawn(toggle_panel);
         });
-    } else {
-        // A previous run that crashed may have left Caps Lock remapped.
-        crate::hyperkey::restore_caps_lock_if_ours();
     }
     for p in crate::hotkeys::register(&engine) {
         eprintln!("opencast: {p}");
@@ -467,9 +504,17 @@ pub fn install(cb: Callback) {
         let apps_changed = crate::apps_mac::refresh_cache(&config_dir);
         let shortcuts_changed = crate::shortcuts_mac::refresh_cache(&config_dir);
         let bookmarks_changed = crate::refresh_mac::refresh_bookmarks(&config_dir);
+        let history_changed = crate::refresh_mac::refresh_history(&config_dir);
+        let recents_changed = crate::refresh_mac::refresh_recents(&config_dir);
         let currency = with_engine(|e| e.config.general.currency);
         let rates_changed = runtime().block_on(crate::refresh_mac::refresh_rates(&config_dir, currency));
-        if apps_changed || shortcuts_changed || bookmarks_changed || rates_changed {
+        if apps_changed
+            || shortcuts_changed
+            || bookmarks_changed
+            || history_changed
+            || recents_changed
+            || rates_changed
+        {
             crate::exec::reload();
         }
         crate::agent::refresh_in_background();

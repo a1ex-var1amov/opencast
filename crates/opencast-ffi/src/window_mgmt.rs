@@ -1,11 +1,13 @@
-//! Window geometry, the Seek (Click Text) OCR scan and synthetic clicks.
+//! Window geometry and synthetic Seek clicks.
 //!
 //! Moving other apps' windows and capturing layouts happens in the Swift
 //! shell through the Accessibility API (`macos/WindowManager.swift`); the
 //! engine only decides *what* to do (`WindowAction`) and this module keeps the
-//! pure geometry so it stays testable off-macOS.
+//! pure geometry so it stays testable off-macOS. Seek OCR is in-process Vision
+//! in `macos/SeekView.swift` (`SeekOCR`); the `SeekHit` types here document the
+//! JSON shape the panel still accepts from a `seek` event.
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 use opencast_core::engine::WindowAction;
 use serde::{Deserialize, Serialize};
 
@@ -75,6 +77,8 @@ pub struct SeekWord {
 }
 
 /// Everything the Seek overlay needs: the monitor to cover and the lines.
+/// Kept for the wire shape / tests; live scans are built in Swift.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize)]
 pub struct SeekScan {
     pub monitor: Rect,
@@ -100,155 +104,10 @@ pub fn target_rect(action: WindowAction, work: Rect, current: Rect) -> Rect {
     }
 }
 
+// ponytail: Seek OCR lives in macos/SeekView.swift (SeekOCR); Rust only clicks.
 #[cfg(target_os = "macos")]
 mod mac {
     use super::*;
-    use anyhow::Context;
-    use serde::Deserialize;
-    use std::time::Duration;
-
-    async fn osascript(script: &str, args: &[String]) -> Result<String> {
-        let mut cmd = tokio::process::Command::new("osascript");
-        cmd.args(["-l", "JavaScript", "-e", script])
-            .args(args)
-            .kill_on_drop(true);
-        let out = tokio::time::timeout(Duration::from_secs(20), cmd.output())
-            .await
-            .map_err(|_| anyhow!("timed out running the text recognizer"))?
-            .context("running osascript")?;
-        if !out.status.success() {
-            bail!(
-                "text recognition error: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
-        }
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-    }
-
-    fn parse<T: serde::de::DeserializeOwned>(out: &str) -> Result<T> {
-        serde_json::from_str(out).with_context(|| format!("unexpected reply: {out}"))
-    }
-
-    /// The monitor (as a logical rect) containing `point`, falling back to
-    /// the first monitor.
-    fn monitor_at(x: f64, y: f64) -> Result<Rect> {
-        use core_graphics::display::CGDisplay;
-        let ids = CGDisplay::active_displays().map_err(|e| anyhow!("no monitors found ({e})"))?;
-        let rects: Vec<Rect> = ids
-            .into_iter()
-            .map(|id| {
-                let bounds = CGDisplay::new(id).bounds();
-                Rect {
-                    x: bounds.origin.x,
-                    y: bounds.origin.y,
-                    w: bounds.size.width,
-                    h: bounds.size.height,
-                }
-            })
-            .collect();
-        monitor_containing(&rects, x, y).ok_or_else(|| anyhow!("no monitors found"))
-    }
-
-    const OCR: &str = r#"
-ObjC.import('Vision'); ObjC.import('Foundation');
-function run(argv) {
-  const url = $.NSURL.fileURLWithPath(argv[0]);
-  const req = $.VNRecognizeTextRequest.alloc.init;
-  req.recognitionLevel = $.VNRequestTextRecognitionLevelAccurate;
-  const handler = $.VNImageRequestHandler.alloc.initWithURLOptions(url, $.NSDictionary.dictionary);
-  if (!handler.performRequestsError($.NSArray.arrayWithObject(req), null)) return JSON.stringify({ error: 'text recognition failed' });
-  const res = req.results, lines = [];
-  for (let i = 0; i < res.count; i++) {
-    const o = res.objectAtIndex(i), cand = o.topCandidates(1);
-    if (!cand.count) continue;
-    const c = cand.objectAtIndex(0), s = ObjC.unwrap(c.string), b = o.boundingBox;   // normalized, origin bottom-left
-    const words = []; const re = /\S+/g; let m;
-    while ((m = re.exec(s)) !== null) {
-      try {
-        const wb = c.boundingBoxForRangeError($.NSMakeRange(m.index, m[0].length), null).boundingBox;
-        words.push({ at: m.index, len: m[0].length, x: wb.origin.x, w: wb.size.width });
-      } catch (e) {}
-    }
-    lines.push({ label: s, x: b.origin.x, y: 1 - b.origin.y - b.size.height, w: b.size.width, h: b.size.height, words: words });
-  }
-  return JSON.stringify({ lines: lines });
-}
-"#;
-
-    #[derive(Deserialize)]
-    struct Ocr {
-        #[serde(default)]
-        error: Option<String>,
-        #[serde(default)]
-        lines: Vec<SeekHit>,
-    }
-
-    /// Full display bounds under the cursor, in Core Graphics points
-    /// (origin at the top-left of the primary display, y down).
-    fn cursor_monitor() -> Result<Rect> {
-        use core_graphics::event::CGEvent;
-        use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
-        let source =
-            CGEventSource::new(CGEventSourceStateID::CombinedSessionState).map_err(|_| anyhow!("no event source"))?;
-        let event = CGEvent::new(source).map_err(|_| anyhow!("no event"))?;
-        let point = event.location();
-        monitor_at(point.x, point.y)
-    }
-
-    /// Screenshot the display under the cursor and OCR it. Hits come back in
-    /// screen points, with the monitor rect (for the overlay).
-    // ponytail: one display, OCR only (no accessibility-tree search).
-    pub async fn seek_scan() -> Result<SeekScan> {
-        let monitor = cursor_monitor()?;
-        let png = std::env::temp_dir().join(format!("opencast-seek-{}.png", std::process::id()));
-        let region = [monitor.x, monitor.y, monitor.w, monitor.h]
-            .map(|v| format!("{}", v.round()))
-            .join(",");
-        let shot = tokio::process::Command::new("screencapture")
-            .args(["-x", "-R", &region])
-            .arg(&png)
-            .output()
-            .await
-            .context("running screencapture")?;
-        if !shot.status.success() || !png.exists() {
-            bail!(
-                "OpenCast needs the Screen Recording permission to find text on screen: \
-                 System Settings → Privacy & Security → Screen Recording → enable OpenCast, \
-                 then try again"
-            );
-        }
-        let reply = osascript(OCR, &[png.to_string_lossy().into_owned()]).await;
-        let _ = std::fs::remove_file(&png);
-        let r: Ocr = parse(&reply?)?;
-        if let Some(e) = r.error {
-            bail!("{e}");
-        }
-        if r.lines.is_empty() {
-            bail!("no readable text on screen");
-        }
-        let hits = r
-            .lines
-            .into_iter()
-            .map(|l| SeekHit {
-                label: l.label,
-                x: monitor.x + l.x * monitor.w,
-                y: monitor.y + l.y * monitor.h,
-                w: l.w * monitor.w,
-                h: l.h * monitor.h,
-                words: l
-                    .words
-                    .into_iter()
-                    .map(|w| SeekWord {
-                        at: w.at,
-                        len: w.len,
-                        x: monitor.x + w.x * monitor.w,
-                        w: w.w * monitor.w,
-                    })
-                    .collect(),
-            })
-            .collect();
-        Ok(SeekScan { monitor, hits })
-    }
 
     pub fn click_at(x: f64, y: f64) -> Result<()> {
         use core_graphics::event::{CGEvent, CGEventTapLocation, CGEventType, CGMouseButton};
@@ -269,12 +128,8 @@ function run(argv) {
     }
 }
 
-/// OCR the display under the cursor for the Seek overlay.
-pub async fn seek_scan() -> Result<SeekScan> {
-    mac::seek_scan().await
-}
-
 /// Click at a point in screen coordinates.
+#[cfg(target_os = "macos")]
 pub fn click_at(x: f64, y: f64) -> Result<()> {
     mac::click_at(x, y)
 }
@@ -328,5 +183,19 @@ mod tests {
         };
         let c = target_rect(WindowAction::Center, WORK, cur);
         assert_eq!((c.x, c.y), (WORK.x, WORK.y));
+    }
+
+    #[test]
+    fn seek_hit_json_keeps_word_boxes() {
+        let hit: SeekHit = serde_json::from_str(
+            r#"{"label":"Hi there","x":10,"y":20,"w":100,"h":12,"words":[{"at":0,"len":2,"x":10,"w":30}]}"#,
+        )
+        .unwrap();
+        assert_eq!(hit.label, "Hi there");
+        assert_eq!(hit.words.len(), 1);
+        assert_eq!(hit.words[0].at, 0);
+        assert_eq!(hit.words[0].w, 30.0);
+        let bare: SeekHit = serde_json::from_str(r#"{"label":"x","x":0,"y":0,"w":1,"h":1}"#).unwrap();
+        assert!(bare.words.is_empty());
     }
 }

@@ -97,15 +97,58 @@ fn run_mdfind(mut cmd: Command, limit: usize) -> Vec<PathBuf> {
 
 fn filter_paths(stdout: &[u8], limit: usize) -> Vec<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    String::from_utf8_lossy(stdout)
+    let mut rows: Vec<(bool, PathBuf)> = String::from_utf8_lossy(stdout)
         .lines()
         .map(|l| PathBuf::from(l.trim()))
         .filter(|p| !p.as_os_str().is_empty())
-        .filter(|p| p.extension().and_then(|e| e.to_str()) != Some("app"))
+        .filter(|p| keep_spotlight_hit(p))
         .filter(|p| {
             home.as_ref()
                 .is_none_or(|h| p.starts_with(h) || p.starts_with("/Applications") || p.starts_with("/Users"))
         })
-        .take(limit)
-        .collect()
+        .map(|p| {
+            let is_dir = std::fs::metadata(&p).map(|m| m.is_dir()).unwrap_or(false);
+            (is_dir, p)
+        })
+        .collect();
+    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    rows.into_iter().take(limit).map(|(_, p)| p).collect()
+}
+
+/// Drop `.app` bundles; keep normal files and folders (including extensionless dirs).
+fn keep_spotlight_hit(p: &std::path::Path) -> bool {
+    if p.extension().and_then(|e| e.to_str()) != Some("app") {
+        return true;
+    }
+    !std::fs::metadata(p).map(|m| m.is_dir()).unwrap_or(false)
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn filter_keeps_directories_and_prefers_them() {
+        // Workspace/temp only — writing under $HOME fails in sandboxed CI.
+        let base = std::env::temp_dir().join(format!("opencast_files_mac_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let folder = base.join("SpotlightFolder");
+        let file = base.join("notes.txt");
+        let app = base.join("Fake.app");
+        fs::create_dir(&folder).unwrap();
+        fs::write(&file, "x").unwrap();
+        fs::create_dir(&app).unwrap();
+        assert!(keep_spotlight_hit(&folder), "normal folder kept");
+        assert!(keep_spotlight_hit(&file), "file kept");
+        assert!(!keep_spotlight_hit(&app), ".app bundle dropped");
+        let mut rows = vec![
+            (fs::metadata(&file).unwrap().is_dir(), file.clone()),
+            (fs::metadata(&folder).unwrap().is_dir(), folder.clone()),
+        ];
+        rows.sort_by(|a, b| b.0.cmp(&a.0));
+        assert!(rows[0].1.ends_with("SpotlightFolder"), "folders sort first");
+        let _ = fs::remove_dir_all(&base);
+    }
 }

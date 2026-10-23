@@ -150,7 +150,7 @@ enum RemindersBridge {
                 Task { @MainActor in
                     model.busy = false
                     guard !rows.isEmpty else {
-                        model.flash("No open reminders 🎉", error: false, thenHide: false)
+                        model.flash("No open reminders", error: false, thenHide: false)
                         return
                     }
                     let now = Date()

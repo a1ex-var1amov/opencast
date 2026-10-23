@@ -52,7 +52,12 @@ final class Schedule {
             var subtitle = Self.timeRange(e)
             if let loc = e.location, !loc.isEmpty, Self.meetingURL(e) == nil { subtitle += " · \(loc)" }
             if Self.meetingURL(e) != nil { subtitle += " · Return to join" }
-            return ListItem(title: e.title ?? "Untitled", subtitle: subtitle, icon: Self.meetingURL(e) != nil ? "🎥" : "📅", arg: String(index))
+            return ListItem(
+                title: e.title ?? "Untitled",
+                subtitle: subtitle,
+                icon: Self.meetingURL(e) != nil ? "video.fill" : "calendar",
+                arg: String(index)
+            )
         }
     }
 

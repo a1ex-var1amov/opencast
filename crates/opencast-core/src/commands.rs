@@ -300,8 +300,8 @@ impl Registry {
         })
     }
 
-    /// Ranked results. An empty query lists commands (not apps) first, but caps
-    /// how many rows of one kind can fill the first screen (see `kind_cap`).
+    /// Ranked results. An empty query lists pins, then apps by frecency, then
+    /// capped non-app commands (see `kind_cap`), then the remainder.
     pub fn search(&self, query: &str, limit: usize) -> Vec<Command> {
         self.search_with_usage(query, limit, &Usage::default(), &HashSet::new())
     }
@@ -326,33 +326,45 @@ impl Registry {
         }
 
         if q.is_empty() {
-            let mut all: Vec<usize> = (0..self.commands.len()).filter(|&i| !self.entries[i].hidden).collect();
-            all.sort_by_key(|&i| {
+            // Spotlight habit: pins → apps (frecency) → capped commands → rest.
+            // ~50 window / ~45 builtin rows would otherwise bury apps on a fresh install.
+            let mut pinned: Vec<usize> = Vec::new();
+            let mut apps: Vec<usize> = Vec::new();
+            let mut rest: Vec<usize> = Vec::new();
+            for i in 0..self.commands.len() {
+                if self.entries[i].hidden {
+                    continue;
+                }
+                let c = &self.commands[i];
+                if pins.contains(&c.id) {
+                    pinned.push(i);
+                } else if c.kind == CommandKind::App {
+                    apps.push(i);
+                } else {
+                    rest.push(i);
+                }
+            }
+            let by_use = |i: usize| {
                 let c = &self.commands[i];
                 (
-                    !pins.contains(&c.id),
                     c.id != "builtin:chat",
-                    c.kind == CommandKind::App,
                     std::cmp::Reverse(usage.frecency(&c.id, now) + self.entries[i].boost),
                     c.kind.rank(),
                 )
+            };
+            pinned.sort_by_key(|&i| by_use(i));
+            apps.sort_by_key(|&i| {
+                std::cmp::Reverse(usage.frecency(&self.commands[i].id, now) + self.entries[i].boost)
             });
-            // Commands first, but no single kind may own the whole first screen:
-            // there are ~50 window commands, which would otherwise push every app
-            // past the limit on a fresh install. Rows the user pinned, boosted or
-            // actually picked keep their place; the rest wait until you type.
+            rest.sort_by_key(|&i| by_use(i));
+
             let mut counts = [0u16; 16];
             let mut picked: Vec<usize> = Vec::new();
-            let mut apps: Vec<usize> = Vec::new();
             let mut later: Vec<usize> = Vec::new();
-            for i in all {
+            for i in rest {
                 let c = &self.commands[i];
-                if c.kind == CommandKind::App {
-                    apps.push(i);
-                    continue;
-                }
                 let slot = c.kind.rank() as usize;
-                let known = pins.contains(&c.id) || self.entries[i].boost > 0 || usage.frecency(&c.id, now) > 0;
+                let known = self.entries[i].boost > 0 || usage.frecency(&c.id, now) > 0;
                 if known || counts[slot] < Self::kind_cap(c.kind) {
                     counts[slot] += 1;
                     picked.push(i);
@@ -360,9 +372,10 @@ impl Registry {
                     later.push(i);
                 }
             }
-            picked.extend(apps);
-            picked.extend(later);
-            out.extend(picked.into_iter().take(limit).map(|i| self.commands[i].clone()));
+            pinned.extend(apps);
+            pinned.extend(picked);
+            pinned.extend(later);
+            out.extend(pinned.into_iter().take(limit).map(|i| self.commands[i].clone()));
             return out;
         }
 
@@ -475,16 +488,33 @@ mod tests {
     }
 
     #[test]
-    fn empty_query_lists_commands_before_apps() {
-        let res = reg().search("", 10);
-        assert_eq!(res[0].kind, CommandKind::Ai);
-        assert_eq!(res.last().unwrap().kind, CommandKind::App);
+    fn empty_query_lists_apps_before_uncapped_commands() {
+        let mut many = cmds();
+        for n in 0..48 {
+            many.push(cmd(
+                &format!("window:extra-{n}"),
+                &format!("Extra Snap {n}"),
+                CommandKind::Window,
+                &["window"],
+            ));
+        }
+        let r = Registry::new(many);
+        let res = r.search("", 60);
+        let first_app = res.iter().position(|c| c.kind == CommandKind::App).unwrap();
+        let first_window = res.iter().position(|c| c.kind == CommandKind::Window).unwrap();
+        assert!(first_app < first_window, "apps before the window flood");
+
+        let mut u = Usage::default();
+        let now = crate::usage::now();
+        u.record("app:slack", "slack", now);
+        let res = r.search_with_usage("", 20, &u, &HashSet::new());
+        assert_eq!(res[0].id, "app:slack");
     }
 
     #[test]
     fn empty_query_never_fills_the_screen_with_one_kind() {
-        // A real install has ~50 window commands: they must not crowd apps out of
-        // the first screen, and the rest of them appear when you type "left half".
+        // A real install has ~50 window commands: after apps, only a capped slice
+        // of each kind leads; the rest wait until you type.
         let mut many = cmds();
         for n in 0..48 {
             many.push(cmd(
@@ -505,20 +535,15 @@ mod tests {
         let r = Registry::new(many);
         let res = r.search("", 60);
         let first_app = res.iter().position(|c| c.kind == CommandKind::App).unwrap();
-        let windows_before_apps = res[..first_app]
-            .iter()
-            .filter(|c| c.kind == CommandKind::Window)
-            .count();
-        let builtins_before_apps = res[..first_app]
-            .iter()
-            .filter(|c| c.kind == CommandKind::Builtin)
-            .count();
+        assert!(first_app < 5, "apps must lead the empty query (got row {first_app})");
+        // Tight limit: 4 apps + Ai + Layout + Window≤12 + Builtin≤16 — no remainder yet.
+        let preferred = r.search("", 34);
+        let windows = preferred.iter().filter(|c| c.kind == CommandKind::Window).count();
+        let builtins = preferred.iter().filter(|c| c.kind == CommandKind::Builtin).count();
         assert!(
-            windows_before_apps <= 12 && builtins_before_apps <= 16,
-            "{windows_before_apps} window and {builtins_before_apps} built-in rows come before any app"
+            windows <= 12 && builtins <= 16,
+            "{windows} window and {builtins} built-in rows in the preferred section"
         );
-        assert!(first_app < 35, "apps must reach the first screen (got row {first_app})");
-        assert_eq!(res[0].kind, CommandKind::Ai, "commands still lead");
         // The commands that waited are still found when you type.
         assert!(r.search("extra snap 47", 10).iter().any(|c| c.id == "window:extra-47"));
         assert!(r.search("extra tool 29", 10).iter().any(|c| c.id == "builtin:extra-29"));

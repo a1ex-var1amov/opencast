@@ -16,9 +16,45 @@ mod mac {
         CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
         CallbackResult, EventField,
     };
+    use opencast_core::config::Config;
+    use std::path::PathBuf;
     use std::process::{Command, Stdio};
     use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+    use std::sync::Once;
     use std::time::Duration;
+
+    const MARKER_NAME: &str = "opencast-hyperkey.on";
+
+    pub fn marker_path() -> PathBuf {
+        Config::config_dir().join(MARKER_NAME)
+    }
+
+    fn set_marker() {
+        let path = marker_path();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::File::create(path);
+    }
+
+    fn clear_marker() {
+        let _ = std::fs::remove_file(marker_path());
+    }
+
+    extern "C" fn atexit_restore() {
+        restore_caps_lock_if_ours();
+    }
+
+    /// Last-resort restore when the process exits without AppKit shutdown or signals.
+    pub fn register_exit_restore() {
+        static REGISTERED: Once = Once::new();
+        REGISTERED.call_once(|| unsafe {
+            extern "C" {
+                fn atexit(cb: extern "C" fn()) -> i32;
+            }
+            let _ = atexit(atexit_restore);
+        });
+    }
 
     const F18_KEYCODE: i64 = 79;
     const CAPS_LOCK_USAGE: u64 = 0x700000039;
@@ -37,6 +73,11 @@ mod mac {
             .args(["property", "--set", &mapping])
             .stdout(Stdio::null())
             .status();
+        if on {
+            set_marker();
+        } else {
+            clear_marker();
+        }
     }
 
     /// True when the current `hidutil` mapping is the Caps Lock → F18 one we install.
@@ -56,9 +97,10 @@ mod mac {
         (text.contains(&src) || text.contains(&src_hex)) && (text.contains(&dst) || text.contains(&dst_hex))
     }
 
-    /// Undo our remap, and only ours (leave Karabiner & co alone).
+    /// Undo our remap, and only ours (leave Karabiner & co alone). The marker
+    /// covers a crash where `hidutil --get` parsing is flaky but Caps Lock is still F18.
     pub fn restore_caps_lock_if_ours() {
-        if caps_lock_is_ours() {
+        if caps_lock_is_ours() || marker_path().is_file() {
             remap_caps_lock(false);
         }
     }
@@ -146,6 +188,21 @@ mod mac {
             }
         });
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::marker_path;
+        use std::path::PathBuf;
+
+        #[test]
+        fn marker_path_under_config_dir() {
+            std::env::set_var("OPENCAST_CONFIG_DIR", "/tmp/opencast-hyperkey-marker-test");
+            assert_eq!(
+                marker_path(),
+                PathBuf::from("/tmp/opencast-hyperkey-marker-test/opencast-hyperkey.on")
+            );
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -159,3 +216,6 @@ pub fn restore_caps_lock_if_ours() {}
 
 #[cfg(not(target_os = "macos"))]
 pub fn start(_on_tap: impl Fn() + Send + Sync + 'static) {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn register_exit_restore() {}

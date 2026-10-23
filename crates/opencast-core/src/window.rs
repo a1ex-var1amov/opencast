@@ -6,7 +6,210 @@
 use serde::{Deserialize, Serialize};
 
 use crate::config::{Config, WindowCommandConfig};
-use crate::engine::WindowAction;
+
+/// Rectangle-style window actions on the frontmost window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowAction {
+    LeftHalf,
+    RightHalf,
+    TopHalf,
+    BottomHalf,
+    CenterHalf,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+    FirstThird,
+    CenterThird,
+    LastThird,
+    FirstTwoThirds,
+    LastTwoThirds,
+    TopThird,
+    MiddleThird,
+    BottomThird,
+    TopTwoThirds,
+    BottomTwoThirds,
+    MiddleHalf,
+    TopLeftSixth,
+    TopCenterSixth,
+    TopRightSixth,
+    BottomLeftSixth,
+    BottomCenterSixth,
+    BottomRightSixth,
+    MiddleLeftSixth,
+    MiddleRightSixth,
+    Maximize,
+    AlmostMaximize,
+    MaximizeHeight,
+    MaximizeWidth,
+    ReasonableSize,
+    MakeLarger,
+    MakeSmaller,
+    Center,
+    MoveLeft,
+    MoveRight,
+    MoveUp,
+    MoveDown,
+    NextDisplay,
+    PreviousDisplay,
+    ToggleFullscreen,
+    Fullscreen,
+    ExitFullscreen,
+    RestoreSize,
+    Undo,
+    SpaceNext,
+    SpacePrev,
+    SpaceMoveNext,
+    SpaceMovePrev,
+    /// The panel lists every space and switches (or moves the window) from there.
+    SpaceSwitcher,
+}
+
+pub const WINDOW_ACTIONS: &[(WindowAction, &str, &str, &str)] = &[
+    (WindowAction::LeftHalf, "left-half", "Left Half", "◧"),
+    (WindowAction::RightHalf, "right-half", "Right Half", "◨"),
+    (WindowAction::TopHalf, "top-half", "Top Half", "⬒"),
+    (WindowAction::BottomHalf, "bottom-half", "Bottom Half", "⬓"),
+    (WindowAction::TopLeft, "top-left", "Top Left Quarter", "◰"),
+    (WindowAction::TopRight, "top-right", "Top Right Quarter", "◳"),
+    (WindowAction::BottomLeft, "bottom-left", "Bottom Left Quarter", "◱"),
+    (WindowAction::BottomRight, "bottom-right", "Bottom Right Quarter", "◲"),
+    (WindowAction::CenterHalf, "center-half", "Center Half", "◫"),
+    (WindowAction::FirstThird, "first-third", "First Third", "⅓"),
+    (WindowAction::CenterThird, "center-third", "Center Third", "⅓"),
+    (WindowAction::LastThird, "last-third", "Last Third", "⅓"),
+    (
+        WindowAction::FirstTwoThirds,
+        "first-two-thirds",
+        "First Two Thirds",
+        "⅔",
+    ),
+    (WindowAction::LastTwoThirds, "last-two-thirds", "Last Two Thirds", "⅔"),
+    (WindowAction::TopThird, "top-third", "Top Third", "⅓"),
+    (WindowAction::MiddleThird, "middle-third", "Middle Third", "⅓"),
+    (WindowAction::BottomThird, "bottom-third", "Bottom Third", "⅓"),
+    (WindowAction::TopTwoThirds, "top-two-thirds", "Top Two Thirds", "⅔"),
+    (
+        WindowAction::BottomTwoThirds,
+        "bottom-two-thirds",
+        "Bottom Two Thirds",
+        "⅔",
+    ),
+    (WindowAction::MiddleHalf, "middle-half", "Middle Half", "⊟"),
+    (WindowAction::TopLeftSixth, "top-left-sixth", "Top Left Sixth", "▦"),
+    (
+        WindowAction::TopCenterSixth,
+        "top-center-sixth",
+        "Top Center Sixth",
+        "▦",
+    ),
+    (WindowAction::TopRightSixth, "top-right-sixth", "Top Right Sixth", "▦"),
+    (
+        WindowAction::BottomLeftSixth,
+        "bottom-left-sixth",
+        "Bottom Left Sixth",
+        "▦",
+    ),
+    (
+        WindowAction::BottomCenterSixth,
+        "bottom-center-sixth",
+        "Bottom Center Sixth",
+        "▦",
+    ),
+    (
+        WindowAction::BottomRightSixth,
+        "bottom-right-sixth",
+        "Bottom Right Sixth",
+        "▦",
+    ),
+    (
+        WindowAction::MiddleLeftSixth,
+        "middle-left-sixth",
+        "Middle Left Sixth",
+        "▦",
+    ),
+    (
+        WindowAction::MiddleRightSixth,
+        "middle-right-sixth",
+        "Middle Right Sixth",
+        "▦",
+    ),
+    (WindowAction::Maximize, "maximize", "Maximize", "⛶"),
+    (WindowAction::AlmostMaximize, "almost-maximize", "Almost Maximize", "❐"),
+    (WindowAction::MaximizeHeight, "maximize-height", "Maximize Height", "↕"),
+    (WindowAction::MaximizeWidth, "maximize-width", "Maximize Width", "↔"),
+    (WindowAction::ReasonableSize, "reasonable-size", "Reasonable Size", "▢"),
+    (WindowAction::MakeLarger, "make-larger", "Make Larger", "⊕"),
+    (WindowAction::MakeSmaller, "make-smaller", "Make Smaller", "⊖"),
+    (WindowAction::Center, "center", "Center", "◎"),
+    (WindowAction::MoveLeft, "move-left", "Move Left", "⇤"),
+    (WindowAction::MoveRight, "move-right", "Move Right", "⇥"),
+    (WindowAction::MoveUp, "move-up", "Move Up", "⤒"),
+    (WindowAction::MoveDown, "move-down", "Move Down", "⤓"),
+    (WindowAction::ToggleFullscreen, "fullscreen", "Toggle Fullscreen", "⤢"),
+    // Explicit enter/exit: bindable separately, and they say what happened
+    // instead of silently doing the other thing.
+    (WindowAction::Fullscreen, "full-screen", "Full Screen", "⤢"),
+    (WindowAction::ExitFullscreen, "exit-fullscreen", "Exit Full Screen", "⤡"),
+    (WindowAction::Undo, "undo", "Undo Window Move", "↶"),
+    (WindowAction::NextDisplay, "next-display", "Next Display", "→"),
+    (
+        WindowAction::PreviousDisplay,
+        "previous-display",
+        "Previous Display",
+        "←",
+    ),
+    (WindowAction::RestoreSize, "restore", "Restore Window Size", "↩"),
+    // Spaces: one glyph for the whole family, the title carries the verb.
+    (WindowAction::SpaceNext, "space-next", "Next Space", "🗔"),
+    (WindowAction::SpacePrev, "space-prev", "Previous Space", "🗔"),
+    (
+        WindowAction::SpaceMoveNext,
+        "space-move-next",
+        "Move Window to Next Space",
+        "🗔",
+    ),
+    (
+        WindowAction::SpaceMovePrev,
+        "space-move-prev",
+        "Move Window to Previous Space",
+        "🗔",
+    ),
+    (WindowAction::SpaceSwitcher, "spaces", "Switch Space", "🗔"),
+];
+
+impl WindowAction {
+    pub fn key(self) -> &'static str {
+        WINDOW_ACTIONS.iter().find(|(a, ..)| *a == self).unwrap().1
+    }
+
+    pub fn title(self) -> &'static str {
+        WINDOW_ACTIONS.iter().find(|(a, ..)| *a == self).unwrap().2
+    }
+
+    /// Target rectangle as fractions `(x, y, w, h)` of the work area for
+    /// tiling commands (first cycle step), or `None` for the rest.
+    pub fn frac(self) -> Option<(f64, f64, f64, f64)> {
+        frac(self, 0, 0.9)
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        WINDOW_ACTIONS.iter().find(|(_, k, ..)| *k == key).map(|(a, ..)| *a)
+    }
+
+    pub fn is_display_move(self) -> bool {
+        matches!(self, Self::NextDisplay | Self::PreviousDisplay)
+    }
+
+    pub fn is_restore(self) -> bool {
+        matches!(self, Self::RestoreSize)
+    }
+
+    /// Move the window itself between spaces (as opposed to switching view).
+    pub fn is_space_move(self) -> bool {
+        matches!(self, Self::SpaceMoveNext | Self::SpaceMovePrev)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub struct Rect {
@@ -464,7 +667,7 @@ mod tests {
             ..Opts::default()
         };
         let cur = Rect::new(100.0, 100.0, 300.0, 300.0);
-        for (a, key, ..) in crate::engine::WINDOW_ACTIONS {
+        for (a, key, ..) in WINDOW_ACTIONS {
             if let Some(r) = target(key, &cur, &[W], 0, &o, &[]) {
                 assert!(r.w > 0.0 && r.h > 0.0, "{key}");
                 assert!(r.x >= W.x - 0.01 && r.x + r.w <= W.x + W.w + 0.01, "{key} {r:?}");
@@ -599,7 +802,7 @@ mod tests {
         for (w, h) in [(1920.0, 1080.0), (1080.0, 1920.0)] {
             let s = Rect::new(0.0, 0.0, w, h);
             let cur = Rect::new(w * 0.3, h * 0.3, w * 0.2, h * 0.2);
-            for (_, key, title, _) in crate::engine::WINDOW_ACTIONS {
+            for (_, key, title, _) in WINDOW_ACTIONS {
                 let Some(r) = target(key, &cur, &[s], 0, &o, &[]) else {
                     continue;
                 };

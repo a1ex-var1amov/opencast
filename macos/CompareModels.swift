@@ -203,7 +203,7 @@ struct CompareView: View {
                 }
             }
             if state.available.isEmpty {
-                Text("No AI providers configured — add [[providers]] to config.toml.")
+                Text("No AI provider yet. Return opens Settings → AI.")
                     .foregroundStyle(.secondary)
             }
             HStack(alignment: .top, spacing: 10) {

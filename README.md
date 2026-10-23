@@ -292,7 +292,7 @@ hidden = false               # true removes it from search
 ```toml
 [general]
 fallbacks = ["Search Kagi", "builtin:chat", "files"]   # ids/titles, or the tokens
-fallback_threshold = 3                                  # "quicklinks" and "files"
+fallback_threshold = 3                                  # "quicklinks", "files", "web" (DuckDuckGo)
 ```
 
 **Keys** inside the panel live in `[keys]` (`ask_ai`, `click_text`, `actions`,
@@ -401,8 +401,13 @@ document (Return reads it into the panel; the URI shows in the preview) and
 **prompt templates** get one command each (fill the arguments, and the server's
 own wording opens in a chat, unsent, ready to edit). Stdio servers (`command`)
 and Streamable HTTP servers (`url`, with `headers` / `headers_cmd`) are
-supported; OAuth-only remote servers are
-not yet.
+supported. For OAuth HTTP servers set `oauth_client_id`,
+`oauth_authorize_url`, `oauth_token_url`, and optional `oauth_scopes`; OpenCast
+opens a browser, catches the loopback redirect, and stores access/refresh
+tokens in the Keychain (optional client secret:
+`security` item `opencast-mcp-<id>-oauth-secret`). Prefer PKCE with no secret.
+Settings → Extensions → **Sign in…**, or **Refresh MCP Tools**, attaches
+`Authorization: Bearer …` on connect.
 
 ## Shortcuts, snippets, schedule, menus
 
@@ -507,10 +512,10 @@ as is):
   side, with time to first token, total time and words per second.
 - **Dictate Anywhere**: bind a hotkey; speak, and the text is pasted into the
   front app when you pause (on-device recognition; Esc cancels).
-- **Keyboard Shortcuts**: pick a running app, then pick one of its menu
+- **App Menu Shortcuts**: pick a running app, then pick one of its menu
   shortcuts and it runs in that app. The search bar filters at every level — the
   app list, then that app's shortcuts, fuzzy, and `⌘t` finds ⌘T — while Esc
-  steps back a level instead of closing. **Keyboard Shortcuts** is also an action
+  steps back a level instead of closing. **App Menu Shortcuts** is also an action
   on any running app's row, and **Search Menus** does the same for every menu
   item, key equivalent or not.
 - **Pipelines** (`[[pipelines]]`): run the selection, clipboard or typed text
@@ -547,8 +552,11 @@ as is):
 - **Shared config**: `include = ["~/team/opencast.toml", "git:<url>"]` merges
   snippets, quicklinks, commands, AI commands and presets; local entries win.
 - **Spell** (`spell recieve`), **OpenCast Stats**, **Save as Snippet** (⌘S on a
-  clipboard text), colour swatches for colour clips, **Recent Documents** (⌘R on
-  an app), Shift-tap Quick Look (`shift_quick_look`), `sync_dir` for Sync Config.
+  clipboard text), colour swatches for colour clips, **Recent Documents** (type
+  `recent` or ⌘R on an app), Shift-tap Quick Look (`shift_quick_look`),
+  `sync_dir` for Sync Config. Empty query leads with pinned and frecency apps
+  (Spotlight-style); file search prefers folders and shows path subtitles.
+
 - **Scripts** get `OPENCAST_DATA` / `OPENCAST_CACHE` and Alfred's `alfred_*`
   variables; `@opencast.mode markdown` renders output as Markdown and
   `@opencast.mode grid` shows list rows as a grid.

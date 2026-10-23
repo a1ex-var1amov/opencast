@@ -198,7 +198,7 @@ impl Transform {
                 .collect::<Vec<_>>()
                 .join("\n"),
             Transform::JoinLines => s.split_whitespace().collect::<Vec<_>>().join(" "),
-            Transform::UrlEncode => url_encode(s),
+            Transform::UrlEncode => crate::encode::url_encode(s),
             Transform::UrlDecode => url_decode(s),
             Transform::Base64Encode => base64_encode(s.as_bytes()),
             Transform::Base64Decode => {
@@ -237,18 +237,6 @@ fn title_case(s: &str) -> String {
             if c.is_whitespace() || c == '-' {
                 start = true;
             }
-        }
-    }
-    out
-}
-
-fn url_encode(s: &str) -> String {
-    let mut out = String::new();
-    for b in s.bytes() {
-        if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("%{b:02X}"));
         }
     }
     out
@@ -401,7 +389,7 @@ mod tests {
         assert_eq!(t("title", "hello big-world"), "Hello Big-World");
         assert_eq!(t("sort-lines", "b\na\nC"), "a\nb\nC");
         assert_eq!(t("unique-lines", "a\nb\na"), "a\nb");
-        assert_eq!(t("url-encode", "a b&c"), "a%20b%26c");
+        assert_eq!(t("url-encode", "a b&c"), "a+b%26c");
         assert_eq!(t("url-decode", "a%20b%26c+d"), "a b&c d");
         for s in ["", "f", "fo", "foo", "foob", "hello, wörld"] {
             assert_eq!(t("base64-decode", &t("base64-encode", s)), s);

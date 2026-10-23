@@ -21,7 +21,7 @@ struct ChatView: View {
             }
             field
             HintBar(
-                left: model.chatStreaming ? "Streaming…" : "OpenCast",
+                left: chatProviderHint,
                 hints: model.pendingApproval != nil
                     ? [("Allow", "↩"), ("Deny", "esc")]
                     : [
@@ -38,9 +38,15 @@ struct ChatView: View {
         .onChange(of: model.focusTick) { _, _ in composer = true }
     }
 
+    private var chatProviderHint: String {
+        let p = model.chatProviderId ?? "Provider"
+        if let m = model.activeChatModel { return "\(p) · \(m)" }
+        return p
+    }
+
     private var header: some View {
         HStack(spacing: 10) {
-            BackButton { model.backToSearch(clearQuery: true) }
+            BackButton { model.backToSearch(clearQuery: false) }
             Text("AI Chat")
                 .font(.system(size: 15, weight: .semibold))
             Spacer(minLength: 8)
@@ -72,7 +78,7 @@ struct ChatView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     if model.providersReady && model.providers.isEmpty {
-                        Text("No AI provider configured. Run Open Config Folder, add a [[providers]] entry to config.toml, then Reload Commands.")
+                        Text("No AI provider yet. Return opens Settings → AI.")
                             .font(.system(size: 14))
                             .foregroundStyle(Theme.secondary(scheme))
                             .multilineTextAlignment(.center)
@@ -181,9 +187,10 @@ struct ChatView: View {
                 Spacer(minLength: 48)
                 VStack(alignment: .trailing, spacing: 4) {
                     if !turn.attachmentNames.isEmpty {
-                        Text(turn.attachmentNames.map { "📎 " + $0 }.joined(separator: "  "))
+                        Label(turn.attachmentNames.joined(separator: "  "), systemImage: "paperclip")
                             .font(.system(size: 11))
                             .foregroundStyle(Theme.tertiary(scheme))
+                            .labelStyle(.titleAndIcon)
                     }
                 Text(turn.content)
                     .textSelection(.enabled)
@@ -235,8 +242,8 @@ struct ChatView: View {
             .padding(.vertical, 2)
             .overlay(alignment: .topLeading) {
                 if model.chatInput.isEmpty {
-                    Text(model.chatStreaming ? "Streaming… Esc to stop" : "Message — Enter to send, Shift+Enter for a new line")
-                        .foregroundStyle(Theme.tertiary(scheme))
+                    Text("Message — Enter to send, Shift+Enter for a new line")
+                        .foregroundStyle(Theme.secondary(scheme))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
                         .allowsHitTesting(false)
@@ -265,6 +272,7 @@ private struct StreamCaret: View {
             .frame(width: 8, height: 16)
             .opacity(dim ? 0 : 1)
             .onAppear {
+                guard !Theme.reduceMotion else { return }
                 withAnimation(.linear(duration: 0.5).repeatForever(autoreverses: true)) { dim = true }
             }
     }
