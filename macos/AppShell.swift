@@ -12,7 +12,7 @@ final class IslandPanel: NSPanel {
         )
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = false
+        hasShadow = true
         level = NSWindow.Level(rawValue: 25)
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         hidesOnDeactivate = false
@@ -150,19 +150,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ListItem(
                 title: "Hotkey: \(hotkey)",
                 subtitle: "Press anytime to open OpenCast",
-                icon: nil,
+                icon: "keyboard",
                 arg: "0"
             ),
             ListItem(
                 title: "Allow Accessibility",
                 subtitle: "Window management, paste, snippets, selection",
-                icon: nil,
+                icon: "lock.shield",
                 arg: "1"
             ),
             ListItem(
                 title: "Connect AI (optional)",
                 subtitle: "Add a provider in Settings",
-                icon: nil,
+                icon: "sparkles",
                 arg: "2"
             ),
         ]

@@ -58,7 +58,7 @@ final class OpenCastStatusBar: NSObject, NSMenuDelegate {
         if parts.contains("alt") || parts.contains("option") { out += "⌥" }
         if parts.contains("shift") { out += "⇧" }
         if parts.contains("cmd") || parts.contains("command") { out += "⌘" }
-        let key = parts.last.map(String.init) ?? "space"
+        let key = parts.last.map { String($0) } ?? "space"
         switch key {
         case "space": out += "Space"
         case "return", "enter": out += "↩"

@@ -63,6 +63,14 @@ window_hotkeys = "rectangle"
 # quietly doing nothing.
 integrations = "auto"
 
+# Spotify Search: "open" (default) hands the query to Spotify's own search UI.
+# "list" searches via the Web API and shows hits in the launcher — needs a
+# Spotify Developer app (client_id) and a Keychain secret command.
+# [spotify]
+# search = "list"
+# client_id = "your-spotify-client-id"
+# client_secret_cmd = "security find-generic-password -s opencast-spotify -w"
+
 # In-panel keys. Mods: Cmd, Shift, Alt/Option, Ctrl. Keys: a character, or
 # Tab, Return, Escape, Space, Up, Down, Left, Right, Backspace, Delete, F1-F20.
 [keys]
@@ -326,6 +334,8 @@ icon = "🔎"
 #   oauth_client_id / oauth_authorize_url / oauth_token_url / oauth_scopes
 #                     optional OAuth for HTTP servers (PKCE; tokens in Keychain).
 #                     Optional secret: Keychain service opencast-mcp-<id>-oauth-secret
+#   oauth_redirect_uri  default http://127.0.0.1:8765/callback — register this
+#                     exact URI with the IdP (Sign in… only; connect stays quiet)
 #   tools             only these tools ("get_*" prefix allowed); empty = all
 #   in_launcher       list tools as commands (default true)
 #   in_chat           offer tools to the AI chat (default true)
@@ -356,6 +366,7 @@ icon = "🔎"
 # oauth_authorize_url = "https://auth.example/authorize"
 # oauth_token_url = "https://auth.example/token"
 # oauth_scopes = ["openid", "mcp"]
+# oauth_redirect_uri = "http://127.0.0.1:8765/callback"
 
 # ---------------------------------------------------------------------------
 # Snippets. Search by keyword; Return pastes into the frontmost app.

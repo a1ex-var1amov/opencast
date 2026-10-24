@@ -97,6 +97,8 @@ fn run_mdfind(mut cmd: Command, limit: usize) -> Vec<PathBuf> {
 
 fn filter_paths(stdout: &[u8], limit: usize) -> Vec<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
+    // Cap before metadata(): mdfind can return hundreds of hits; we only keep `limit`.
+    let cap = limit.saturating_mul(4).max(limit);
     let mut rows: Vec<(bool, PathBuf)> = String::from_utf8_lossy(stdout)
         .lines()
         .map(|l| PathBuf::from(l.trim()))
@@ -106,6 +108,7 @@ fn filter_paths(stdout: &[u8], limit: usize) -> Vec<PathBuf> {
             home.as_ref()
                 .is_none_or(|h| p.starts_with(h) || p.starts_with("/Applications") || p.starts_with("/Users"))
         })
+        .take(cap)
         .map(|p| {
             let is_dir = std::fs::metadata(&p).map(|m| m.is_dir()).unwrap_or(false);
             (is_dir, p)

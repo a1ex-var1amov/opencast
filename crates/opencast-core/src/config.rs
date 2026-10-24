@@ -65,6 +65,9 @@ pub struct Config {
     /// `[[pipelines]]`: text through several commands in a row.
     #[serde(default)]
     pub pipelines: Vec<crate::pipeline::PipelineConfig>,
+    /// Spotify Web API search (`search = "list"`) vs deep-link (`"open"`).
+    #[serde(default)]
+    pub spotify: SpotifyConfig,
     /// Problems with `include` files (missing, invalid); shown as warnings.
     #[serde(skip)]
     pub include_warnings: Vec<String>,
@@ -72,6 +75,61 @@ pub struct Config {
     /// would otherwise swallow. Shown as warnings.
     #[serde(skip)]
     pub parse_warnings: Vec<String>,
+}
+
+/// `[spotify]`: how `Spotify Search` behaves.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SpotifyConfig {
+    /// `"open"` (default) → `spotify:search:…`. `"list"` → Web API hits in the panel.
+    #[serde(default = "default_spotify_search")]
+    pub search: String,
+    pub client_id: Option<String>,
+    /// Prints the client secret (Keychain via `security find-generic-password …`).
+    pub client_secret_cmd: Option<String>,
+}
+
+fn default_spotify_search() -> String {
+    "open".into()
+}
+
+impl SpotifyConfig {
+    pub fn wants_list(&self) -> bool {
+        self.search.trim().eq_ignore_ascii_case("list")
+    }
+
+    /// `list` mode with both id and a resolvable secret.
+    pub fn list_enabled(&self) -> bool {
+        self.wants_list() && self.resolve_client_secret().ok().flatten().is_some()
+    }
+
+    pub fn resolve_client_secret(&self) -> Result<Option<String>> {
+        let id = self.client_id.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        if id.is_none() {
+            return Ok(None);
+        }
+        let Some(cmd) = self
+            .client_secret_cmd
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            return Ok(None);
+        };
+        let out = Process::new("/bin/sh")
+            .arg("-c")
+            .arg(cmd)
+            .output()
+            .context("spotify: running client_secret_cmd")?;
+        if !out.status.success() {
+            bail!(
+                "spotify: client_secret_cmd exited with {}: {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        let secret = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        Ok((!secret.is_empty()).then_some(secret))
+    }
 }
 
 /// Section and key names the parser accepts, taken from the structs by
@@ -1699,6 +1757,10 @@ impl Config {
             if !mcp_ids.insert(m.id.as_str()) {
                 bail!("mcp server id `{}` is used twice", m.id);
             }
+        }
+        let s = self.spotify.search.trim();
+        if !s.is_empty() && !s.eq_ignore_ascii_case("open") && !s.eq_ignore_ascii_case("list") {
+            bail!("[spotify] search must be \"open\" or \"list\" (got `{s}`)");
         }
         Ok(())
     }

@@ -165,7 +165,15 @@ const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
         "settings",
         "Settings",
         "⚙️",
-        &["config", "preferences", "theme", "appearance", "presentation", "position", "awake"],
+        &[
+            "config",
+            "preferences",
+            "theme",
+            "appearance",
+            "presentation",
+            "position",
+            "awake",
+        ],
     ),
     (
         Builtin::Shortcuts,
@@ -381,7 +389,8 @@ const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
         "media-play",
         "Play / Pause",
         "⏯",
-        &["music", "spotify", "pause", "resume", "media"],
+        // No "spotify": that query belongs to the Spotify integration family.
+        &["music", "pause", "resume", "media"],
     ),
     (
         Builtin::MediaNext,
@@ -418,39 +427,75 @@ const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
     (
         Builtin::SpotifyPlay,
         "spotify-play",
-        "Spotify Play / Pause",
+        "Play / Pause",
         "🎧",
-        &["music", "pause", "resume", "player"],
+        // Phrase keywords: fuzzy scores the whole query against one field.
+        &[
+            "music",
+            "pause",
+            "resume",
+            "player",
+            "spotify",
+            "spotify play",
+            "spotify pause",
+        ],
     ),
     (
         Builtin::SpotifyNext,
         "spotify-next",
-        "Spotify Next Track",
+        "Next Track",
         "🎧",
-        &["music", "skip", "song", "player"],
+        &["music", "skip", "song", "player", "spotify", "spotify next"],
     ),
     (
         Builtin::SpotifyPrevious,
         "spotify-previous",
-        "Spotify Previous Track",
+        "Previous Track",
         "🎧",
-        &["music", "back", "song", "player"],
+        &[
+            "music",
+            "back",
+            "song",
+            "player",
+            "spotify",
+            "spotify previous",
+            "spotify back",
+        ],
     ),
     (
         Builtin::SpotifyNowPlaying,
         "spotify-now",
-        "Spotify Now Playing",
+        "Now Playing",
         "🎧",
-        &["music", "track", "song", "album", "what is playing", "player"],
+        &[
+            "music",
+            "track",
+            "song",
+            "album",
+            "what is playing",
+            "now playing",
+            "spotify now playing",
+            "player",
+            "spotify",
+        ],
     ),
     // Spotify's scripting dictionary has no search command, so this one hands the
     // query to the app over its deep link — no API credentials needed.
     (
         Builtin::SpotifySearch,
         "spotify-search",
-        "Spotify Search",
+        "Search",
         "🎧",
-        &["music", "find", "artist", "album", "playlist", "query"],
+        &[
+            "music",
+            "find",
+            "artist",
+            "album",
+            "playlist",
+            "query",
+            "spotify",
+            "spotify search",
+        ],
     ),
     (
         Builtin::ActOnSelection,
@@ -1137,6 +1182,12 @@ impl Engine {
         let installed: HashSet<String> = app_list.iter().map(|a| a.name.to_lowercase()).collect();
         let (integrations_on, integration_warnings) = config.integrations_enabled(&installed);
         warnings.extend(integration_warnings);
+        if config.spotify.wants_list() && !config.spotify.list_enabled() {
+            warnings.push(
+                "[spotify] search = \"list\" needs client_id and client_secret_cmd — using open until both are set"
+                    .into(),
+            );
+        }
 
         for (_, key, title, icon, kw) in BUILTINS {
             if let Some(name) = Config::integration_for_key(key) {
@@ -1144,10 +1195,16 @@ impl Engine {
                     continue;
                 }
             }
+            // One glyph for the Spotify family; the subtitle carries the kind/verb home.
+            let subtitle = match *key {
+                "spotify" => Some("Player Controls".into()),
+                k if k.starts_with("spotify") => Some("Spotify".into()),
+                _ => None,
+            };
             commands.push(Command {
                 id: format!("builtin:{key}"),
                 title: title.to_string(),
-                subtitle: None,
+                subtitle,
                 icon: Some(icon.to_string()),
                 kind: CommandKind::Builtin,
                 arguments: vec![],
@@ -1765,9 +1822,13 @@ impl Engine {
     /// Count a run of `id`, chosen after typing `query` (empty for hotkeys and
     /// deep links). Writes `usage.json` when the id is tracked.
     pub fn bump_usage(&self, id: &str, query: &str) {
-        let mut s = self.sidecars.write().unwrap();
-        if s.usage.record(id, query, crate::usage::now()) {
-            s.usage.save(&self.config_dir);
+        // Save outside the write lock so a slow disk flush cannot block search readers.
+        let dirty = {
+            let mut s = self.sidecars.write().unwrap();
+            s.usage.record(id, query, crate::usage::now()).then(|| s.usage.clone())
+        };
+        if let Some(usage) = dirty {
+            usage.save(&self.config_dir);
         }
     }
 
@@ -2281,115 +2342,117 @@ impl Engine {
     pub fn search(&self, query: &str, limit: usize) -> Vec<Command> {
         let q = query.trim();
         let ql = q.to_lowercase();
-        let mut out = {
+        // Clone sidecars under a short read lock so typing cannot pile up readers
+        // that stall bump_usage (and thus Return/click) on the write lock.
+        let (usage, pin_set, notes, chats) = {
             let s = self.sidecars.read().unwrap();
-            let mut out = self.registry.search_with_usage(query, limit, &s.usage, &s.pin_set);
-            for (i, row) in self.conversions(q).into_iter().enumerate() {
-                out.insert(i, row);
+            (s.usage.clone(), s.pin_set.clone(), s.notes.clone(), s.chats.clone())
+        };
+        let mut out = self.registry.search_with_usage(query, limit, &usage, &pin_set);
+        for (i, row) in self.conversions(q).into_iter().enumerate() {
+            out.insert(i, row);
+        }
+        if let Some(word) = ql.strip_prefix("spell ").map(str::trim).filter(|w| !w.is_empty()) {
+            out.insert(
+                0,
+                Command {
+                    id: format!("spell:{word}"),
+                    title: format!("Spell “{word}”"),
+                    subtitle: Some("Spelling suggestions".into()),
+                    icon: Some("🔤".into()),
+                    kind: CommandKind::Builtin,
+                    arguments: vec![],
+                    hotkey: None,
+                    keywords: vec![],
+                },
+            );
+        }
+        if let Some((text, lang)) = parse_translate(q) {
+            let to = lang.clone().unwrap_or_else(|| self.config.general.translate_to.clone());
+            out.insert(
+                0,
+                Command {
+                    id: format!("translate:{}\u{1f}{text}", lang.unwrap_or_default()),
+                    title: format!("Translate “{text}”"),
+                    subtitle: Some(format!("to {to} · AI")),
+                    icon: Some("🌐".into()),
+                    kind: CommandKind::Builtin,
+                    arguments: vec![],
+                    hotkey: None,
+                    keywords: vec![],
+                },
+            );
+        }
+        if let Some(word) = ql.strip_prefix("define ").map(str::trim).filter(|w| !w.is_empty()) {
+            out.insert(
+                0,
+                Command {
+                    id: format!("define:{word}"),
+                    title: format!("Define “{word}”"),
+                    subtitle: Some("Dictionary".into()),
+                    icon: Some("📖".into()),
+                    kind: CommandKind::Builtin,
+                    arguments: vec![],
+                    hotkey: None,
+                    keywords: vec![],
+                },
+            );
+        }
+        for row in crate::notes::matching_in(&notes, q, 20) {
+            if !out.iter().any(|c| c.id == row.id) {
+                out.push(row);
             }
-            if let Some(word) = ql.strip_prefix("spell ").map(str::trim).filter(|w| !w.is_empty()) {
-                out.insert(
-                    0,
-                    Command {
-                        id: format!("spell:{word}"),
-                        title: format!("Spell “{word}”"),
-                        subtitle: Some("Spelling suggestions".into()),
-                        icon: Some("🔤".into()),
-                        kind: CommandKind::Builtin,
-                        arguments: vec![],
-                        hotkey: None,
-                        keywords: vec![],
-                    },
-                );
-            }
-            if let Some((text, lang)) = parse_translate(q) {
-                let to = lang.clone().unwrap_or_else(|| self.config.general.translate_to.clone());
-                out.insert(
-                    0,
-                    Command {
-                        id: format!("translate:{}\u{1f}{text}", lang.unwrap_or_default()),
-                        title: format!("Translate “{text}”"),
-                        subtitle: Some(format!("to {to} · AI")),
-                        icon: Some("🌐".into()),
-                        kind: CommandKind::Builtin,
-                        arguments: vec![],
-                        hotkey: None,
-                        keywords: vec![],
-                    },
-                );
-            }
-            if let Some(word) = ql.strip_prefix("define ").map(str::trim).filter(|w| !w.is_empty()) {
-                out.insert(
-                    0,
-                    Command {
-                        id: format!("define:{word}"),
-                        title: format!("Define “{word}”"),
-                        subtitle: Some("Dictionary".into()),
-                        icon: Some("📖".into()),
-                        kind: CommandKind::Builtin,
-                        arguments: vec![],
-                        hotkey: None,
-                        keywords: vec![],
-                    },
-                );
-            }
-            for row in crate::notes::matching_in(&s.notes, q, 20) {
+        }
+        let bm = crate::bookmarks::matching(&self.extras.bookmarks, q);
+        if crate::bookmarks::needle(q).1 {
+            // `bm …`: bookmarks only, first.
+            out.retain(|c| c.kind != CommandKind::Calculator);
+            let rest = std::mem::take(&mut out);
+            out = bm;
+            out.extend(rest);
+        } else {
+            for row in bm {
                 if !out.iter().any(|c| c.id == row.id) {
                     out.push(row);
                 }
             }
-            let bm = crate::bookmarks::matching(&self.extras.bookmarks, q);
-            if crate::bookmarks::needle(q).1 {
-                // `bm …`: bookmarks only, first.
-                out.retain(|c| c.kind != CommandKind::Calculator);
-                let rest = std::mem::take(&mut out);
-                out = bm;
-                out.extend(rest);
-            } else {
-                for row in bm {
-                    if !out.iter().any(|c| c.id == row.id) {
-                        out.push(row);
-                    }
+        }
+        let hist = crate::history::matching(&self.extras.history, q);
+        if crate::history::needle(q).1 {
+            // `hist …` / `history …`: history only, first.
+            out.retain(|c| c.kind != CommandKind::Calculator);
+            let rest = std::mem::take(&mut out);
+            out = hist;
+            out.extend(rest);
+        } else {
+            for row in hist {
+                if !out.iter().any(|c| c.id == row.id) {
+                    out.push(row);
                 }
             }
-            let hist = crate::history::matching(&self.extras.history, q);
-            if crate::history::needle(q).1 {
-                // `hist …` / `history …`: history only, first.
-                out.retain(|c| c.kind != CommandKind::Calculator);
-                let rest = std::mem::take(&mut out);
-                out = hist;
-                out.extend(rest);
-            } else {
-                for row in hist {
-                    if !out.iter().any(|c| c.id == row.id) {
-                        out.push(row);
-                    }
+        }
+        let rec = crate::recents::matching(&self.extras.recents, q);
+        if crate::recents::needle(q).1 {
+            // `recent …` / `recents …`: recents only, first.
+            out.retain(|c| c.kind != CommandKind::Calculator);
+            let rest = std::mem::take(&mut out);
+            out = rec;
+            out.extend(rest);
+        } else {
+            for row in rec {
+                if !out.iter().any(|c| c.id == row.id) {
+                    out.push(row);
                 }
             }
-            let rec = crate::recents::matching(&self.extras.recents, q);
-            if crate::recents::needle(q).1 {
-                // `recent …` / `recents …`: recents only, first.
-                out.retain(|c| c.kind != CommandKind::Calculator);
-                let rest = std::mem::take(&mut out);
-                out = rec;
-                out.extend(rest);
-            } else {
-                for row in rec {
-                    if !out.iter().any(|c| c.id == row.id) {
-                        out.push(row);
-                    }
-                }
-            }
-            // `chats …` lists saved chats first.
-            let chat_rows = crate::chats::matching_in(&s.chats, q, 30);
-            if !chat_rows.is_empty() {
-                out.retain(|c| !chat_rows.iter().any(|r| r.id == c.id));
-                let rest = std::mem::take(&mut out);
-                out = chat_rows;
-                out.extend(rest);
-            }
-            out
-        };
+        }
+        // `chats …` lists saved chats first.
+        let chat_rows = crate::chats::matching_in(&chats, q, 30);
+        if !chat_rows.is_empty() {
+            out.retain(|c| !chat_rows.iter().any(|r| r.id == c.id));
+            let rest = std::mem::take(&mut out);
+            out = chat_rows;
+            out.extend(rest);
+        }
 
         // Emoji overlay (not in the permanent registry): recent ones first.
         let recent_emoji: Vec<String> = if crate::emoji::needle(q).is_some() {
@@ -2647,7 +2710,18 @@ impl Engine {
                     Builtin::SpotifyPrevious => Plan::Ui("spotify-previous"),
                     Builtin::SpotifyNowPlaying => Plan::Ui("spotify-now"),
                     Builtin::SpotifySearch => {
-                        Plan::OpenUrl(spotify_search_url(args.first().map(|s| s.as_str()).unwrap_or("")))
+                        let q = args.first().map(|s| s.as_str()).unwrap_or("").trim();
+                        // List rows pass the chosen URI back as the arg.
+                        if q.starts_with("spotify:") && !q.starts_with("spotify:search:") {
+                            Plan::OpenUrl(q.to_string())
+                        } else if self.config.spotify.list_enabled() {
+                            Plan::UiArgs {
+                                action: "spotify-search-list",
+                                args: vec![q.to_string()],
+                            }
+                        } else {
+                            Plan::OpenUrl(crate::spotify::search_deep_link(q))
+                        }
                     }
                     Builtin::ActOnSelection => Plan::Ui("selection"),
                     Builtin::StartFocus => Plan::UiArgs {
@@ -2951,9 +3025,7 @@ impl Engine {
             if q.trim().is_empty() {
                 bail!("`Search the Web` needs a query");
             }
-            return Ok(Plan::OpenUrl(
-                Self::WEB_FALLBACK_URL.replace("{query}", &url_encode(q)),
-            ));
+            return Ok(Plan::OpenUrl(Self::WEB_FALLBACK_URL.replace("{query}", &url_encode(q))));
         }
         if let Some(link) = self.links.get(id) {
             let q = args.first().map(String::as_str).unwrap_or("");
@@ -3156,20 +3228,6 @@ fn host_of(url: &str) -> String {
 }
 
 pub use crate::encode::url_encode;
-
-/// `spotify:search:<query>` — the app exposes no search command over Apple
-/// Events, so the deep link is the only way in without API credentials.
-fn spotify_search_url(query: &str) -> String {
-    let mut out = String::from("spotify:search:");
-    for b in query.trim().bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
-            b' ' => out.push_str("%20"),
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
-}
 
 #[cfg(test)]
 mod tests {
@@ -3522,17 +3580,36 @@ steps = ["ai:nope"]
         found("what is playing", "builtin:spotify-now");
         found("spotify next", "builtin:spotify-next");
         found("spotify search", "builtin:spotify-search");
-        // One glyph for the family; the title carries the verb.
-        let icons: Vec<String> = e
+        // One glyph for the family; the subtitle carries the home.
+        let spotify_rows: Vec<_> = e
             .search("spotify", 20)
-            .iter()
+            .into_iter()
             .filter(|c| c.id.starts_with("builtin:spotify"))
-            .map(|c| c.icon.clone().unwrap_or_default())
             .collect();
-        assert!(icons.len() >= 4, "only {icons:?}");
-        assert!(icons.iter().all(|i| i == "🎧"), "{icons:?}");
+        assert!(
+            spotify_rows.len() >= 4,
+            "only {:?}",
+            spotify_rows.iter().map(|c| &c.id).collect::<Vec<_>>()
+        );
+        assert!(spotify_rows.iter().all(|c| c.icon.as_deref() == Some("🎧")));
+        assert!(spotify_rows
+            .iter()
+            .all(|c| c.subtitle.as_deref() == Some("Spotify") || c.id == "builtin:spotify"));
+        assert_eq!(
+            e.registry.get("builtin:spotify").and_then(|c| c.subtitle.as_deref()),
+            Some("Player Controls")
+        );
+        assert_eq!(
+            e.registry.get("builtin:spotify-play").map(|c| c.title.as_str()),
+            Some("Play / Pause")
+        );
         // The media-key family stays: it drives whatever owns Now Playing.
         assert!(e.registry.get("builtin:media-play").is_some());
+        // Typing "spotify" should not also surface the system media-key Play / Pause.
+        assert!(
+            !e.search("spotify", 20).iter().any(|c| c.id == "builtin:media-play"),
+            "media-play should not match 'spotify'"
+        );
     }
 
     #[test]
@@ -3633,10 +3710,39 @@ steps = ["ai:nope"]
             e.plan("builtin:spotify-search", &["сектор".into()]).unwrap(),
             Plan::OpenUrl("spotify:search:%D1%81%D0%B5%D0%BA%D1%82%D0%BE%D1%80".into())
         );
+        // Choosing a list row re-runs with the URI → open that URI.
+        assert_eq!(
+            e.plan("builtin:spotify-search", &["spotify:track:abc".into()]).unwrap(),
+            Plan::OpenUrl("spotify:track:abc".into())
+        );
         // The row asks for the query instead of running with none.
         let row = e.registry.get("builtin:spotify-search").unwrap();
         assert_eq!(row.arguments.len(), 1);
         assert!(!row.arguments[0].optional);
+    }
+
+    #[test]
+    fn spotify_search_list_mode_plans_ui_args_when_creds_resolve() {
+        let mut src = DEFAULT_CONFIG.to_string();
+        src = src.replace("integrations = \"auto\"", "integrations = \"spotify\"");
+        src.push_str("\n[spotify]\nsearch = \"list\"\nclient_id = \"cid\"\nclient_secret_cmd = \"printf secret\"\n");
+        let cfg = Config::parse(&src).unwrap();
+        let e = Engine::assemble_with(
+            cfg,
+            "/cfg".into(),
+            vec![spotify()],
+            vec![],
+            vec![],
+            vec![],
+            Extras::default(),
+        );
+        assert_eq!(
+            e.plan("builtin:spotify-search", &["rammstein mutter".into()]).unwrap(),
+            Plan::UiArgs {
+                action: "spotify-search-list",
+                args: vec!["rammstein mutter".into()],
+            }
+        );
     }
 
     #[test]
@@ -3816,10 +3922,7 @@ steps = ["ai:nope"]
 
     #[test]
     fn web_fallback_injects_and_plans() {
-        let src = DEFAULT_CONFIG.replace(
-            "fallbacks = [\"quicklinks\", \"files\"]",
-            "fallbacks = [\"web\"]",
-        );
+        let src = DEFAULT_CONFIG.replace("fallbacks = [\"quicklinks\", \"files\"]", "fallbacks = [\"web\"]");
         let cfg = Config::parse(&src).unwrap();
         let e = Engine::assemble(cfg, "/cfg".into(), vec![], vec![], vec![], vec![]);
         let rows = e.search("zzqqxx", 10);
@@ -4296,11 +4399,17 @@ steps = ["ai:nope"]
         assert_eq!(e.plan("builtin:dictate", &[]).unwrap(), Plan::Ui("dictate"));
         assert_eq!(e.plan("builtin:schedule", &[]).unwrap(), Plan::Ui("schedule"));
         assert_eq!(e.plan("builtin:appearance", &[]).unwrap(), Plan::Ui("appearance-menu"));
-        assert_eq!(e.plan("builtin:panel-position", &[]).unwrap(), Plan::Ui("panel-position-menu"));
+        assert_eq!(
+            e.plan("builtin:panel-position", &[]).unwrap(),
+            Plan::Ui("panel-position-menu")
+        );
         assert_eq!(e.plan("builtin:stay-awake", &[]).unwrap(), Plan::Ui("stay-awake-menu"));
         assert_eq!(e.search("OpenCast Keys", 3)[0].id, "builtin:shortcuts");
         assert_eq!(e.search("App Menu Shortcuts", 3)[0].id, "builtin:cheat-sheet");
-        assert!(e.search("Appearance: Dark", 5).iter().all(|c| c.id != "builtin:theme-dark"));
+        assert!(e
+            .search("Appearance: Dark", 5)
+            .iter()
+            .all(|c| c.id != "builtin:theme-dark"));
         assert_eq!(e.search("Appearance", 5)[0].id, "builtin:appearance");
         let exp = e.expanding_snippets();
         let keys: Vec<&str> = exp.iter().map(|(k, _)| k.as_str()).collect();

@@ -6,12 +6,7 @@ extension Model {
     func startClick() {
         guard !clicking, !busy else { return }
         if !CGPreflightScreenCaptureAccess() {
-            flash(
-                "Click Text needs Screen Recording · Return opens Settings",
-                error: true,
-                thenHide: false,
-                action: { SettingsWindowController.shared.show(tab: .permissions) }
-            )
+            permissionToast("Click Text", needs: "Screen Recording")
             return
         }
         clicking = true
@@ -36,7 +31,11 @@ extension Model {
                 await MainActor.run {
                     Model.shared.busy = false
                     Model.shared.cancelClick()
-                    Model.shared.flash(error.localizedDescription, error: true, thenHide: false)
+                    if let fail = error as? SeekOCR.Failure, case .screenRecording = fail {
+                        Model.shared.permissionToast("Click Text", needs: "Screen Recording")
+                    } else {
+                        Model.shared.flash(error.localizedDescription, error: true, thenHide: false)
+                    }
                 }
             }
         }

@@ -481,7 +481,7 @@ extension Model {
                 if let text, !text.isEmpty {
                     Model.shared.attach(ChatAttachment(name: "\(target) (screen)", text: text))
                 } else {
-                    Model.shared.flash("No text on screen (Screen Recording permission?)", error: true, thenHide: false)
+                    Model.shared.permissionToast("Screen attach", needs: "Screen Recording")
                 }
             }
         }

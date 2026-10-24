@@ -141,10 +141,40 @@ final class SettingsState {
         }
     }
 
-    /// Open config.toml; optional section name in status (ponytail: no editor line-jump).
+    /// Open config.toml; jump to `section` when Cursor/VS Code is on PATH (N-6).
     func openConfigSection(_ section: String? = nil) {
-        NSWorkspace.shared.open(URL(fileURLWithPath: configDir).appendingPathComponent("config.toml"))
-        if let section { status = "Edit the \(section) section in config.toml" }
+        let file = URL(fileURLWithPath: configDir).appendingPathComponent("config.toml")
+        guard let section else {
+            NSWorkspace.shared.open(file)
+            return
+        }
+        var lineN: Int?
+        if let text = try? String(contentsOf: file, encoding: .utf8) {
+            for (i, raw) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+                let t = raw.trimmingCharacters(in: .whitespaces)
+                let bare = t.hasPrefix("#")
+                    ? String(t.dropFirst()).trimmingCharacters(in: .whitespaces) : t
+                if bare == section || bare.hasPrefix(section + " ") {
+                    lineN = i + 1
+                    break
+                }
+            }
+        }
+        if let lineN {
+            status = "\(section) is at line \(lineN)"
+            let bins = ["/usr/local/bin/cursor", "/opt/homebrew/bin/cursor",
+                        "/usr/local/bin/code", "/opt/homebrew/bin/code"]
+            if let bin = bins.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: bin)
+                p.arguments = ["--goto", "\(file.path):\(lineN)"]
+                try? p.run()
+                return
+            }
+        } else {
+            status = "\(section) — not found in config.toml"
+        }
+        NSWorkspace.shared.open(file)
     }
 
     func addSnippet(keyword: String, text: String) {
@@ -427,7 +457,7 @@ private struct GeneralPane: View {
             }
         }
         PaneSection(title: "Config") {
-            Text("Everything else is in config.toml. These open the file at the right section.")
+            Text("Everything else is in config.toml. These open the file at the right section when Cursor or VS Code is available.")
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button("Open config.toml") { state.openConfigSection() }

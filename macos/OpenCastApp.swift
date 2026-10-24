@@ -89,9 +89,13 @@ final class Model {
         }
     }
 
-    var query = ""
+    var query = "" {
+        didSet { if oldValue != query { clearToastOnInput() } }
+    }
     var commands: [Command] = []
-    var selected = 0
+    var selected = 0 {
+        didSet { if oldValue != selected { clearToastOnInput() } }
+    }
     /// First row drawn in the 8-row window. Moves only when the selection leaves it.
     var listStart = 0
     var busy = false
@@ -107,6 +111,8 @@ final class Model {
     /// Config/engine warnings kept for the footer count (FS-1).
     var warnings: [String] = []
     var warningCount: Int { warnings.count }
+    /// Engine warnings deferred while the Welcome list is open (N-5).
+    private var pendingWarningsToast: [String]?
     /// Soft-delete undo (⌘Z) while the grace toast is up.
     private var undoAction: (() -> Void)?
     private var undoCommit: (() -> Void)?
@@ -193,6 +199,7 @@ final class Model {
     /// Hotkey-problem flash — once per process when problems are non-empty.
     private var didFlashHotkeyProblem = false
     private var searchGen = 0
+    private var searchTask: Task<Void, Never>?
     private var fileSearchTask: Task<Void, Never>?
     private var toastTask: Task<Void, Never>?
     private var resignObserver: NSObjectProtocol?
@@ -234,7 +241,13 @@ final class Model {
         }
     }
 
-    var rowHeight: CGFloat { CGFloat(themeFile.rowHeight ?? 44) }
+    /// From LauncherView `@ScaledMetric` (1.0 at default Dynamic Type).
+    var typeScale: CGFloat = 1
+
+    var rowHeight: CGFloat { CGFloat(themeFile.rowHeight ?? 44) * typeScale }
+    var fieldChrome: CGFloat { 58 * typeScale }
+    var footerChrome: CGFloat { 38 * typeScale }
+    var actionRowH: CGFloat { 36 * typeScale }
 
     /// Showing Script Filter rows.
     var isListMode: Bool {
@@ -249,15 +262,15 @@ final class Model {
     }
 
     var islandHeight: CGFloat {
-        if clicking || seekScan != nil { return 58 + 38 }
+        if clicking || seekScan != nil { return fieldChrome + footerChrome }
         switch mode {
         case .search, .list:
-            return 58 + listHeight + 38
+            return fieldChrome + listHeight + footerChrome
         case .actions(let command):
             let n = filteredActionRows(for: command).count
-            return 52 + CGFloat(min(max(n, 1), 10)) * 36 + 38
+            return 52 * typeScale + CGFloat(min(max(n, 1), 10)) * actionRowH + footerChrome
         case .args, .output, .chat:
-            return 480
+            return 480 * typeScale
         }
     }
 
@@ -387,6 +400,7 @@ final class Model {
 
         let seek = IslandPanel()
         seek.refusesKey = true
+        seek.hasShadow = false // full-monitor overlay; shadow belongs on the search island
         seek.sharingType = .none
         let seekHost = ClearHost(rootView: SeekView(model: self))
         seekHost.wantsLayer = true
@@ -513,6 +527,7 @@ final class Model {
             dropped = true
             if Theme.reduceMotion {
                 launcher.setFrame(final, display: true)
+                launcher.invalidateShadow()
                 NSApp.activate(ignoringOtherApps: true)
                 launcher.makeKeyAndOrderFront(nil)
             } else {
@@ -521,14 +536,17 @@ final class Model {
                 launcher.setFrame(start, display: false)
                 NSApp.activate(ignoringOtherApps: true)
                 launcher.makeKeyAndOrderFront(nil)
-                NSAnimationContext.runAnimationGroup { ctx in
+                NSAnimationContext.runAnimationGroup({ ctx in
                     ctx.duration = 0.16
                     ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
                     launcher.animator().setFrame(final, display: true)
-                }
+                }, completionHandler: {
+                    launcher.invalidateShadow()
+                })
             }
         } else {
             launcher.setFrame(final, display: true)
+            launcher.invalidateShadow()
             NSApp.activate(ignoringOtherApps: true)
             launcher.makeKeyAndOrderFront(nil)
         }
@@ -542,8 +560,12 @@ final class Model {
         guard !hiding else { return }
         let up = launcher?.isVisible == true || seek?.isVisible == true || NSApp.isActive
         guard up else { return }
+        let flushOnboard = isOnboardingList
         hiding = true
-        defer { hiding = false }
+        defer {
+            hiding = false
+            if flushOnboard { flushPendingWarningsToast() }
+        }
         WindowPreview.shared.hide()
         launcher?.orderOut(nil)
         seek?.orderOut(nil)
@@ -569,6 +591,7 @@ final class Model {
         guard launcher.frame.integral != final.integral else { return }
         // Snap, don't animate: an animated resize delays when the rows become visible.
         launcher.setFrame(final, display: true)
+        launcher.invalidateShadow()
     }
 
     func search() {
@@ -586,31 +609,39 @@ final class Model {
         }
         searchGen += 1
         let gen = searchGen
-        let q = query
         fileSearchTask?.cancel()
+        searchTask?.cancel()
         searchingFiles = false
-        if Self.isPathQuery(q) {
-            let hidden = showHiddenFiles
-            Task.detached {
-                let raw = Engine.call(["op": "listPath", "query": q.trimmingCharacters(in: .whitespaces), "hidden": hidden])
-                let rows = (raw["commands"] as? [[String: Any]] ?? []).compactMap(Command.init)
-                await MainActor.run { Model.shared.deliverSearch(rows, gen: gen) }
+        // Debounce + single-flight: fast typing used to spawn parallel Rust searches
+        // that held the sidecars lock and stalled Return/click on bump_usage.
+        searchTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            guard !Task.isCancelled, gen == searchGen else { return }
+            let q = query
+            if Self.isPathQuery(q) {
+                let hidden = showHiddenFiles
+                let rows: [Command] = await Task.detached {
+                    let raw = Engine.call(["op": "listPath", "query": q.trimmingCharacters(in: .whitespaces), "hidden": hidden])
+                    return (raw["commands"] as? [[String: Any]] ?? []).compactMap(Command.init)
+                }.value
+                guard !Task.isCancelled, gen == searchGen else { return }
+                deliverSearch(rows, gen: gen)
+                return
             }
-            return
-        }
-        Task.detached {
-            let result = Engine.call(["op": "search", "query": q])
-            guard let raw = result["commands"] as? [[String: Any]] else { return }
-            let parsed = raw.compactMap(Command.init)
-            await MainActor.run {
-                let merged = ClipboardHistory.shared.merge(into: parsed, query: q)
-                let windowIds = merged.filter { $0.kind == .window }.map(\.id)
-                if !windowIds.isEmpty {
-                    WindowGlyphs.load(windowIds, portrait: WindowManager.isPortraitScreen(for: Model.shared.previousApp))
-                }
-                Model.shared.deliverSearch(merged, gen: gen)
-                Model.shared.scheduleFileSearch(query: q, inMenu: merged, gen: gen)
+            let parsed: [Command] = await Task.detached {
+                let result = Engine.call(["op": "search", "query": q])
+                let raw = result["commands"] as? [[String: Any]] ?? []
+                return raw.compactMap(Command.init)
+            }.value
+            guard !Task.isCancelled, gen == searchGen else { return }
+            let merged = ClipboardHistory.shared.merge(into: parsed, query: q)
+            let windowIds = merged.filter { $0.kind == .window }.map(\.id)
+            if !windowIds.isEmpty {
+                WindowGlyphs.load(windowIds, portrait: WindowManager.isPortraitScreen(for: previousApp))
             }
+            guard !Task.isCancelled, gen == searchGen else { return }
+            deliverSearch(merged, gen: gen)
+            scheduleFileSearch(query: q, inMenu: merged, gen: gen)
         }
     }
 
@@ -843,9 +874,29 @@ final class Model {
 
     func showWarnings(_ warnings: [String]) {
         self.warnings = warnings
-        guard let first = warnings.first else { return }
+        guard !warnings.isEmpty else { return }
+        if isOnboardingList {
+            pendingWarningsToast = warnings
+            return
+        }
         let more = warnings.count > 1 ? " (+\(warnings.count - 1) more)" : ""
-        flash(first + more, error: true, thenHide: false)
+        flash(warnings[0] + more, error: true, thenHide: false)
+    }
+
+    private var isOnboardingList: Bool {
+        if case .list(let command, _, _) = mode { return command.id == "local:onboard" }
+        return false
+    }
+
+    private func flushPendingWarningsToast() {
+        guard let pending = pendingWarningsToast, !pending.isEmpty else {
+            pendingWarningsToast = nil
+            return
+        }
+        pendingWarningsToast = nil
+        // Flash directly: hide() can flush while mode is still the Welcome list.
+        let more = pending.count > 1 ? " (+\(pending.count - 1) more)" : ""
+        flash(pending[0] + more, error: true, thenHide: false)
     }
 
     private var searchStarted: CFAbsoluteTime = 0
@@ -1284,12 +1335,7 @@ final class Model {
                 if let v = raw["windowHud"] as? Bool { Model.shared.windowHud = v }
                 let drag = raw["dragSnap"] as? Bool ?? false
                 if drag && !WindowManager.accessibilityTrusted {
-                    Model.shared.flash(
-                        "Drag to snap needs Accessibility access",
-                        error: true,
-                        thenHide: false,
-                        action: { SettingsWindowController.shared.show(tab: .permissions) }
-                    )
+                    Model.shared.permissionToast("Drag to snap", needs: "Accessibility")
                 }
                 DragSnap.shared.setEnabled(drag)
                 WindowGlyphs.reset()
@@ -1348,10 +1394,11 @@ final class Model {
             Dictation.shared.stop()
             return
         }
-        // Esc dismisses a toast first (FS-4); never clears the query as a side effect.
+        // Esc: actionable / undo toasts consume the key; informational ones dismiss and fall through.
         if toastText != nil {
+            let consume = toastAction != nil || undoAction != nil
             dismissToast()
-            return
+            if consume { return }
         }
         switch mode {
         case .search:
@@ -1378,6 +1425,7 @@ final class Model {
     }
 
     func backToSearch(clearQuery: Bool) {
+        let leavingOnboard = isOnboardingList
         if case .actions = mode, let saved = listBeforeActions {
             // ⌘K from a list row: Esc returns to the list, not to search.
             listBeforeActions = nil
@@ -1387,6 +1435,7 @@ final class Model {
             return
         }
         listBeforeActions = nil
+        defer { if leavingOnboard { flushPendingWarningsToast() } }
         listRefreshTask?.cancel()
         if case .chat = mode { stopStream() }
         localListAction = nil
@@ -1758,12 +1807,7 @@ final class Model {
 
     private func showArrangeWindow() {
         guard WindowManager.accessibilityTrusted else {
-            flash(
-                "Window commands need Accessibility access",
-                error: true,
-                thenHide: false,
-                action: { SettingsWindowController.shared.show(tab: .permissions) }
-            )
+            permissionToast("Window commands", needs: "Accessibility")
             return
         }
         // On a rotated monitor, the stacking commands come first.
@@ -1789,12 +1833,7 @@ final class Model {
     /// every desktop also gets a row that takes the covered app's window with it.
     func showSpaces() {
         guard WindowManager.accessibilityTrusted else {
-            flash(
-                WindowManager.permissionHint,
-                error: true,
-                thenHide: false,
-                action: { SettingsWindowController.shared.show(tab: .permissions) }
-            )
+            permissionToast("Spaces", needs: "Accessibility")
             return
         }
         let spaces = Spaces.list()
@@ -2424,6 +2463,7 @@ final class Model {
         query = ""
         selected = 0
         listStart = 0
+        loadImageIcons(items)
         noteContentChanged()
         focusTick += 1
         updatePreview()
@@ -2436,18 +2476,24 @@ final class Model {
             flash("Spotify is not installed", error: true, thenHide: false)
             return
         }
-        let track = Spotify.state()
+        let (track, problem) = Spotify.state()
+        if let problem {
+            flash(problem, error: true, thenHide: false)
+        }
+        let app = Spotify.appIcon
+        let cover = Spotify.coverIcon(for: track)
         var items: [ListItem] = []
         var verbs: [String] = []
+        // Header is the now-playing strip (cover + copy); controls use the app icon.
         if !track.line.isEmpty {
-            items.append(ListItem(title: track.line, subtitle: track.facts, icon: "🎧", arg: "copy"))
+            items.append(ListItem(title: track.line, subtitle: track.facts, icon: cover, arg: "copy"))
             verbs.append("copy")
         }
         for row in SpotifyTrack.rows(for: track) {
-            items.append(ListItem(title: row.title, subtitle: row.subtitle.isEmpty ? nil : row.subtitle, icon: "🎧", arg: row.verb))
+            items.append(ListItem(title: row.title, subtitle: row.subtitle.isEmpty ? nil : row.subtitle, icon: app, arg: row.verb))
             verbs.append(row.verb)
         }
-        showLocalList(id: "spotify", title: "Spotify", icon: "🎧", items: items) { i in
+        showLocalList(id: "spotify", title: "Spotify", icon: cover, items: items) { i in
             guard verbs.indices.contains(i) else { return }
             let verb = verbs[i]
             if verb == "copy" {
@@ -2475,7 +2521,11 @@ final class Model {
             flash("Spotify is not installed", error: true, thenHide: false)
             return
         }
-        let track = Spotify.state()
+        let (track, problem) = Spotify.state()
+        if let problem {
+            flash(problem, error: true, thenHide: false)
+            return
+        }
         let text = if track.line.isEmpty {
             track.state.isEmpty ? "Spotify is not running." : "Spotify is \(track.state) with nothing loaded."
         } else {
@@ -2529,12 +2579,7 @@ final class Model {
     /// get its shortcuts; pick a shortcut and it runs in that app.
     func showShortcutApps() {
         guard WindowManager.accessibilityTrusted else {
-            flash(
-                WindowManager.permissionHint,
-                error: true,
-                thenHide: false,
-                action: { SettingsWindowController.shared.show(tab: .permissions) }
-            )
+            permissionToast("App Menu Shortcuts", needs: "Accessibility")
             return
         }
         let front = previousApp?.processIdentifier ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
@@ -2597,12 +2642,7 @@ final class Model {
 
     func showMenuItems() {
         guard WindowManager.accessibilityTrusted else {
-            flash(
-                WindowManager.permissionHint,
-                error: true,
-                thenHide: false,
-                action: { SettingsWindowController.shared.show(tab: .permissions) }
-            )
+            permissionToast("Menu Search", needs: "Accessibility")
             return
         }
         guard let app = previousApp else {
@@ -2646,11 +2686,11 @@ final class Model {
             if schedule.notDetermined {
                 schedule.requestAccess { granted in
                     if granted { Model.shared.showSchedule() } else {
-                        Model.shared.flash("Calendar access is off (System Settings → Privacy & Security → Calendars)", error: true, thenHide: false)
+                        Model.shared.permissionToast("Calendar", needs: "Calendars")
                     }
                 }
             } else {
-                flash("Calendar access is off (System Settings → Privacy & Security → Calendars)", error: true, thenHide: false)
+                permissionToast("Calendar", needs: "Calendars")
             }
             return
         }
@@ -2741,11 +2781,17 @@ final class Model {
         case .app:
             rows = [
                 ActionRow(id: "run", title: "Open"),
+            ]
+            // Integration verbs (Play / Pause, …) sit next to Open — not under Quit.
+            for a in command.actions where !rows.contains(where: { $0.id == a.id }) {
+                rows.append(ActionRow(id: a.id, title: a.title, key: a.key))
+            }
+            rows.append(contentsOf: [
                 ActionRow(id: "reveal", title: "Show in Finder", key: "cmd+shift+f"),
                 ActionRow(id: "quick-look", title: "Quick Look", key: "cmd+y"),
                 ActionRow(id: "copy-path", title: "Copy Path", key: "cmd+shift+c"),
-            ]
-            rows.append(ActionRow(id: "recent-docs", title: "Recent Documents", key: "cmd+r"))
+                ActionRow(id: "recent-docs", title: "Recent Documents", key: "cmd+r"),
+            ])
             if runningApp(for: command) != nil {
                 rows.append(ActionRow(id: "shortcuts-app", title: "App Menu Shortcuts"))
                 rows.append(ActionRow(id: "quit-app", title: "Quit \(command.title)", key: "cmd+q"))
@@ -3294,6 +3340,22 @@ final class Model {
         toastText = nil
         toastAction = nil
         finalizeUndoDelete()
+    }
+
+    /// Typing or moving the selection drops a toast so Return cannot fire a stale action (N-1).
+    private func clearToastOnInput() {
+        guard toastText != nil else { return }
+        dismissToast()
+    }
+
+    /// One permission toast: Return opens Settings → Permissions (N-3).
+    func permissionToast(_ what: String, needs permission: String) {
+        flash(
+            "\(what) needs \(permission) · Return opens Settings",
+            error: true,
+            thenHide: false,
+            action: { SettingsWindowController.shared.show(tab: .permissions) }
+        )
     }
 
     func flash(

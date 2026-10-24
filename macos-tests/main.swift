@@ -119,11 +119,11 @@ let loaded = SpotifyTrack.parse("playing\(sep)The Weeknd\(sep)Blinding Lights\(s
 check(loaded.playing && loaded.artist == "The Weeknd" && loaded.track == "Blinding Lights", "a loaded player parses")
 check(loaded.shuffle && !loaded.repeatOn && loaded.volume == 60, "booleans and volume come through")
 check(loaded.line == "Blinding Lights — The Weeknd · After Hours", "the track line reads like a now-playing strip")
-check(loaded.facts == "playing · shuffle on · volume 60", "the facts line says what the player is doing")
+check(loaded.facts == "Playing · shuffle on · volume 60", "the facts line says what the player is doing")
 
 let bare = SpotifyTrack.parse("paused")
 check(bare.running && !bare.playing && bare.line.isEmpty, "no track loaded is not no player")
-check(bare.facts == "paused" && bare.volume == -1, "missing fields stay missing instead of zero")
+check(bare.facts == "Paused" && bare.volume == -1, "missing fields stay missing instead of zero")
 check(SpotifyTrack.parse("").state.isEmpty && !SpotifyTrack.parse("").running, "an empty answer means not running")
 check(SpotifyTrack.parse("stopped").line.isEmpty && !SpotifyTrack.parse("stopped").running, "stopped reads as stopped")
 
@@ -138,7 +138,7 @@ check(playingRows.contains(where: { $0.title == "Seek Forward 10s" && $0.subtitl
 
 let mid = SpotifyTrack.parse("playing\(sep)x\(sep)y\(sep)z\(sep)false\(sep)false\(sep)40\(sep)112.5\(sep)221000")
 check(mid.progress == "1:52 / 3:41", "the progress line reads like a player strip")
-check(mid.facts == "playing · 1:52 / 3:41 · volume 40", "progress sits between the state and the volume")
+check(mid.facts == "Playing · 1:52 / 3:41 · volume 40", "progress sits between the state and the volume")
 check(SpotifyTrack.parse("playing\(sep)x\(sep)y\(sep)z\(sep)false\(sep)false\(sep)40\(sep)112,5").position == 112.5,
       "a comma decimal mark still parses")
 check(SpotifyTrack.rows(for: mid).contains(where: { $0.title == "Seek Back 10s" && $0.subtitle == "1:52 / 3:41" }),
@@ -147,6 +147,10 @@ check(SpotifyTrack.rows(for: mid).contains(where: { $0.title == "Seek Back 10s" 
 check(SpotifyTrack.rows(for: bare)[0].title == "Play", "a paused list starts with Play")
 check(SpotifyTrack.rows(for: SpotifyTrack()).contains(where: { $0.title == "Volume Up" && $0.subtitle == "+10" }),
       "with no volume read, the row just promises +10")
+
+let withArt = SpotifyTrack.parse("playing\(sep)a\(sep)b\(sep)c\(sep)false\(sep)false\(sep)50\(sep)1\(sep)1000\(sep)https://i.scdn.co/image/ab")
+check(withArt.artworkURL == "https://i.scdn.co/image/ab", "artwork url is the last field when present")
+check(SpotifyTrack.parse("playing\(sep)a\(sep)b").artworkURL.isEmpty, "older payloads without art stay empty")
 
 // Rows as the engine sends them. Unknown kinds decode as .unknown instead of
 // vanishing; missing kind still drops the row.
@@ -170,6 +174,11 @@ check(appRow?.actions.first?.title == "Play / Pause", "the verb keeps its own la
 check(appRow?.actions.last?.key == "cmd+f", "and its key, when it has one")
 check(Command(["id": "builtin:reload", "title": "Reload Commands", "kind": "builtin"])?.actions.isEmpty == true,
       "a row with no integration carries no verbs")
+
+// MARK: - Toast key semantics (N-1, N-2) — Model lives in AppKit; verify by hand
+// Scenario 1: permission error toast up → type "slack" → Return opens Slack (not Settings).
+// Scenario 2: "Copied" toast up → Esc dismisses toast and also clears/hides as usual (one keypress).
+// Scenario 3: "Thinking…" during a stream → Esc stops the stream (toast dismiss is a side effect).
 
 print("\n\(checks - failures)/\(checks) panel logic checks passed")
 exit(failures == 0 ? 0 : 1)

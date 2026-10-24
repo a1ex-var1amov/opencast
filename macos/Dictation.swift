@@ -43,13 +43,13 @@ final class Dictation {
                     if status == .authorized {
                         Dictation.shared.start()
                     } else {
-                        Model.shared.flash("Speech recognition is off for OpenCast (System Settings → Privacy & Security → Speech Recognition)", error: true, thenHide: false)
+                        Model.shared.permissionToast("Dictation", needs: "Speech Recognition")
                         Dictation.shared.abandon()
                     }
                 }
             }
         default:
-            Model.shared.flash("Speech recognition is off for OpenCast (System Settings → Privacy & Security → Speech Recognition)", error: true, thenHide: false)
+            Model.shared.permissionToast("Dictation", needs: "Speech Recognition")
             abandon()
         }
     }
@@ -76,7 +76,7 @@ final class Dictation {
             engine.prepare()
             try engine.start()
         } catch {
-            Model.shared.flash("Microphone unavailable (System Settings → Privacy & Security → Microphone)", error: true, thenHide: false)
+            Model.shared.permissionToast("Dictation", needs: "Microphone")
             abandon()
             return
         }

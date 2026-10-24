@@ -359,12 +359,23 @@ fn handle(request: &str) -> String {
                 let server = with_engine(|e| e.config.mcp_servers.iter().find(|s| s.id == id).cloned());
                 match server {
                     Some(s) if s.oauth_configured() => {
-                        match runtime().block_on(opencast_core::mcp::oauth_ensure_token(&s)) {
+                        match runtime().block_on(opencast_core::mcp::oauth_sign_in(&s)) {
                             Ok(_) => serde_json::json!({ "ok": true }).to_string(),
                             Err(e) => serde_json::json!({ "error": format!("{e:#}") }).to_string(),
                         }
                     }
                     Some(_) => serde_json::json!({ "error": format!("mcp `{id}` has no oauth_* config") }).to_string(),
+                    None => serde_json::json!({ "error": format!("unknown mcp server `{id}`") }).to_string(),
+                }
+            }
+            "mcpOauthSignOut" => {
+                let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("");
+                let server = with_engine(|e| e.config.mcp_servers.iter().find(|s| s.id == id).cloned());
+                match server {
+                    Some(s) => {
+                        opencast_core::mcp::oauth_sign_out(&s);
+                        serde_json::json!({ "ok": true }).to_string()
+                    }
                     None => serde_json::json!({ "error": format!("unknown mcp server `{id}`") }).to_string(),
                 }
             }
@@ -508,12 +519,7 @@ pub fn install(cb: Callback) {
         let recents_changed = crate::refresh_mac::refresh_recents(&config_dir);
         let currency = with_engine(|e| e.config.general.currency);
         let rates_changed = runtime().block_on(crate::refresh_mac::refresh_rates(&config_dir, currency));
-        if apps_changed
-            || shortcuts_changed
-            || bookmarks_changed
-            || history_changed
-            || recents_changed
-            || rates_changed
+        if apps_changed || shortcuts_changed || bookmarks_changed || history_changed || recents_changed || rates_changed
         {
             crate::exec::reload();
         }

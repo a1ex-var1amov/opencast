@@ -61,6 +61,9 @@ pub struct McpServerConfig {
     pub oauth_token_url: Option<String>,
     #[serde(default)]
     pub oauth_scopes: Vec<String>,
+    /// Loopback redirect registered with the IdP. Default `http://127.0.0.1:8765/callback`.
+    #[serde(default)]
+    pub oauth_redirect_uri: Option<String>,
     /// Only these tools (exact names or `prefix*`). Empty = all.
     #[serde(default)]
     pub tools: Vec<String>,
@@ -96,9 +99,13 @@ impl McpServerConfig {
             bail!("mcp server id `{}` must be letters, digits, - or _", self.id);
         }
         match (&self.command, &self.url) {
-            (Some(_), None) | (None, Some(_)) => Ok(()),
+            (Some(_), None) | (None, Some(_)) => {}
             _ => bail!("mcp server `{}` needs exactly one of `command` or `url`", self.id),
         }
+        if self.oauth_configured() && self.url.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_none() {
+            bail!("mcp server `{}`: oauth_* requires `url` (HTTP)", self.id);
+        }
+        Ok(())
     }
 
     pub fn allows(&self, tool: &str) -> bool {
@@ -524,12 +531,14 @@ impl McpClient {
                     run_cmd(cmd).with_context(|| format!("mcp `{}`: header {k}", server.id))?,
                 ));
             }
-            if server.oauth_configured()
-                && !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("authorization"))
-            {
-                let token = oauth_ensure_token(&server)
-                    .await
-                    .with_context(|| format!("mcp `{}`: oauth", server.id))?;
+            if server.oauth_configured() && !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("authorization")) {
+                // Quiet only — never open a browser from connect/refresh.
+                let token = oauth_token_quiet(&server).await.with_context(|| {
+                    format!(
+                        "mcp `{}`: not signed in — use Settings → Extensions → Sign in…",
+                        server.id
+                    )
+                })?;
                 headers.push(("Authorization".into(), format!("Bearer {token}")));
             }
             let client = reqwest::Client::builder()
@@ -1048,13 +1057,69 @@ fn oauth_secret_service(id: &str) -> String {
     format!("opencast-mcp-{id}-oauth-secret")
 }
 
-/// True when a refresh token is already in the Keychain.
+/// True when an access or refresh token is in the Keychain.
 pub fn oauth_signed_in(server: &McpServerConfig) -> bool {
-    server.oauth_configured() && keychain_get(&oauth_refresh_service(&server.id)).is_some()
+    server.oauth_configured()
+        && (keychain_get(&oauth_access_service(&server.id)).is_some()
+            || keychain_get(&oauth_refresh_service(&server.id)).is_some())
 }
 
-/// Refresh if possible; otherwise browser + loopback. Returns an access token.
+fn default_redirect_uri() -> &'static str {
+    "http://127.0.0.1:8765/callback"
+}
+
+fn redirect_uri(server: &McpServerConfig) -> String {
+    server
+        .oauth_redirect_uri
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| default_redirect_uri())
+        .to_string()
+}
+
+/// Access (or refresh) without opening a browser. Err if the user must Sign in….
+pub async fn oauth_token_quiet(server: &McpServerConfig) -> Result<String> {
+    if !server.oauth_configured() {
+        bail!("mcp `{}`: oauth_* fields are incomplete", server.id);
+    }
+    if let Some(access) = keychain_get(&oauth_access_service(&server.id)) {
+        return Ok(access);
+    }
+    let client_id = server.oauth_client_id.as_deref().unwrap().trim();
+    let token_url = server.oauth_token_url.as_deref().unwrap().trim();
+    let secret = keychain_get(&oauth_secret_service(&server.id));
+    let Some(refresh) = keychain_get(&oauth_refresh_service(&server.id)) else {
+        bail!("mcp `{}`: not signed in", server.id);
+    };
+    let tok = token_request(
+        token_url,
+        &[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh.as_str()),
+            ("client_id", client_id),
+        ],
+        secret.as_deref(),
+    )
+    .await
+    .with_context(|| format!("mcp `{}`: refresh failed", server.id))?;
+    store_tokens(&server.id, &tok)?;
+    Ok(tok.access_token)
+}
+
+/// Quiet first; browser only if needed. Prefer [`oauth_sign_in`] from Settings.
 pub async fn oauth_ensure_token(server: &McpServerConfig) -> Result<String> {
+    match oauth_token_quiet(server).await {
+        Ok(t) => Ok(t),
+        Err(e) => {
+            eprintln!("opencast: mcp `{}`: {e:#}; opening browser", server.id);
+            oauth_sign_in(server).await
+        }
+    }
+}
+
+/// Always open the browser + fixed loopback (Settings Sign in… / Re-auth…).
+pub async fn oauth_sign_in(server: &McpServerConfig) -> Result<String> {
     if !server.oauth_configured() {
         bail!("mcp `{}`: oauth_* fields are incomplete", server.id);
     }
@@ -1062,30 +1127,17 @@ pub async fn oauth_ensure_token(server: &McpServerConfig) -> Result<String> {
     let token_url = server.oauth_token_url.as_deref().unwrap().trim();
     let authorize_url = server.oauth_authorize_url.as_deref().unwrap().trim();
     let secret = keychain_get(&oauth_secret_service(&server.id));
-
-    if let Some(refresh) = keychain_get(&oauth_refresh_service(&server.id)) {
-        match token_request(
-            token_url,
-            &[
-                ("grant_type", "refresh_token"),
-                ("refresh_token", refresh.as_str()),
-                ("client_id", client_id),
-            ],
-            secret.as_deref(),
-        )
-        .await
-        {
-            Ok(tok) => {
-                store_tokens(&server.id, &tok)?;
-                return Ok(tok.access_token);
-            }
-            Err(e) => {
-                eprintln!("opencast: mcp `{}`: refresh failed ({e:#}); signing in again", server.id);
-            }
-        }
-    }
-
     interactive_auth(server, client_id, authorize_url, token_url, secret.as_deref()).await
+}
+
+/// Drop Keychain tokens for this server.
+pub fn oauth_sign_out(server: &McpServerConfig) {
+    let account = std::env::var("USER").unwrap_or_else(|_| "opencast".into());
+    for svc in [oauth_access_service(&server.id), oauth_refresh_service(&server.id)] {
+        let _ = std::process::Command::new("security")
+            .args(["delete-generic-password", "-s", &svc, "-a", &account])
+            .output();
+    }
 }
 
 struct TokenSet {
@@ -1100,14 +1152,13 @@ async fn interactive_auth(
     token_url: &str,
     secret: Option<&str>,
 ) -> Result<String> {
-    let listener = TcpListener::bind("127.0.0.1:0").context("oauth loopback bind")?;
-    let port = listener.local_addr()?.port();
-    let redirect_uri = format!("http://127.0.0.1:{port}/callback");
+    let redirect = redirect_uri(server);
+    let listener = bind_redirect_listener(&redirect).with_context(|| format!("oauth loopback bind for {redirect}"))?;
     let state = random_b64url(16)?;
     let verifier = random_b64url(32)?;
     let challenge = pkce_challenge(&verifier)?;
     let scope = server.oauth_scopes.join(" ");
-    let url = build_authorize_url(authorize_url, client_id, &redirect_uri, &state, &challenge, &scope);
+    let url = build_authorize_url(authorize_url, client_id, &redirect, &state, &challenge, &scope);
     open_browser(&url).with_context(|| format!("mcp `{}`: open authorize URL", server.id))?;
 
     let expect = state.clone();
@@ -1120,7 +1171,7 @@ async fn interactive_auth(
         &[
             ("grant_type", "authorization_code"),
             ("code", code.as_str()),
-            ("redirect_uri", redirect_uri.as_str()),
+            ("redirect_uri", redirect.as_str()),
             ("client_id", client_id),
             ("code_verifier", verifier.as_str()),
         ],
@@ -1130,6 +1181,22 @@ async fn interactive_auth(
     .with_context(|| format!("mcp `{}`: token exchange", server.id))?;
     store_tokens(&server.id, &tok)?;
     Ok(tok.access_token)
+}
+
+/// Bind the host:port from a loopback redirect URI (must be http://127.0.0.1:port/…).
+fn bind_redirect_listener(redirect: &str) -> Result<TcpListener> {
+    let url = redirect.trim();
+    let rest = url
+        .strip_prefix("http://127.0.0.1:")
+        .or_else(|| url.strip_prefix("http://localhost:"))
+        .with_context(|| format!("oauth_redirect_uri must be http://127.0.0.1:<port>/… (got {redirect})"))?;
+    let port: u16 = rest
+        .split(['/', '?'])
+        .next()
+        .and_then(|p| p.parse().ok())
+        .with_context(|| format!("oauth_redirect_uri missing port: {redirect}"))?;
+    TcpListener::bind(("127.0.0.1", port))
+        .with_context(|| format!("port {port} is in use — free it or set oauth_redirect_uri to another loopback port"))
 }
 
 fn build_authorize_url(
@@ -1180,7 +1247,7 @@ fn wait_for_code(listener: TcpListener, expect_state: &str, timeout: Duration) -
     let params = parse_query(query);
     let body = if params.get("state").map(String::as_str) != Some(expect_state) {
         "OAuth state mismatch. You can close this tab."
-    } else if params.get("error").is_some() {
+    } else if params.contains_key("error") {
         "Authorization denied. You can close this tab."
     } else {
         "Signed in to OpenCast. You can close this tab."
@@ -1349,7 +1416,7 @@ fn open_browser(url: &str) -> Result<()> {
         if !st.success() {
             bail!("open failed");
         }
-        return Ok(());
+        Ok(())
     }
     #[cfg(target_os = "linux")]
     {
@@ -1357,7 +1424,7 @@ fn open_browser(url: &str) -> Result<()> {
         if !st.success() {
             bail!("xdg-open failed");
         }
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
@@ -1485,6 +1552,7 @@ mod tests {
             oauth_authorize_url: None,
             oauth_token_url: None,
             oauth_scopes: vec![],
+            oauth_redirect_uri: None,
             tools: vec!["get_*".into(), "create_issue".into()],
             in_launcher: true,
             in_chat: true,
@@ -1552,6 +1620,7 @@ done
             oauth_authorize_url: None,
             oauth_token_url: None,
             oauth_scopes: vec![],
+            oauth_redirect_uri: None,
             tools: vec!["echo".into()],
             in_launcher: true,
             in_chat: true,
@@ -1688,6 +1757,7 @@ done
             oauth_authorize_url: Some("https://a".into()),
             oauth_token_url: Some("https://t".into()),
             oauth_scopes: vec!["x".into()],
+            oauth_redirect_uri: None,
             tools: vec![],
             in_launcher: true,
             in_chat: true,
@@ -1695,6 +1765,7 @@ done
             timeout_secs: 5,
         };
         assert!(s.oauth_configured());
+        assert_eq!(redirect_uri(&s), "http://127.0.0.1:8765/callback");
         let mut incomplete = s.clone();
         incomplete.oauth_token_url = None;
         assert!(!incomplete.oauth_configured());

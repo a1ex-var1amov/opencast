@@ -62,7 +62,7 @@ enum ContactsSearch {
         load { people in
             model.busy = false
             guard let people else {
-                model.flash("Contacts access is off (System Settings → Privacy & Security → Contacts)", error: true, thenHide: false)
+                model.permissionToast("Contacts", needs: "Contacts")
                 return
             }
             let items: [ListItem] = people.enumerated().map { i, p in
@@ -131,7 +131,7 @@ enum RemindersBridge {
     }
 
     private static func denied(_ model: Model) {
-        model.flash("Reminders access is off (System Settings → Privacy & Security → Reminders)", error: true, thenHide: false)
+        model.permissionToast("Reminders", needs: "Reminders")
     }
 
     static func show(in model: Model) {

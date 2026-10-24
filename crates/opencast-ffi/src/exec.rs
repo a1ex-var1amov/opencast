@@ -197,6 +197,42 @@ fn err(e: impl std::fmt::Display) -> ExecResult {
     ExecResult::Error { message }
 }
 
+/// Web API search → panel list; empty query opens the arg field; failure falls back to deep link.
+async fn spotify_search_list(args: Vec<String>) -> ExecResult {
+    let query = args.first().map(|s| s.as_str()).unwrap_or("").trim().to_string();
+    if query.is_empty() {
+        return match host::with_engine(|e| e.registry.get("builtin:spotify-search").cloned()) {
+            Some(command) => ExecResult::Args { command },
+            None => err("Spotify Search is not registered"),
+        };
+    }
+    let cfg = host::with_engine(|e| e.config.spotify.clone());
+    match opencast_core::spotify::search(&cfg, &query).await {
+        Ok(items) if items.is_empty() => ExecResult::Toast {
+            text: format!("No Spotify results for “{query}”"),
+        },
+        Ok(items) => match host::with_engine(|e| e.registry.get("builtin:spotify-search").cloned()) {
+            Some(command) => ExecResult::List {
+                command,
+                items,
+                filter: true,
+                view: None,
+                columns: None,
+                rerun: None,
+            },
+            None => err("Spotify Search is not registered"),
+        },
+        Err(e) => {
+            eprintln!("opencast: spotify list search failed ({e:#}); opening Spotify search");
+            hide();
+            match apps::open_path(&opencast_core::spotify::search_deep_link(&query)) {
+                Ok(()) => ExecResult::Hide,
+                Err(e) => err(format!("{e:#}")),
+            }
+        }
+    }
+}
+
 fn hide() {
     host::emit(serde_json::json!({ "type": "hide" }));
 }
@@ -574,6 +610,10 @@ pub async fn run_command(id: String, args: Vec<String>, ctx: ExecContext) -> Exe
             action: action.to_string(),
             args: vec![],
         },
+        Plan::UiArgs {
+            action: "spotify-search-list",
+            args,
+        } => spotify_search_list(args).await,
         Plan::UiArgs { action, args } => ExecResult::Ui {
             action: action.to_string(),
             args,

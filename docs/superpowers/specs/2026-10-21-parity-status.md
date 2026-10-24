@@ -79,8 +79,8 @@ possible; Swift parts are compiled only by `./build-app.command`.
 | File navigation + File Buffer | ⬜ | |
 | Alfred Script Filter JSON | ✅ | `items`, `arg` string/array, `icon.path`/`fileicon`, `valid`, `autocomplete`, `mods`, `quicklookurl`, `text.copy`/`largetype`, `variables` (item + top level), `rerun`. Ignored: `uid`, `type`, `match`, `skipknowledge` |
 | `alfred_*` environment | 🟡 | Set for imported workflows only; plain scripts in the scripts folder don't get them yet |
-| `.alfredworkflow` import | 🟡 | Keyword, Script Filter, Run Script, Open URL, Open File, Reveal, Launch Apps, Copy to Clipboard (+ auto-paste), Notification, Large Type, Arg and Vars, Junction, Transform, modifier branches. Missing: Hotkey triggers, Conditional, user-configuration UI (defaults are applied) |
-| `.alfredsnippets` import | ⬜ | |
+| `.alfredworkflow` import | ✅ | Keyword, Script Filter, Hotkey triggers (`# @opencast.hotkey`), Run Script, Open URL, Open File, Reveal, Launch Apps, Copy to Clipboard (+ auto-paste), Notification, Large Type, Arg and Vars, Junction, Conditional (bash branches), Transform, modifier branches, Configure UI for userconfiguration defaults. Still skipped at runtime when reached: Delay, Replace, External Trigger, etc. |
+| `.alfredsnippets` import | ✅ | Imports into `[[snippets]]` |
 | Pipelines | ⬜ | |
 | Rich script output | 🟡 | Per-item `markdown` detail pane and `view: "grid"` done; `@opencast.mode markdown` / `grid` header modes not |
 | Large Type | ✅ | ⌘L and command |

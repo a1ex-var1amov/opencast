@@ -63,13 +63,12 @@ Make OpenCast the daily ⌘Space replacement for Spotlight's core jobs. Spotify 
 
 A week of daily use without opening Spotlight for apps, files, or calculator.
 
-## Spotify player v2 (outline only — not this plan)
+## Spotify player v2
 
 - Keep AppleScript control (`Spotify.swift`).
-- Add artwork: try `artwork url of current track`; cache image; if missing, optional Spotify Web API + Keychain (same pattern as MCP OAuth).
-- UI: cover + title/artist in the Spotify list header; scrub/progress already partially there.
+- Artwork: `artwork url of current track` → cache under `Caches/OpenCast/spotify-covers/` → header row icon. Web API art still optional if AppleScript stays empty.
+- UI: cover on the now-playing header; controls keep the app icon; scrub/progress already in `facts`.
 - Do not build Raycast React host for this.
-- Separate design doc when Spotlight pack ships.
 
 ## Verification
 

@@ -619,6 +619,7 @@ pub fn hotkey_string(cfg: &Value) -> Option<String> {
         (524_288, "Alt"),
         (131_072, "Shift"),
         (1_048_576, "Cmd"),
+        (8_388_608, "Fn"), // Alfred relatedApps / fn-key bit
     ] {
         if mods & bit != 0 {
             parts.push(name);
@@ -1246,6 +1247,10 @@ mod tests {
         assert_eq!(
             hotkey_string(&json!({"hotkey": 123, "hotmod": 1179648})).as_deref(),
             Some("Shift+Cmd+Left")
+        );
+        assert_eq!(
+            hotkey_string(&json!({"hotkey": 40, "hotmod": 8388608 + 1048576})).as_deref(),
+            Some("Cmd+Fn+K")
         );
     }
 

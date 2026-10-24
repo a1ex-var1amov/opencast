@@ -353,9 +353,7 @@ impl Registry {
                 )
             };
             pinned.sort_by_key(|&i| by_use(i));
-            apps.sort_by_key(|&i| {
-                std::cmp::Reverse(usage.frecency(&self.commands[i].id, now) + self.entries[i].boost)
-            });
+            apps.sort_by_key(|&i| std::cmp::Reverse(usage.frecency(&self.commands[i].id, now) + self.entries[i].boost));
             rest.sort_by_key(|&i| by_use(i));
 
             let mut counts = [0u16; 16];

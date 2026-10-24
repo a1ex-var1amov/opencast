@@ -27,10 +27,12 @@ and the network endpoints you configure.
 ## Where secrets live
 
 API keys are stored in the macOS Keychain (generic passwords, service names
-`opencast-<provider-id>`). The config file stores only the *command* that fetches
-a key (`api_key_cmd`, e.g. `security find-generic-password -s opencast-xai -w`)
-or an environment variable name (`api_key_env`). Keys are never written to
-`config.toml`, to sync files, or to logs.
+`opencast-<provider-id>`). MCP OAuth uses `opencast-mcp-<id>-access`,
+`-refresh`, and optional `-oauth-secret`. The config file stores only the
+*command* that fetches a key (`api_key_cmd` / `client_secret_cmd`, e.g.
+`security find-generic-password -s opencast-xai -w`) or an environment variable
+name (`api_key_env`). Keys are never written to `config.toml`, to sync files, or
+to logs.
 
 The Keychain items are readable by `/usr/bin/security` without a prompt — that
 is what makes `api_key_cmd` work. Anything that can run as you can already read

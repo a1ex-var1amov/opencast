@@ -24,7 +24,7 @@ enum Theme {
     }
 
     /// Row/field font: the theme's family when it names one that exists.
-    // ponytail: fixed pt sizes; AX-2 upgrade path is @ScaledMetric(relativeTo:) on views.
+    /// Callers pass `@ScaledMetric` sizes (AX-2); theme_file.font still wins for family.
     static func font(size: Double, weight: Font.Weight = .regular) -> Font {
         if let name = file.font, !name.isEmpty, NSFont(name: name, size: CGFloat(size)) != nil {
             return .custom(name, size: CGFloat(size)).weight(weight)

@@ -162,6 +162,16 @@ pub fn run(engine: &Engine, load_time: Option<Duration>) -> Report {
     for w in &engine.warnings {
         report.push(Level::Warn, w.clone());
     }
+    if engine.config.spotify.wants_list() {
+        if engine.config.spotify.list_enabled() {
+            report.push(Level::Ok, "spotify search = list (Web API)");
+        } else {
+            report.push(
+                Level::Warn,
+                "[spotify] search = \"list\" but client_id / client_secret_cmd are missing — falling back to open",
+            );
+        }
+    }
     report.push(
         Level::Ok,
         format!("{} commands, {} apps", engine.registry.len(), engine.app_paths().len()),
@@ -265,6 +275,12 @@ pub fn run(engine: &Engine, load_time: Option<Duration>) -> Report {
     // MCP servers without a cached tool list never connected.
     let cache = crate::mcp::load_cache(&engine.config_dir);
     for s in engine.mcp_servers() {
+        if s.oauth_configured() && !crate::mcp::oauth_signed_in(s) {
+            report.push(
+                Level::Warn,
+                format!("MCP server `{}` needs Sign in… (Settings → Extensions)", s.id),
+            );
+        }
         if !cache.contains_key(&s.id) {
             report.push(
                 Level::Warn,

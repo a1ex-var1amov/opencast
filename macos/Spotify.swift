@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 
 /// Spotify, asked directly instead of through the media keys. Media keys follow
 /// whatever owns Now Playing — a browser tab counts — and read nothing back, so
@@ -9,6 +10,39 @@ enum Spotify {
 
     static var installed: Bool { NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle) != nil }
     static var running: Bool { NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier == bundle } }
+    /// App icon path for list rows; falls back to the family glyph.
+    static var appIcon: String {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle)
+            .map { "fileicon:\($0.path)" } ?? "🎧"
+    }
+
+    /// Cover art for the current track: cached file path, else the app icon.
+    // ponytail: AppleScript artwork url only; Web API art if that stays empty.
+    static func coverIcon(for track: SpotifyTrack) -> String {
+        coverPath(artworkURL: track.artworkURL) ?? appIcon
+    }
+
+    /// Download (or reuse) cover art under Caches/OpenCast/spotify-covers/.
+    static func coverPath(artworkURL: String) -> String? {
+        let raw = artworkURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty, let url = URL(string: raw) else { return nil }
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("OpenCast/spotify-covers", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let digest = SHA256.hash(data: Data(raw.utf8)).map { String(format: "%02x", $0) }.joined()
+        let dest = dir.appendingPathComponent(digest + ".img")
+        if FileManager.default.fileExists(atPath: dest.path) { return dest.path }
+        if url.isFileURL {
+            let src = url.path
+            guard FileManager.default.fileExists(atPath: src) else { return nil }
+            try? FileManager.default.copyItem(atPath: src, toPath: dest.path)
+            return FileManager.default.fileExists(atPath: dest.path) ? dest.path : nil
+        }
+        // Sync once per URL; later opens hit the cache. Keep this off the typing path.
+        guard let data = try? Data(contentsOf: url), !data.isEmpty else { return nil }
+        try? data.write(to: dest, options: .atomic)
+        return FileManager.default.fileExists(atPath: dest.path) ? dest.path : nil
+    }
 
     /// A script either answers or says why it could not; silence is never success.
     private struct Answer {
@@ -36,17 +70,24 @@ enum Spotify {
 
     /// Everything the list and "Now Playing" show, in one round trip. The `try`
     /// covers a player with no track loaded yet, which errors on every track field.
-    static func state() -> SpotifyTrack {
-        guard running else { return SpotifyTrack() }
+    /// Second value is an automation/script error when Apple Events refuse the ask.
+    static func state() -> (SpotifyTrack, String?) {
+        guard running else { return (SpotifyTrack(), nil) }
         let src = tell("""
         	set sep to character id 31
         	try
-        		return (player state as string) & sep & (artist of current track) & sep & (name of current track) & sep & (album of current track) & sep & (shuffling as string) & sep & (repeating as string) & sep & (sound volume as string) & sep & (player position as string) & sep & (duration of current track as string)
+        		set art to ""
+        		try
+        			set art to artwork url of current track as string
+        		end try
+        		return (player state as string) & sep & (artist of current track) & sep & (name of current track) & sep & (album of current track) & sep & (shuffling as string) & sep & (repeating as string) & sep & (sound volume as string) & sep & (player position as string) & sep & (duration of current track as string) & sep & art
         	on error
         		return (player state as string) & sep & sep & sep & sep & (shuffling as string) & sep & (repeating as string) & sep & (sound volume as string) & sep & (player position as string)
         	end try
         """)
-        return SpotifyTrack.parse(ask(src).text ?? "")
+        let answer = ask(src)
+        if let problem = answer.problem { return (SpotifyTrack(), problem) }
+        return (SpotifyTrack.parse(answer.text ?? ""), nil)
     }
 
     /// Runs one control verb. Spotify starts if it was not up — except `open`, which

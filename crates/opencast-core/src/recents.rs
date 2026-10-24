@@ -142,9 +142,7 @@ pub fn collect(home: &Path) -> Vec<Visit> {
     if !cfg!(target_os = "macos") {
         return Vec::new();
     }
-    run_mdfind(home)
-        .map(|t| from_mdfind(&t, LIMIT))
-        .unwrap_or_default()
+    run_mdfind(home).map(|t| from_mdfind(&t, LIMIT)).unwrap_or_default()
 }
 
 pub fn scan_here() -> Vec<Visit> {

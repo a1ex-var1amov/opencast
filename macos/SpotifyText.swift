@@ -12,6 +12,8 @@ struct SpotifyTrack {
     var volume = -1
     var position = -1.0
     var length = -1.0
+    /// `artwork url of current track` when Spotify returns one (http or file).
+    var artworkURL = ""
 
     /// Unit separator: no song title contains it, so the split can never lie.
     static let sep = "\u{1F}"
@@ -28,10 +30,12 @@ struct SpotifyTrack {
         return out
     }
 
-    /// "playing · 1:52 / 3:41 · shuffle on · volume 60"
+    /// "Playing · 1:52 / 3:41 · shuffle on · volume 60"
     var facts: String {
         var bits: [String] = []
-        if !state.isEmpty { bits.append(state) }
+        if !state.isEmpty {
+            bits.append(state == "playing" ? "Playing" : state == "paused" ? "Paused" : state.capitalized)
+        }
         if let progress { bits.append(progress) }
         if shuffle { bits.append("shuffle on") }
         if repeatOn { bits.append("repeat on") }
@@ -67,6 +71,7 @@ struct SpotifyTrack {
         if parts.count > 6 { out.volume = Int(number(parts[6]) ?? -1) }
         if parts.count > 7 { out.position = number(parts[7]) ?? -1 }
         if parts.count > 8 { out.length = number(parts[8]) ?? -1 }
+        if parts.count > 9 { out.artworkURL = parts[9] }
         return out
     }
 
@@ -85,7 +90,7 @@ struct SpotifyTrack {
         rows.append(("Seek Forward 10s", "seekfwd", t.progress ?? ""))
         rows.append(("Volume Up", "volup", t.volume >= 0 ? "now \(t.volume)" : "+10"))
         rows.append(("Volume Down", "voldn", t.volume >= 0 ? "now \(t.volume)" : "-10"))
-        rows.append(("Now Playing", "now", t.line.isEmpty ? "nothing loaded" : t.line))
+        // No "Now Playing" row: the list header is already the strip (and copies).
         rows.append(("Open Spotify", "open", ""))
         return rows
     }

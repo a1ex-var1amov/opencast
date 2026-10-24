@@ -8,11 +8,28 @@ struct LauncherView: View {
     @State private var pointer = CGPoint(x: -1_000_000, y: -1_000_000)
     @State private var reduceTransparency = Theme.reduceTransparency
 
+    // AX-2: five type roles + body scale drives island chrome via model.typeScale.
+    @ScaledMetric(relativeTo: .title) private var fieldSize: CGFloat = 19
+    @ScaledMetric(relativeTo: .headline) private var titleSize: CGFloat = 15
+    @ScaledMetric(relativeTo: .body) private var bodySize: CGFloat = 14
+    @ScaledMetric(relativeTo: .caption) private var metaSize: CGFloat = 12
+    @ScaledMetric(relativeTo: .caption2) private var captionSize: CGFloat = 11
+    @ScaledMetric(relativeTo: .body) private var iconSize: CGFloat = 17
+
     private var scheme: ColorScheme {
         let _ = model.appearanceEpoch
         return Theme.scheme(preference: model.themePreference, system: systemScheme)
     }
     private var isSpotlight: Bool { model.presentation == "spotlight" }
+    private var typeScale: CGFloat { bodySize / 14 }
+
+    private func syncTypeScale() {
+        let s = typeScale
+        if abs(model.typeScale - s) > 0.01 {
+            model.typeScale = s
+            model.noteContentChanged()
+        }
+    }
 
     var body: some View {
         Group {
@@ -37,7 +54,7 @@ struct LauncherView: View {
         .overlay(alignment: .bottom) {
             if let text = model.toastText {
                 Text(text)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: metaSize + 1, weight: .medium))
                     .foregroundStyle(model.toastIsError ? Color.white : Theme.island(scheme))
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
@@ -49,7 +66,11 @@ struct LauncherView: View {
         .ignoresSafeArea()
         .overlay { panelShape.stroke(Theme.stroke(scheme), lineWidth: 0.5) }
         .compositingGroup()
-        .onAppear { selectField() }
+        .onAppear {
+            syncTypeScale()
+            selectField()
+        }
+        .onChange(of: bodySize) { _, _ in syncTypeScale() }
         .onChange(of: model.focusTick) { _, _ in selectField() }
         .onChange(of: model.ready) { _, ready in
             if ready { model.search() }
@@ -122,7 +143,7 @@ struct LauncherView: View {
                     .foregroundStyle(Theme.secondary(scheme))
             )
             .textFieldStyle(.plain)
-            .font(Theme.font(size: Theme.file.titleFontSize ?? 19))
+            .font(Theme.font(size: Theme.file.titleFontSize.map { $0 * Double(typeScale) } ?? Double(fieldSize)))
             .foregroundStyle(Theme.primary(scheme))
             .tint(Theme.accent)
             .focusEffectDisabled()
@@ -141,13 +162,21 @@ struct LauncherView: View {
             }
         }
         .padding(.horizontal, 18)
-        .frame(height: 58)
+        .frame(height: model.fieldChrome)
     }
 
     private var fieldPrompt: String {
         if model.clicking { return "Type what you see…" }
         if case .list(let command, _, _) = model.mode { return "\(command.title) — filter…" }
         return "Search apps and commands, or ask AI…"
+    }
+
+    /// Matches footer `verb` when no providers are configured (N-8).
+    private var askRowTitle: String {
+        if model.providersReady, model.providers.isEmpty {
+            return "Set up AI…"
+        }
+        return "Ask AI “\(model.trimmedQuery)”"
     }
 
     private var list: some View {
@@ -204,14 +233,14 @@ struct LauncherView: View {
                 if let key = command.icon, Model.isImageIcon(key) {
                     icon(command, size: 64)
                 } else if let glyph = command.icon, !glyph.isEmpty {
-                    Text(glyph).font(.system(size: 40))
+                    Text(glyph).font(.system(size: captionSize * 3.5))
                         .frame(height: 64)
                 } else {
                     icon(command, size: 40)
                         .frame(height: 64)
                 }
                 Text(command.title)
-                    .font(.system(size: 11))
+                    .font(.system(size: captionSize))
                     .lineLimit(1)
                     .foregroundStyle(on ? Theme.primary(scheme) : Theme.secondary(scheme))
             }
@@ -251,7 +280,7 @@ struct LauncherView: View {
         let axValue: String
         switch row {
         case .ask:
-            axLabel = "Ask AI “\(model.trimmedQuery)”"
+            axLabel = askRowTitle
             axValue = "AI"
         case .command(let command):
             axLabel = [command.title, command.subtitle].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ", ")
@@ -261,20 +290,23 @@ struct LauncherView: View {
             switch row {
             case .ask:
                 Image(systemName: "sparkles")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: iconSize - 1, weight: .semibold))
                     .symbolRenderingMode(.hierarchical)
                     .foregroundStyle(Theme.accent)
                     .frame(width: 28, height: 28)
-                Text("Ask AI “\(model.trimmedQuery)”")
+                Text(askRowTitle)
                     .lineLimit(1)
                 Spacer(minLength: 8)
                 Text("Tab")
-                    .font(.system(size: 12))
+                    .font(.system(size: metaSize))
                     .foregroundStyle(Theme.tertiary(scheme))
             case .command(let command):
                 icon(command)
                 Text(command.title)
-                    .font(Theme.font(size: Theme.file.fontSize ?? 14, weight: .medium))
+                    .font(Theme.font(
+                        size: Theme.file.fontSize.map { $0 * Double(typeScale) } ?? Double(titleSize),
+                        weight: .medium
+                    ))
                     .lineLimit(1)
                 if let subtitle = command.subtitle {
                     Text(subtitle)
@@ -286,7 +318,7 @@ struct LauncherView: View {
                 }
                 if let hotkey = command.hotkey {
                     Text(hotkey)
-                        .font(.system(size: 12, design: .monospaced))
+                        .font(.system(size: metaSize, design: .monospaced))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(Theme.kbd(scheme), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
@@ -294,7 +326,7 @@ struct LauncherView: View {
                 }
                 if !hideKind {
                     Text(command.kind.label)
-                        .font(.system(size: 12))
+                        .font(.system(size: metaSize))
                         .foregroundStyle(Theme.tertiary(scheme))
                 }
             }
@@ -322,10 +354,7 @@ struct LauncherView: View {
             }
         }
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(axLabel)
-        .accessibilityValue(axValue)
-        .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+        .modifier(LauncherRowA11y(label: axLabel, value: axValue, selected: on))
         .onHover { inside in
             guard inside else { return }
             let loc = NSEvent.mouseLocation
@@ -376,13 +405,13 @@ struct LauncherView: View {
                 .frame(width: 28, height: 28)
         } else if let name = Theme.resolvedSymbol(for: command) {
             Image(systemName: name)
-                .font(.system(size: 17, weight: .medium))
+                .font(.system(size: iconSize, weight: .medium))
                 .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(Theme.primary(scheme))
                 .frame(width: 28, height: 28)
         } else {
             Text(command.id == "window:center-third" ? "\u{2153}" : (command.icon ?? ""))
-                .font(.system(size: 17))
+                .font(.system(size: iconSize))
                 .frame(width: 28, height: 28)
         }
     }
@@ -402,7 +431,7 @@ struct LauncherView: View {
                     ProgressView()
                         .controlSize(.mini)
                     Text("Searching files…")
-                        .font(.system(size: 12))
+                        .font(.system(size: metaSize))
                         .foregroundStyle(Theme.secondary(scheme))
                 }
             } else if !model.fileBuffer.isEmpty {
@@ -410,7 +439,7 @@ struct LauncherView: View {
                     "File Buffer · \(model.fileBuffer.count) · ⌘K acts on all · ⌥← clears",
                     systemImage: "paperclip"
                 )
-                .font(.system(size: 12))
+                .font(.system(size: metaSize))
                 .foregroundStyle(Theme.secondary(scheme))
                 .labelStyle(.titleAndIcon)
                 .lineLimit(1)
@@ -421,12 +450,12 @@ struct LauncherView: View {
                     systemImage: f.isPaused ? "pause.fill" : "target"
                 )
                 .lineLimit(1)
-                .font(.system(size: 12))
+                .font(.system(size: metaSize))
                 .foregroundStyle(Theme.secondary(scheme))
                 .labelStyle(.titleAndIcon)
             } else {
                 Text(footerLeftLabel)
-                    .font(.system(size: 12))
+                    .font(.system(size: metaSize))
                     .foregroundStyle(Theme.secondary(scheme))
             }
             Spacer()
@@ -454,7 +483,7 @@ struct LauncherView: View {
             }
         }
         .padding(.horizontal, 14)
-        .frame(height: 38)
+        .frame(height: model.footerChrome)
     }
 
     private var footerLeftLabel: String {
@@ -478,7 +507,7 @@ struct LauncherView: View {
                 .padding(.vertical, 2)
                 .background(Theme.kbd(scheme), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
-        .font(.system(size: 12))
+        .font(.system(size: metaSize))
         .foregroundStyle(Theme.secondary(scheme))
     }
 
@@ -505,6 +534,10 @@ struct LauncherView: View {
 }
 
 private struct ActionsPane: View {
+    @ScaledMetric(relativeTo: .headline) private var titleSize: CGFloat = 15
+    @ScaledMetric(relativeTo: .body) private var bodySize: CGFloat = 14
+    @ScaledMetric(relativeTo: .caption) private var metaSize: CGFloat = 12
+
     @Bindable var model: Model
     var command: Command
     @Environment(\.colorScheme) private var systemScheme
@@ -520,33 +553,34 @@ private struct ActionsPane: View {
             HStack(spacing: 10) {
                 BackButton { model.backToSearch(clearQuery: false) }
                 Text(command.title)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: titleSize, weight: .semibold))
                     .lineLimit(1)
                 Spacer()
                 if !model.trimmedQuery.isEmpty {
                     Text("Filter “\(model.trimmedQuery)”")
-                        .font(.system(size: 12))
+                        .font(.system(size: metaSize))
                         .foregroundStyle(Theme.secondary(scheme))
                         .lineLimit(1)
                 }
                 Text("Actions")
-                    .font(.system(size: 12))
+                    .font(.system(size: metaSize))
                     .foregroundStyle(Theme.tertiary(scheme))
             }
             .padding(.horizontal, 14)
-            .frame(height: 52)
+            .frame(height: 52 * (bodySize / 14))
             ScrollViewReader { proxy in
             ScrollView {
             VStack(spacing: 0) {
             ForEach(Array(actions.enumerated()), id: \.element.id) { index, action in
                 let on = index == model.selected
+                let ax = [action.title, action.keyLabel].compactMap { $0 }.joined(separator: ", ")
                 HStack {
                     Text(action.title)
-                        .font(.system(size: 14))
+                        .font(.system(size: bodySize))
                     Spacer()
                     if let key = action.keyLabel {
                         Text(key)
-                            .font(.system(size: 12))
+                            .font(.system(size: metaSize))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(Theme.kbd(scheme), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
@@ -554,9 +588,10 @@ private struct ActionsPane: View {
                     }
                 }
                 .padding(.horizontal, 14)
-                .frame(height: 36)
+                .frame(height: model.actionRowH)
                 .background(on ? Theme.accent.opacity(0.18) : Color.clear)
                 .contentShape(Rectangle())
+                .modifier(LauncherRowA11y(label: ax, value: "Action", selected: on))
                 .onTapGesture { model.runAction(action.id, for: command) }
                 .id(index)
             }
@@ -567,11 +602,13 @@ private struct ActionsPane: View {
             Spacer(minLength: 0)
             HintBar(left: "OpenCast", hints: [("Back", "Esc"), ("Run", "Return")])
         }
-        .frame(height: 52 + CGFloat(min(actions.count, 10)) * 36 + 38)
+        .frame(height: 52 * (bodySize / 14) + CGFloat(min(actions.count, 10)) * model.actionRowH + model.footerChrome)
     }
 }
 
 struct BackButton: View {
+    @ScaledMetric(relativeTo: .caption) private var metaSize: CGFloat = 12
+
     var action: () -> Void
     @Environment(\.colorScheme) private var systemScheme
     @Environment(\.themePreference) private var themePreference
@@ -580,7 +617,7 @@ struct BackButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: "chevron.left")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: metaSize, weight: .semibold))
                 .foregroundStyle(Theme.secondary(scheme))
                 .frame(width: 26, height: 26)
                 .background(Theme.kbd(scheme), in: RoundedRectangle(cornerRadius: 7))
@@ -591,6 +628,8 @@ struct BackButton: View {
 }
 
 struct HintBar: View {
+    @ScaledMetric(relativeTo: .caption) private var metaSize: CGFloat = 12
+
     var left: String
     var hints: [(String, String)]
     @Environment(\.colorScheme) private var systemScheme
@@ -600,7 +639,7 @@ struct HintBar: View {
     var body: some View {
         HStack {
             Text(left)
-                .font(.system(size: 12))
+                .font(.system(size: metaSize))
                 .foregroundStyle(Theme.secondary(scheme))
             Spacer()
             HStack(spacing: 14) {
@@ -612,17 +651,21 @@ struct HintBar: View {
                             .padding(.vertical, 2)
                             .background(Theme.kbd(scheme), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                     }
-                    .font(.system(size: 12))
+                    .font(.system(size: metaSize))
                     .foregroundStyle(Theme.secondary(scheme))
                 }
             }
         }
         .padding(.horizontal, 14)
-        .frame(height: 38)
+        .frame(height: 38 * (metaSize / 12))
     }
 }
 
 private struct ArgsForm: View {
+    @ScaledMetric(relativeTo: .headline) private var titleSize: CGFloat = 15
+    @ScaledMetric(relativeTo: .body) private var bodySize: CGFloat = 14
+    @ScaledMetric(relativeTo: .body) private var iconSize: CGFloat = 17
+
     @Bindable var model: Model
     var command: Command
     @FocusState private var focus: Int?
@@ -638,7 +681,7 @@ private struct ArgsForm: View {
                 BackButton { model.backToSearch(clearQuery: false) }
                 argIcon
                 Text(command.title)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: titleSize, weight: .semibold))
                     .lineLimit(1)
                     .layoutPriority(1)
                 ForEach(command.arguments.indices, id: \.self) { index in
@@ -651,7 +694,7 @@ private struct ArgsForm: View {
                 }
             }
             .padding(.horizontal, 18)
-            .frame(minHeight: 58)
+            .frame(minHeight: 58 * (bodySize / 14))
             .overlay(alignment: .bottom) { hairline }
             hint
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -667,7 +710,7 @@ private struct ArgsForm: View {
     private var hint: some View {
         let which = command.arguments.count == 1 ? "the field" : "the fields"
         return (Text("Fill in \(which) above and press Enter to run ") + Text(command.title).bold() + Text("."))
-            .font(.system(size: 14))
+            .font(.system(size: bodySize))
             .foregroundStyle(Theme.secondary(scheme))
             .multilineTextAlignment(.center)
             .padding(24)
@@ -676,13 +719,13 @@ private struct ArgsForm: View {
     @ViewBuilder private var argIcon: some View {
         if let name = Theme.resolvedSymbol(for: command) {
             Image(systemName: name)
-                .font(.system(size: 17, weight: .medium))
+                .font(.system(size: iconSize, weight: .medium))
                 .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(Theme.primary(scheme))
                 .frame(width: 22, height: 22)
         } else if let icon = command.icon, !icon.isEmpty {
             Text(icon)
-                .font(.system(size: 17))
+                .font(.system(size: iconSize))
         }
     }
 
@@ -698,7 +741,7 @@ private struct ArgsForm: View {
             }
         }
         .textFieldStyle(.plain)
-        .font(.system(size: 14))
+        .font(.system(size: bodySize))
         .foregroundStyle(Theme.primary(scheme))
         .tint(Theme.accent)
         .focused($focus, equals: index)
@@ -720,6 +763,10 @@ private struct ArgsForm: View {
 }
 
 private struct OutputPane: View {
+    @ScaledMetric(relativeTo: .headline) private var titleSize: CGFloat = 15
+    @ScaledMetric(relativeTo: .body) private var bodySize: CGFloat = 14
+    @ScaledMetric(relativeTo: .caption) private var metaSize: CGFloat = 12
+
     var title: String
     var text: String
     var markdown = false
@@ -732,12 +779,12 @@ private struct OutputPane: View {
             HStack(spacing: 10) {
                 BackButton { Model.shared.backToSearch(clearQuery: false) }
                 Text(title)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: titleSize, weight: .semibold))
                     .lineLimit(1)
                 Spacer()
             }
             .padding(.horizontal, 18)
-            .frame(height: 58)
+            .frame(height: 58 * (bodySize / 14))
             .overlay(alignment: .bottom) {
                 Rectangle().fill(Theme.stroke(scheme).opacity(0.45)).frame(height: 0.5)
             }
@@ -749,7 +796,7 @@ private struct OutputPane: View {
                         .padding(.vertical, 16)
                 } else {
                     Text(text.isEmpty ? "(no output)" : text)
-                        .font(.system(size: 13, design: .monospaced))
+                        .font(.system(size: metaSize + 1, design: .monospaced))
                         .foregroundStyle(text.isEmpty ? Theme.tertiary(scheme) : Theme.primary(scheme))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -760,5 +807,20 @@ private struct OutputPane: View {
             .frame(maxHeight: .infinity)
             HintBar(left: "OpenCast", hints: [("Copy", "↵"), ("Back", "esc")])
         }
+    }
+}
+
+/// Shared VoiceOver traits for search rows and ActionsPane rows (N-10).
+private struct LauncherRowA11y: ViewModifier {
+    let label: String
+    let value: String
+    let selected: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(label)
+            .accessibilityValue(value)
+            .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
 }

@@ -402,12 +402,12 @@ document (Return reads it into the panel; the URI shows in the preview) and
 own wording opens in a chat, unsent, ready to edit). Stdio servers (`command`)
 and Streamable HTTP servers (`url`, with `headers` / `headers_cmd`) are
 supported. For OAuth HTTP servers set `oauth_client_id`,
-`oauth_authorize_url`, `oauth_token_url`, and optional `oauth_scopes`; OpenCast
-opens a browser, catches the loopback redirect, and stores access/refresh
-tokens in the Keychain (optional client secret:
-`security` item `opencast-mcp-<id>-oauth-secret`). Prefer PKCE with no secret.
-Settings → Extensions → **Sign in…**, or **Refresh MCP Tools**, attaches
-`Authorization: Bearer …` on connect.
+`oauth_authorize_url`, `oauth_token_url`, and optional `oauth_scopes`; register
+the redirect `http://127.0.0.1:8765/callback` with your IdP (or set
+`oauth_redirect_uri`). OpenCast opens a browser only from Settings → Extensions
+→ **Sign in…** / **Re-auth…**; connect/refresh reuse Keychain tokens quietly.
+Tokens: `opencast-mcp-<id>-access` / `-refresh` (optional client secret:
+`opencast-mcp-<id>-oauth-secret`). Prefer PKCE with no secret.
 
 ## Shortcuts, snippets, schedule, menus
 
@@ -597,8 +597,10 @@ and receives streamed tokens from it.
 
 ## Status and roadmap
 
-v0.2. Next: OAuth for remote MCP servers, browser history, Raycast extension
-(React) compatibility, and Linux packaging (the core is portable).
+v0.2. Shipped recently: browser history/recents, MCP OAuth (fixed loopback +
+Sign in/out), Dynamic Type on the launcher, Alfred Hotkey/Conditional import.
+Next: Raycast extension (React) compatibility and Linux packaging (the core is
+portable).
 
 Prior art worth knowing: [SuperCmd](https://github.com/SuperCmdLabs/SuperCmd)
 (Electron, Raycast-extension compatible) and

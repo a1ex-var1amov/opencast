@@ -28,7 +28,18 @@ struct McpServersPaneSection: View {
                             Text(row.signedIn ? "Signed in" : "Not signed in")
                                 .foregroundStyle(.secondary)
                                 .font(.caption)
-                            Button(signingIn == row.id ? "Signing in…" : "Sign in…") {
+                            if row.signedIn {
+                                Button("Sign out") {
+                                    Task.detached {
+                                        _ = Engine.call(["op": "mcpOauthSignOut", "id": row.id])
+                                        await MainActor.run {
+                                            SettingsState.shared.status = "Signed out of \(row.id)"
+                                            SettingsState.shared.load()
+                                        }
+                                    }
+                                }
+                            }
+                            Button(signingIn == row.id ? "Signing in…" : (row.signedIn ? "Re-auth…" : "Sign in…")) {
                                 signingIn = row.id
                                 Task.detached {
                                     let r = Engine.call(["op": "mcpOauthSignIn", "id": row.id])
