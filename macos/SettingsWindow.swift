@@ -711,8 +711,8 @@ private struct PermissionsPane: View {
             )
             PermissionRow(
                 title: "Automation",
-                detail: "Front browser tab for Ask About Page (grant OpenCast per browser)",
-                granted: false,
+                detail: "macOS asks per browser the first time Ask About Page runs.",
+                granted: nil,
                 pane: "Privacy_Automation",
                 request: {}
             )
@@ -724,21 +724,23 @@ private struct PermissionsPane: View {
 private struct PermissionRow: View {
     var title: String
     var detail: String
-    var granted: Bool
+    /// `nil` has no granted state (Automation: macOS prompts per target app).
+    var granted: Bool?
     var pane: String
     var request: () -> Void
 
     var body: some View {
+        let ok = granted == true
         HStack(alignment: .top) {
-            Image(systemName: granted ? "checkmark.circle.fill" : "circle.dashed")
-                .foregroundStyle(granted ? .green : .secondary)
+            Image(systemName: granted == nil ? "info.circle" : (ok ? "checkmark.circle.fill" : "circle.dashed"))
+                .foregroundStyle(ok ? .green : .secondary)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.system(size: 13, weight: .semibold))
                 Text(detail).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            if !granted {
-                Button("Allow…") {
+            if granted != true {
+                Button(granted == nil ? "Open System Settings…" : "Allow…") {
                     request()
                     if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") {
                         NSWorkspace.shared.open(url)

@@ -113,30 +113,30 @@ enum UniversalActions {
             },
         ]
         if word {
-            a.append(UAction(id: "ua:define", title: "Define “\(text)”", icon: "📖", key: "cmd+d") {
+            a.append(UAction(id: "ua:define", title: "Define “\(text)”", icon: "book", key: "cmd+d") {
                 model.handleUi("define", args: [text])
             })
-            a.append(UAction(id: "ua:spell", title: "Spell “\(text)”", icon: "🔤") {
+            a.append(UAction(id: "ua:spell", title: "Spell “\(text)”", icon: "textformat.abc") {
                 model.handleUi("spell", args: [text])
             })
         }
         a += [
-            UAction(id: "ua:web", title: "Search the Web", icon: "🔎", key: "cmd+g") {
+            UAction(id: "ua:web", title: "Search the Web", icon: "magnifyingglass", key: "cmd+g") {
                 let q = text.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? text
                 if let u = URL(string: "https://www.google.com/search?q=\(q)") { NSWorkspace.shared.open(u) }
                 model.apply(.hide)
             },
-            UAction(id: "ua:large", title: "Large Type", icon: "🔠", key: "cmd+l") {
+            UAction(id: "ua:large", title: "Large Type", icon: "textformat.size", key: "cmd+l") {
                 model.handleUi("large-type", args: [text])
             },
-            UAction(id: "ua:note", title: "Save as Note", icon: "📝") {
+            UAction(id: "ua:note", title: "Save as Note", icon: "note.text") {
                 _ = Engine.call(["op": "noteUpdate", "id": "", "title": "", "body": text])
                 model.flash("Saved as a note", error: false, thenHide: true)
             },
-            UAction(id: "ua:paste-plain", title: "Paste as Plain Text", icon: "📋", key: "cmd+shift+v") {
+            UAction(id: "ua:paste-plain", title: "Paste as Plain Text", icon: "clipboard.fill", key: "cmd+shift+v") {
                 Task.detached { _ = Engine.call(["op": "paste", "text": text]) }
             },
-            UAction(id: "ua:copy", title: "Copy", icon: "📋", key: "cmd+c") {
+            UAction(id: "ua:copy", title: "Copy", icon: "clipboard.fill", key: "cmd+c") {
                 model.copyToClipboard(text, toast: "Copied")
             },
         ]
@@ -147,7 +147,7 @@ enum UniversalActions {
 
     private static func urlActions(_ url: URL, model: Model) -> [UAction] {
         var a: [UAction] = [
-            UAction(id: "ua:open", title: "Open", icon: "🔗") {
+            UAction(id: "ua:open", title: "Open", icon: "link") {
                 NSWorkspace.shared.open(url)
                 model.apply(.hide)
             },
@@ -164,14 +164,14 @@ enum UniversalActions {
             UAction(id: "ua:ask-url", title: "Ask AI About This Link", icon: "sparkles", key: "cmd+shift+a") {
                 model.openChat(prompt: url.absoluteString + "\n\n", system: nil, provider: nil, model: nil, autoSend: false)
             },
-            UAction(id: "ua:md-link", title: "Copy as Markdown Link", icon: "🔗", key: "cmd+shift+m") {
+            UAction(id: "ua:md-link", title: "Copy as Markdown Link", icon: "link", key: "cmd+shift+m") {
                 let label = url.host?.replacingOccurrences(of: "www.", with: "") ?? url.absoluteString
                 model.copyToClipboard("[\(label)](\(url.absoluteString))", toast: "Copied Markdown link")
             },
-            UAction(id: "ua:large", title: "Large Type", icon: "🔠", key: "cmd+l") {
+            UAction(id: "ua:large", title: "Large Type", icon: "textformat.size", key: "cmd+l") {
                 model.handleUi("large-type", args: [url.absoluteString])
             },
-            UAction(id: "ua:copy", title: "Copy", icon: "📋", key: "cmd+c") {
+            UAction(id: "ua:copy", title: "Copy", icon: "clipboard.fill", key: "cmd+c") {
                 model.copyToClipboard(url.absoluteString, toast: "Copied")
             },
         ]
@@ -186,24 +186,24 @@ enum UniversalActions {
         FileManager.default.fileExists(atPath: first.path, isDirectory: &isDir)
         let folder = isDir.boolValue ? first : first.deletingLastPathComponent()
         var a: [UAction] = [
-            UAction(id: "ua:open", title: "Open", icon: "📂") {
+            UAction(id: "ua:open", title: "Open", icon: "folder.fill") {
                 files.forEach { NSWorkspace.shared.open($0) }
                 model.apply(.hide)
             },
-            UAction(id: "ua:open-with", title: "Open With…", icon: "🧰", key: "cmd+o") {
+            UAction(id: "ua:open-with", title: "Open With…", icon: "shippingbox", key: "cmd+o") {
                 showOpenWith(files, model: model)
             },
-            UAction(id: "ua:quick-look", title: "Quick Look", icon: "👁", key: "cmd+y") {
+            UAction(id: "ua:quick-look", title: "Quick Look", icon: "eye", key: "cmd+y") {
                 QuickLook.shared.show(files)
             },
-            UAction(id: "ua:reveal", title: "Show in Finder", icon: "🔍", key: "cmd+shift+f") {
+            UAction(id: "ua:reveal", title: "Show in Finder", icon: "magnifyingglass", key: "cmd+shift+f") {
                 NSWorkspace.shared.activateFileViewerSelecting(files)
                 model.apply(.hide)
             },
-            UAction(id: "ua:copy-path", title: files.count == 1 ? "Copy Path" : "Copy Paths", icon: "📋", key: "cmd+shift+c") {
+            UAction(id: "ua:copy-path", title: files.count == 1 ? "Copy Path" : "Copy Paths", icon: "clipboard.fill", key: "cmd+shift+c") {
                 model.copyToClipboard(files.map(\.path).joined(separator: "\n"), toast: "Copied path")
             },
-            UAction(id: "ua:copy-file", title: files.count == 1 ? "Copy File" : "Copy Files", icon: "📄", key: "cmd+shift+.") {
+            UAction(id: "ua:copy-file", title: files.count == 1 ? "Copy File" : "Copy Files", icon: "doc.fill", key: "cmd+shift+.") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.writeObjects(files.map { $0 as NSURL })
                 model.flash(files.count == 1 ? "Copied file" : "Copied \(files.count) files", error: false, thenHide: false)
@@ -229,16 +229,16 @@ enum UniversalActions {
                 NSSharingService(named: .composeEmail)?.perform(withItems: files)
                 model.apply(.hide)
             },
-            UAction(id: "ua:compress", title: "Compress to Zip", icon: "🗜") {
+            UAction(id: "ua:compress", title: "Compress to Zip", icon: "archivebox") {
                 compress(files, model: model)
             },
-            UAction(id: "ua:move-to", title: "Move To…", icon: "➡️") {
+            UAction(id: "ua:move-to", title: "Move To…", icon: "arrow.right") {
                 transfer(files, move: true, model: model)
             },
             UAction(id: "ua:copy-to", title: "Copy To…", icon: "⧉") {
                 transfer(files, move: false, model: model)
             },
-            UAction(id: "ua:trash", title: "Move to Trash", icon: "🗑", key: "cmd+backspace") {
+            UAction(id: "ua:trash", title: "Move to Trash", icon: "trash.fill", key: "cmd+backspace") {
                 NSWorkspace.shared.recycle(files) { _, error in
                     let ok = error == nil
                     Task { @MainActor in
@@ -259,7 +259,7 @@ enum UniversalActions {
             ListItem(title: FileManager.default.displayName(atPath: app.path), subtitle: app.deletingLastPathComponent().path,
                      icon: "fileicon:\(app.path)", arg: String(i))
         }
-        model.showLocalList(id: "open-with", title: "Open With", icon: "🧰", items: items, action: { i in
+        model.showLocalList(id: "open-with", title: "Open With", icon: "shippingbox", items: items, action: { i in
             guard apps.indices.contains(i) else { return }
             NSWorkspace.shared.open(files, withApplicationAt: apps[i], configuration: NSWorkspace.OpenConfiguration())
             model.apply(.hide)

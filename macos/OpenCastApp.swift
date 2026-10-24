@@ -111,6 +111,10 @@ final class Model {
     /// Config/engine warnings kept for the footer count (FS-1).
     var warnings: [String] = []
     var warningCount: Int { warnings.count }
+    /// Empty search with a config warning: Return opens Doctor (FS-1).
+    var openDoctorOnReturn: Bool {
+        !isListMode && trimmedQuery.isEmpty && warningCount > 0
+    }
     /// Engine warnings deferred while the Welcome list is open (N-5).
     private var pendingWarningsToast: [String]?
     /// Soft-delete undo (⌘Z) while the grace toast is up.
@@ -323,7 +327,7 @@ final class Model {
             if key == "clipboard" || key == "doctor" || key.hasPrefix("show-") || key == "check-updates" {
                 return "Show"
             }
-            if key == "settings" || key == "shortcuts" || key.hasPrefix("open-")
+            if key == "settings" || key == "shortcuts" || key == "welcome" || key.hasPrefix("open-")
                 || key.contains("extension") || key == "sync-icloud" || key == "notes"
                 || key == "chat-history" || key == "schedule" || key == "menu-items"
                 || key == "bookmarks" || key == "selection" || key == "arrange-window"
@@ -924,7 +928,7 @@ final class Model {
                     id: "event:\(i)",
                     title: (join ? "Join: " : "Next: ") + (e.title ?? "Event"),
                     subtitle: Schedule.timeRange(e),
-                    icon: join ? "🎥" : "📅",
+                    icon: join ? "video.fill" : "calendar",
                     kind: .builtin,
                     arguments: [],
                     hotkey: nil
@@ -980,10 +984,10 @@ final class Model {
             let title = Self.destructive[id] ?? "Continue"
             pendingConfirm = id
             let items = [
-                ListItem(title: title, subtitle: "Return confirms", icon: "⚠️", arg: "0"),
-                ListItem(title: "Cancel", subtitle: nil, icon: "✕", arg: "1"),
+                ListItem(title: title, subtitle: "Return confirms", icon: "exclamationmark.triangle", arg: "0"),
+                ListItem(title: "Cancel", subtitle: nil, icon: "xmark", arg: "1"),
             ]
-            showLocalList(id: "confirm", title: "\(title)?", icon: "⚠️", items: items, action: { i in
+            showLocalList(id: "confirm", title: "\(title)?", icon: "exclamationmark.triangle", items: items, action: { i in
                 let m = Model.shared
                 if i == 0 {
                     m.backToSearch(clearQuery: true)
@@ -1133,18 +1137,18 @@ final class Model {
     /// Review a captured layout before saving: Return on an app toggles it, Return on Save saves.
     private func confirmLayout(name: String, apps: [AppWindows], displays: String, excluded: Set<Int>, selected sel: Int) {
         let kept = apps.indices.filter { !excluded.contains($0) }
-        var items = [ListItem(title: "Save “\(name)”", subtitle: "\(kept.count) of \(apps.count) apps · Return on an app to leave it out", icon: "💾", arg: "0")]
+        var items = [ListItem(title: "Save “\(name)”", subtitle: "\(kept.count) of \(apps.count) apps · Return on an app to leave it out", icon: "square.and.arrow.down", arg: "0")]
         for (i, a) in apps.enumerated() {
             var item = ListItem(
                 title: a.app,
                 subtitle: a.windows.count == 1 ? "1 window" : "\(a.windows.count) windows",
-                icon: excluded.contains(i) ? "⬜️" : "✅",
+                icon: excluded.contains(i) ? "square" : "checkmark.circle.fill",
                 arg: String(i + 1)
             )
             item.markdown = a.windows.map { w in "- \(w.title.isEmpty ? "Untitled" : w.title) — \(Int(w.w))×\(Int(w.h)) at \(Int(w.x)),\(Int(w.y))" }.joined(separator: "\n")
             items.append(item)
         }
-        showLocalList(id: "save-layout", title: "Save Layout", icon: "🪟", items: items, action: { i in
+        showLocalList(id: "save-layout", title: "Save Layout", icon: "macwindow", items: items, action: { i in
             let m = Model.shared
             guard i > 0 else {
                 let chosen = kept.map { apps[$0] }
@@ -1234,7 +1238,8 @@ final class Model {
             flash(message, error: true, thenHide: false)
         case .output(let title, let text):
             outputMarkdown = false
-            mode = .output(title: title, text: text)
+            let body = title == "OpenCast Doctor" ? withRecentMessages(text) : text
+            mode = .output(title: title, text: body)
             noteContentChanged()
         case .markdown(let title, let text):
             outputMarkdown = true
@@ -1504,6 +1509,10 @@ final class Model {
             }
         }
         if mods.isEmpty, event.keyCode == 36 || event.keyCode == 76 {
+            if openDoctorOnReturn {
+                perform("builtin:doctor")
+                return true
+            }
             // Typed fast and hit Return before this query's rows arrived: wait for
             // them (a few ms) instead of running the previous query's top hit.
             if !isListMode, deliveredGen < searchGen, selected == 0 {
@@ -1824,12 +1833,12 @@ final class Model {
         WindowGlyphs.load(actions.map { "window:" + $0 }, portrait: portrait)
         arrangeShown = actions
         let items = actions.enumerated().map { i, a in
-            ListItem(title: WindowHUD.title(for: a), subtitle: nil, icon: WindowGlyphs.imagePath(for: "window:" + a) ?? "🪟", arg: String(i))
+            ListItem(title: WindowHUD.title(for: a), subtitle: nil, icon: WindowGlyphs.imagePath(for: "window:" + a) ?? "macwindow", arg: String(i))
         }
         var options = ListOptions()
         options.view = "grid"
         options.columns = 6
-        showLocalList(id: "arrange-window", title: "Arrange Window", icon: "🪟", items: items, action: { i in
+        showLocalList(id: "arrange-window", title: "Arrange Window", icon: "macwindow", items: items, action: { i in
             guard actions.indices.contains(i) else { return }
             Model.shared.snap(action: actions[i], frac: nil)
         }, options: options)
@@ -1855,15 +1864,15 @@ final class Model {
         for (i, space) in spaces.enumerated() {
             let here = space.mid == active
             let title = "Space \(i + 1)" + (space.fullscreen ? " · \(space.ownerApp ?? "Full Screen")" : "")
-            items.append(ListItem(title: here ? "• \(title)" : title, subtitle: space.summary, icon: "🗔", arg: String(i)))
+            items.append(ListItem(title: here ? "• \(title)" : title, subtitle: space.summary, icon: "macwindow", arg: String(i)))
             rows.append((space, false))
             if !space.fullscreen && !here {
-                items.append(ListItem(title: "Move Window to Space \(i + 1)", subtitle: space.summary, icon: "🗔", arg: "m\(i)"))
+                items.append(ListItem(title: "Move Window to Space \(i + 1)", subtitle: space.summary, icon: "macwindow", arg: "m\(i)"))
                 rows.append((space, true))
             }
         }
         let app = previousApp
-        showLocalList(id: "spaces", title: "Switch Space", icon: "🗔", items: items) { i in
+        showLocalList(id: "spaces", title: "Switch Space", icon: "macwindow", items: items) { i in
             guard rows.indices.contains(i) else { return }
             let (space, move) = rows[i]
             self.afterHide {
@@ -1983,6 +1992,8 @@ final class Model {
         case "dictate-anywhere":
             hide()
             GlobalDictation.shared.toggle()
+        case "welcome":
+            showWelcome(keepOnBlur: false)
         case "cheat-sheet", "shortcuts":
             // App → that app's menu shortcuts → Return presses one. The search
             // bar keeps filtering at every level, so drilling down is searching.
@@ -2227,8 +2238,8 @@ final class Model {
         var seen = Set<String>()
         words = words.filter { seen.insert($0.lowercased()).inserted && $0.lowercased() != w.lowercased() }
         var items: [ListItem] = []
-        if !wrong { items.append(ListItem(title: w, subtitle: "Spelled correctly · Return copies", icon: "✅", arg: w)) }
-        items += words.prefix(20).map { ListItem(title: $0, subtitle: "Return copies", icon: "🔤", arg: $0) }
+        if !wrong { items.append(ListItem(title: w, subtitle: "Spelled correctly · Return copies", icon: "checkmark.circle.fill", arg: w)) }
+        items += words.prefix(20).map { ListItem(title: $0, subtitle: "Return copies", icon: "textformat.abc", arg: $0) }
         guard !items.isEmpty else {
             flash("No suggestions for “\(w)”", error: true, thenHide: false)
             return
@@ -2238,7 +2249,7 @@ final class Model {
             items[i].arg = String(i)
             items[i].actions = [ItemAction(title: "Paste", arg: "paste", key: "cmd+return"), ItemAction(title: "Define", arg: "define", key: "cmd+d")]
         }
-        showLocalList(id: "spell", title: wrong ? "“\(w)” — did you mean" : "Spelling", icon: "🔤", items: items, action: { i in
+        showLocalList(id: "spell", title: wrong ? "“\(w)” — did you mean" : "Spelling", icon: "textformat.abc", items: items, action: { i in
             guard values.indices.contains(i) else { return }
             Model.shared.copyToClipboard(values[i], toast: "Copied \(values[i])")
         }, itemAction: { i, arg in
@@ -2278,7 +2289,7 @@ final class Model {
                     item.actions = [ItemAction(title: "Show in Finder", arg: "reveal", key: "cmd+shift+f")]
                     items.append(item)
                 }
-                m.showLocalList(id: "recent", title: "\(command.title) — Recent", icon: "🕘", items: items, action: { i in
+                m.showLocalList(id: "recent", title: "\(command.title) — Recent", icon: "clock", items: items, action: { i in
                     guard docs.indices.contains(i) else { return }
                     NSWorkspace.shared.open(
                         [URL(fileURLWithPath: docs[i].path)],
@@ -2439,7 +2450,7 @@ final class Model {
         case .url: "Link"
         case .files(let f): f.count == 1 ? f[0].lastPathComponent : "\(f.count) Files"
         }
-        showLocalList(id: "selection", title: title, icon: "✳️", items: items, action: { i in
+        showLocalList(id: "selection", title: title, icon: "asterisk", items: items, action: { i in
             guard actions.indices.contains(i) else { return }
             actions[i].run()
         })
@@ -2452,6 +2463,61 @@ final class Model {
 
     /// Row actions for panel-built lists (Contacts, Reminders): (item index, action arg).
     var localItemAction: ((Int, String) -> Void)?
+
+    /// First-run tips, also the Welcome command. `keepOnBlur` stays set only for the automatic first run.
+    func showWelcome(keepOnBlur: Bool = true) {
+        let hotkey = OpenCastStatusBar.hotkeyLabel()
+        if keepOnBlur { keepOnBlurOnce = true }
+        let items = [
+            ListItem(
+                title: "Hotkey: \(hotkey)",
+                subtitle: "Press anytime to open OpenCast",
+                icon: "keyboard",
+                arg: "0"
+            ),
+            ListItem(
+                title: "Allow Accessibility",
+                subtitle: "Window management, paste, snippets, selection",
+                icon: "lock.shield",
+                arg: "1"
+            ),
+            ListItem(
+                title: "Connect AI (optional)",
+                subtitle: "Add a provider in Settings",
+                icon: "sparkles",
+                arg: "2"
+            ),
+        ]
+        showLocalList(id: "onboard", title: "Welcome to OpenCast", icon: "", items: items) { i in
+            let m = Model.shared
+            switch i {
+            case 0:
+                m.flash("Press \(hotkey) to open OpenCast", error: false, thenHide: true)
+            case 1:
+                let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+                _ = AXIsProcessTrustedWithOptions(opts)
+                if keepOnBlur { m.keepOnBlurOnce = true }
+                SettingsWindowController.shared.show(tab: .permissions)
+            case 2:
+                SettingsWindowController.shared.show(tab: .ai)
+            default:
+                break
+            }
+        }
+    }
+
+    /// Last 20 toasts, newest first, under a Rust Doctor report (FS-4).
+    private func withRecentMessages(_ text: String) -> String {
+        guard !recentToasts.isEmpty else { return text }
+        var out = text
+        if !out.hasSuffix("\n") { out.append("\n") }
+        out.append("\nRecent messages\n")
+        for line in recentToasts.reversed() {
+            out.append(line)
+            out.append("\n")
+        }
+        return out
+    }
 
     /// A list the panel builds itself; Return calls `action` with the item's index.
     func showLocalList(
@@ -2547,8 +2613,8 @@ final class Model {
     /// Appearance: System / Light / Dark. Writes config, then applies.
     func showAppearanceMenu() {
         let choices: [(String, String)] = [("system", "System"), ("light", "Light"), ("dark", "Dark")]
-        let items = choices.map { ListItem(title: $0.1, subtitle: nil, icon: "🖥️", arg: $0.0) }
-        showLocalList(id: "appearance", title: "Appearance", icon: "🖥️", items: items) { i in
+        let items = choices.map { ListItem(title: $0.1, subtitle: nil, icon: "desktopcomputer", arg: $0.0) }
+        showLocalList(id: "appearance", title: "Appearance", icon: "desktopcomputer", items: items) { i in
             guard choices.indices.contains(i) else { return }
             let value = choices[i].0
             _ = Engine.call(["op": "configSet", "key": "theme", "value": value])
@@ -2559,8 +2625,8 @@ final class Model {
     /// Panel Position: Island / Spotlight.
     func showPanelPositionMenu() {
         let choices: [(String, String)] = [("island", "Island"), ("spotlight", "Spotlight")]
-        let items = choices.map { ListItem(title: $0.1, subtitle: nil, icon: "🏝️", arg: $0.0) }
-        showLocalList(id: "panel-position", title: "Panel Position", icon: "🏝️", items: items) { i in
+        let items = choices.map { ListItem(title: $0.1, subtitle: nil, icon: "rectangle.topthird.inset.filled", arg: $0.0) }
+        showLocalList(id: "panel-position", title: "Panel Position", icon: "rectangle.topthird.inset.filled", items: items) { i in
             guard choices.indices.contains(i) else { return }
             let value = choices[i].0
             _ = Engine.call(["op": "configSet", "key": "presentation", "value": value])
@@ -2577,8 +2643,8 @@ final class Model {
             ("1h", "1h"),
             ("3h", "3h"),
         ]
-        let items = choices.map { ListItem(title: $0.1, subtitle: nil, icon: "☕️", arg: $0.0) }
-        showLocalList(id: "stay-awake", title: "Stay Awake", icon: "☕️", items: items) { i in
+        let items = choices.map { ListItem(title: $0.1, subtitle: nil, icon: "cup.and.saucer.fill", arg: $0.0) }
+        showLocalList(id: "stay-awake", title: "Stay Awake", icon: "cup.and.saucer.fill", items: items) { i in
             guard choices.indices.contains(i) else { return }
             self.apply(.stayAwake(choices[i].0))
         }
@@ -2674,12 +2740,12 @@ final class Model {
                     ListItem(
                         title: item.title,
                         subtitle: item.path,
-                        icon: "☰",
+                        icon: "list.bullet",
                         arg: String(i),
                         hotkey: item.shortcut.isEmpty ? nil : item.shortcut
                     )
                 }
-                model.showLocalList(id: "menu", title: "\(appName) Menus", icon: "☰", items: items) { i in
+                model.showLocalList(id: "menu", title: "\(appName) Menus", icon: "list.bullet", items: items) { i in
                     guard found.indices.contains(i) else { return }
                     let target = Model.shared.previousApp
                     Model.shared.apply(.hide)
@@ -2709,7 +2775,7 @@ final class Model {
             flash("Nothing else on your calendar today or tomorrow", error: false, thenHide: false)
             return
         }
-        showLocalList(id: "schedule", title: "My Schedule", icon: "📅", items: items) { i in
+        showLocalList(id: "schedule", title: "My Schedule", icon: "calendar", items: items) { i in
             Schedule.shared.open(index: i)
             Model.shared.apply(.hide)
         }
@@ -3114,7 +3180,7 @@ final class Model {
         case "save-snippet":
             guard let text = ClipboardHistory.shared.text(for: command.id) else { return }
             let form = Command(
-                id: "builtin:save-snippet", title: "Save as Snippet", subtitle: nil, icon: "📎", kind: .builtin,
+                id: "builtin:save-snippet", title: "Save as Snippet", subtitle: nil, icon: "paperclip", kind: .builtin,
                 arguments: [
                     Argument(placeholder: "keyword (;sig)", optional: false, secure: false),
                     Argument(placeholder: "text", optional: false, secure: false),

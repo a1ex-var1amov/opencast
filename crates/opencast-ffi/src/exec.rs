@@ -538,6 +538,7 @@ pub async fn run_command(id: String, args: Vec<String>, ctx: ExecContext) -> Exe
             | Builtin::SaveSnippet
             | Builtin::Stats
             | Builtin::EditProfile
+            | Builtin::Welcome
             | Builtin::BrowseFiles => {
                 // The engine plans these as Ui/UiArgs/Extensions/Doctor/FillQuery, never Plan::Builtin.
                 err("this builtin should have resolved to a more specific plan")

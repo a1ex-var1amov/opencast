@@ -144,44 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !UserDefaults.standard.bool(forKey: key) else { return }
         // Mark when shown (covers Esc skip via the same key).
         UserDefaults.standard.set(true, forKey: key)
-        let hotkey = OpenCastStatusBar.hotkeyLabel()
-        Model.shared.keepOnBlurOnce = true
-        let items = [
-            ListItem(
-                title: "Hotkey: \(hotkey)",
-                subtitle: "Press anytime to open OpenCast",
-                icon: "keyboard",
-                arg: "0"
-            ),
-            ListItem(
-                title: "Allow Accessibility",
-                subtitle: "Window management, paste, snippets, selection",
-                icon: "lock.shield",
-                arg: "1"
-            ),
-            ListItem(
-                title: "Connect AI (optional)",
-                subtitle: "Add a provider in Settings",
-                icon: "sparkles",
-                arg: "2"
-            ),
-        ]
-        Model.shared.showLocalList(id: "onboard", title: "Welcome to OpenCast", icon: "", items: items) { i in
-            let m = Model.shared
-            switch i {
-            case 0:
-                m.flash("Press \(hotkey) to open OpenCast", error: false, thenHide: true)
-            case 1:
-                let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-                _ = AXIsProcessTrustedWithOptions(opts)
-                m.keepOnBlurOnce = true
-                SettingsWindowController.shared.show(tab: .permissions)
-            case 2:
-                SettingsWindowController.shared.show(tab: .ai)
-            default:
-                break
-            }
-        }
+        Model.shared.showWelcome()
     }
 
     /// Opt-in (`check_updates = true`): at most once a week, quietly.

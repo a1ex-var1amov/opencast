@@ -426,7 +426,7 @@ final class ClipboardHistory {
                 id: e.id,
                 title: title,
                 subtitle: subtitle,
-                icon: e.kind == .text ? (Self.colorIcon(e.text ?? "") ?? "📋") : "🖼",
+                icon: e.kind == .text ? (Self.colorIcon(e.text ?? "") ?? "clipboard.fill") : "photo.fill",
                 kind: .clipboard,
                 arguments: [],
                 hotkey: nil

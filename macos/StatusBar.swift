@@ -10,18 +10,10 @@ final class OpenCastStatusBar: NSObject, NSMenuDelegate {
     func install() {
         guard statusItem == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        // App icon as template — not the AI sparkles glyph (N-12).
-        let image: NSImage = {
-            if let app = NSImage(named: NSImage.applicationIconName)?.copy() as? NSImage {
-                app.size = NSSize(width: 16, height: 16)
-                app.isTemplate = true
-                return app
-            }
-            let fallback = NSImage(systemSymbolName: "menubar.dock.rectangle", accessibilityDescription: "OpenCast")
-                ?? NSImage(size: NSSize(width: 16, height: 16))
-            fallback.isTemplate = true
-            return fallback
-        }()
+        // Template SF Symbol. The app icon is an opaque squircle; templating it draws a solid square.
+        let image = NSImage(systemSymbolName: "menubar.dock.rectangle", accessibilityDescription: "OpenCast")
+            ?? NSImage(size: NSSize(width: 16, height: 16))
+        image.isTemplate = true
         item.button?.image = image
         item.button?.imagePosition = .imageOnly
         item.button?.toolTip = "OpenCast"

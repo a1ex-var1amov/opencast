@@ -28,6 +28,7 @@ pub enum Builtin {
     PanelPosition,
     Settings,
     Shortcuts,
+    Welcome,
     StayAwake,
     EmptyTrash,
     LockScreen,
@@ -181,6 +182,13 @@ const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
         "OpenCast Keys",
         "⌨️",
         &["hotkey", "keys", "keymap", "tab", "click", "shortcut", "opencast"],
+    ),
+    (
+        Builtin::Welcome,
+        "welcome",
+        "Welcome",
+        "⌨️",
+        &["onboard", "setup", "permissions", "hotkey", "start"],
     ),
     (
         Builtin::StayAwake,
@@ -1199,6 +1207,7 @@ impl Engine {
             let subtitle = match *key {
                 "spotify" => Some("Player Controls".into()),
                 k if k.starts_with("spotify") => Some("Spotify".into()),
+                "welcome" => Some("Hotkey, permissions, AI setup".into()),
                 _ => None,
             };
             commands.push(Command {
@@ -2679,6 +2688,7 @@ impl Engine {
                     Builtin::PanelPosition => Plan::Ui("panel-position-menu"),
                     Builtin::StayAwake => Plan::Ui("stay-awake-menu"),
                     Builtin::Settings => Plan::Ui("settings"),
+                    Builtin::Welcome => Plan::Ui("welcome"),
                     Builtin::InstallExtension => {
                         Plan::Extensions(ExtensionOp::Install(args.first().cloned().unwrap_or_default()))
                     }
@@ -4396,6 +4406,10 @@ steps = ["ai:nope"]
         );
         assert_eq!(e.plan("builtin:menu-items", &[]).unwrap(), Plan::Ui("menu-items"));
         assert_eq!(e.plan("builtin:settings", &[]).unwrap(), Plan::Ui("settings"));
+        assert_eq!(e.plan("builtin:welcome", &[]).unwrap(), Plan::Ui("welcome"));
+        let welcome = &e.search("welcome", 3)[0];
+        assert_eq!(welcome.id, "builtin:welcome");
+        assert_eq!(welcome.subtitle.as_deref(), Some("Hotkey, permissions, AI setup"));
         assert_eq!(e.plan("builtin:dictate", &[]).unwrap(), Plan::Ui("dictate"));
         assert_eq!(e.plan("builtin:schedule", &[]).unwrap(), Plan::Ui("schedule"));
         assert_eq!(e.plan("builtin:appearance", &[]).unwrap(), Plan::Ui("appearance-menu"));

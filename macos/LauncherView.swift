@@ -451,15 +451,16 @@ struct LauncherView: View {
             )
             .lineLimit(1)
             .labelStyle(.titleAndIcon)
-        } else if model.clicking, !model.seekCount.isEmpty {
-            Text(model.seekCount)
+        } else if model.clicking {
+            if !model.seekCount.isEmpty {
+                Text(model.seekCount)
+            }
         } else {
             Text(footerLeftLabel)
         }
     }
 
     private var footerLeftLabel: String {
-        if model.clicking { return "OpenCast" }
         let q = model.query.trimmingCharacters(in: .whitespacesAndNewlines)
         if q.isEmpty, model.warningCount > 0 {
             return model.warningCount == 1 ? "1 warning" : "\(model.warningCount) warnings"
@@ -476,7 +477,9 @@ struct LauncherView: View {
             return [("Back", "Esc"), ("Click", "Return")]
         }
         var h: [(String, String)] = []
-        if let verb = model.verb {
+        if model.openDoctorOnReturn {
+            h.append(("Doctor", "↩"))
+        } else if let verb = model.verb {
             h.append((verb, "Return"))
             if model.isListMode {
                 h.append(("Back", "Esc"))

@@ -69,7 +69,7 @@ enum ContactsSearch {
                 var item = ListItem(
                     title: p.name,
                     subtitle: [p.org, p.emails.first ?? "", p.phones.first ?? ""].filter { !$0.isEmpty }.joined(separator: " · "),
-                    icon: "👤",
+                    icon: "person.crop.circle",
                     arg: String(i)
                 )
                 var actions: [ItemAction] = []
@@ -87,11 +87,11 @@ enum ContactsSearch {
                 var md = "# \(p.name)\n\n"
                 if !p.org.isEmpty { md += "\(p.org)\n\n" }
                 for e in p.emails { md += "- \(e)\n" }
-                for ph in p.phones { md += "- 📞 \(ph)\n" }
+                for ph in p.phones { md += "- \(ph)\n" }
                 item.markdown = md
                 return item
             }
-            model.showLocalList(id: "contacts", title: "Contacts", icon: "👤", items: items, action: { i in
+            model.showLocalList(id: "contacts", title: "Contacts", icon: "person.crop.circle", items: items, action: { i in
                 guard people.indices.contains(i) else { return }
                 NSWorkspace.shared.open(URL(string: "addressbook://\(people[i].id)")!)
                 model.apply(.hide)
@@ -158,7 +158,7 @@ enum RemindersBridge {
                         var due = ""
                         if let d = r.due {
                             due = d.formatted(date: .abbreviated, time: .shortened)
-                            if d < now { due = "⚠︎ overdue · " + due }
+                            if d < now { due = "\u{26A0}\u{FE0E} overdue · " + due }
                         }
                         var item = ListItem(
                             title: r.title,
