@@ -570,6 +570,14 @@ pub struct Keys {
     /// Open the Settings window.
     #[serde(default = "d_settings")]
     pub settings: String,
+    /// Cycle AI providers in chat (previous / next).
+    #[serde(default = "d_provider_prev")]
+    pub provider_prev: String,
+    #[serde(default = "d_provider_next")]
+    pub provider_next: String,
+    /// Cycle models for the current chat provider.
+    #[serde(default = "d_model_next")]
+    pub model_next: String,
 }
 
 fn d_ask_ai() -> String {
@@ -614,6 +622,15 @@ fn d_large_type() -> String {
 fn d_settings() -> String {
     "Cmd+,".into()
 }
+fn d_provider_prev() -> String {
+    "Cmd+Shift+[".into()
+}
+fn d_provider_next() -> String {
+    "Cmd+Shift+]".into()
+}
+fn d_model_next() -> String {
+    "Cmd+Shift+M".into()
+}
 
 impl Default for Keys {
     fn default() -> Self {
@@ -632,6 +649,9 @@ impl Default for Keys {
             preview: d_preview(),
             large_type: d_large_type(),
             settings: d_settings(),
+            provider_prev: d_provider_prev(),
+            provider_next: d_provider_next(),
+            model_next: d_model_next(),
         }
     }
 }
@@ -654,6 +674,9 @@ impl Keys {
             ("preview", &self.preview),
             ("large_type", &self.large_type),
             ("settings", &self.settings),
+            ("provider_prev", &self.provider_prev),
+            ("provider_next", &self.provider_next),
+            ("model_next", &self.model_next),
         ]
     }
 }

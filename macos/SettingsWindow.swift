@@ -709,6 +709,13 @@ private struct PermissionsPane: View {
                     }
                 }
             )
+            PermissionRow(
+                title: "Automation",
+                detail: "Front browser tab for Ask About Page (grant OpenCast per browser)",
+                granted: false,
+                pane: "Privacy_Automation",
+                request: {}
+            )
             Button("Re-check") { state.permissionTick += 1 }
         }
     }

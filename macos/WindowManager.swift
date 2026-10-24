@@ -20,9 +20,8 @@ enum WindowManager {
 
     static var accessibilityTrusted: Bool { AXIsProcessTrusted() }
 
-    nonisolated static let permissionHint =
-        "OpenCast needs the Accessibility permission to see and move windows: "
-        + "System Settings → Privacy & Security → Accessibility → enable OpenCast, then try again"
+    /// Short; actionable toast is built by `permissionToast` at the catch site.
+    nonisolated static let permissionHint = "Accessibility is required to move windows"
 
     /// The app that had focus before the panel came up. Call before activating.
     static func frontApp() -> NSRunningApplication? {
@@ -390,7 +389,10 @@ enum WindowManager {
             }
         }
         if a != .success && b != .success {
-            throw WMError.message(a == .apiDisabled || a == .notImplemented ? permissionHint : "the app refused to move its window")
+            if a == .apiDisabled || a == .notImplemented || b == .apiDisabled || b == .notImplemented {
+                throw WMError.permission
+            }
+            throw WMError.message("the app refused to move its window")
         }
     }
 

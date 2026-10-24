@@ -72,7 +72,7 @@ enum UniversalActions {
         let accepting = (Engine.call(["op": "accepting", "type": input.kind])["commands"] as? [[String: Any]] ?? [])
             .compactMap(Command.init)
         for cmd in accepting {
-            list.append(UAction(id: "ua:cmd:\(cmd.id)", title: cmd.title, icon: cmd.icon ?? "✨") {
+            list.append(UAction(id: "ua:cmd:\(cmd.id)", title: cmd.title, icon: cmd.icon ?? "sparkles") {
                 if cmd.kind == .ai {
                     model.execute(id: cmd.id, args: [], selection: input.argument)
                 } else if case .files(let f) = input {
@@ -108,7 +108,7 @@ enum UniversalActions {
     private static func textActions(_ text: String, model: Model) -> [UAction] {
         let word = text.split(whereSeparator: \.isWhitespace).count == 1
         var a: [UAction] = [
-            UAction(id: "ua:ask", title: "Ask AI About It", icon: "✨", key: "cmd+shift+a") {
+            UAction(id: "ua:ask", title: "Ask AI About It", icon: "sparkles", key: "cmd+shift+a") {
                 model.openChat(prompt: text + "\n\n", system: nil, provider: nil, model: nil, autoSend: false)
             },
         ]
@@ -161,7 +161,7 @@ enum UniversalActions {
             })
         }
         a += [
-            UAction(id: "ua:ask-url", title: "Ask AI About This Link", icon: "✨", key: "cmd+shift+a") {
+            UAction(id: "ua:ask-url", title: "Ask AI About This Link", icon: "sparkles", key: "cmd+shift+a") {
                 model.openChat(prompt: url.absoluteString + "\n\n", system: nil, provider: nil, model: nil, autoSend: false)
             },
             UAction(id: "ua:md-link", title: "Copy as Markdown Link", icon: "🔗", key: "cmd+shift+m") {
@@ -208,13 +208,13 @@ enum UniversalActions {
                 NSPasteboard.general.writeObjects(files.map { $0 as NSURL })
                 model.flash(files.count == 1 ? "Copied file" : "Copied \(files.count) files", error: false, thenHide: false)
             },
-            UAction(id: "ua:terminal", title: "Open in Terminal", icon: "⌨️", key: "cmd+t") {
+            UAction(id: "ua:terminal", title: "Open in Terminal", icon: "keyboard", key: "cmd+t") {
                 if let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") {
                     NSWorkspace.shared.open([folder], withApplicationAt: terminal, configuration: NSWorkspace.OpenConfiguration())
                 }
                 model.apply(.hide)
             },
-            UAction(id: "ua:attach", title: "Ask AI About \(files.count == 1 ? "This File" : "These Files")", icon: "✨", key: "cmd+shift+a") {
+            UAction(id: "ua:attach", title: "Ask AI About \(files.count == 1 ? "This File" : "These Files")", icon: "sparkles", key: "cmd+shift+a") {
                 model.openChat(prompt: nil, system: nil, provider: nil, model: nil, autoSend: false)
                 for url in files {
                     Task.detached {
@@ -225,7 +225,7 @@ enum UniversalActions {
                     }
                 }
             },
-            UAction(id: "ua:email", title: "Email \(files.count == 1 ? "File" : "Files")", icon: "✉️", key: "cmd+e") {
+            UAction(id: "ua:email", title: "Email \(files.count == 1 ? "File" : "Files")", icon: "envelope", key: "cmd+e") {
                 NSSharingService(named: .composeEmail)?.perform(withItems: files)
                 model.apply(.hide)
             },

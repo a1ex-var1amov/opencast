@@ -425,65 +425,37 @@ struct LauncherView: View {
     }
 
     private var footer: some View {
-        HStack {
-            if model.searchingFiles {
-                HStack(spacing: 6) {
-                    ProgressView()
-                        .controlSize(.mini)
-                    Text("Searching files…")
-                        .font(.system(size: metaSize))
-                        .foregroundStyle(Theme.secondary(scheme))
-                }
-            } else if !model.fileBuffer.isEmpty {
-                Label(
-                    "File Buffer · \(model.fileBuffer.count) · ⌘K acts on all · ⌥← clears",
-                    systemImage: "paperclip"
-                )
-                .font(.system(size: metaSize))
-                .foregroundStyle(Theme.secondary(scheme))
-                .labelStyle(.titleAndIcon)
-                .lineLimit(1)
-            } else if FocusController.shared.isActive {
-                let f = FocusController.shared
-                Label(
-                    "\(f.isPaused ? "Focus paused" : "Focus") · \(f.minutesLeft) min left\(f.goal.isEmpty ? "" : " · " + f.goal)",
-                    systemImage: f.isPaused ? "pause.fill" : "target"
-                )
-                .lineLimit(1)
-                .font(.system(size: metaSize))
-                .foregroundStyle(Theme.secondary(scheme))
-                .labelStyle(.titleAndIcon)
-            } else {
-                Text(footerLeftLabel)
-                    .font(.system(size: metaSize))
-                    .foregroundStyle(Theme.secondary(scheme))
+        HintBar(left: { footerLeft }, hints: footerHints)
+            .frame(height: model.footerChrome)
+    }
+
+    @ViewBuilder private var footerLeft: some View {
+        if model.searchingFiles {
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.mini)
+                Text("Searching files…")
             }
-            Spacer()
-            HStack(spacing: 14) {
-                if model.clicking {
-                    if !model.seekCount.isEmpty {
-                        Text(model.seekCount)
-                    }
-                    hint("Back", "Esc")
-                    hint("Click", "Return")
-                } else {
-                    if let verb = model.verb {
-                        hint(verb, "Return")
-                        if model.isListMode {
-                            hint("Back", "Esc")
-                        } else if !model.askSelected {
-                            hint("Ask AI", Theme.keyLabel(model.keymap["ask_ai"], "Tab"))
-                        }
-                    }
-                    hint("Actions", Theme.keyLabel(model.keymap["actions"], "⌘K"))
-                    if !model.isListMode {
-                        hint("Click Text", Theme.keyLabel(model.keymap["click_text"], "`"))
-                    }
-                }
-            }
+        } else if !model.fileBuffer.isEmpty {
+            Label(
+                "File Buffer · \(model.fileBuffer.count) · ⌘K acts on all · ⌥← clears",
+                systemImage: "paperclip"
+            )
+            .labelStyle(.titleAndIcon)
+            .lineLimit(1)
+        } else if FocusController.shared.isActive {
+            let f = FocusController.shared
+            Label(
+                "\(f.isPaused ? "Focus paused" : "Focus") · \(f.minutesLeft) min left\(f.goal.isEmpty ? "" : " · " + f.goal)",
+                systemImage: f.isPaused ? "pause.fill" : "target"
+            )
+            .lineLimit(1)
+            .labelStyle(.titleAndIcon)
+        } else if model.clicking, !model.seekCount.isEmpty {
+            Text(model.seekCount)
+        } else {
+            Text(footerLeftLabel)
         }
-        .padding(.horizontal, 14)
-        .frame(height: model.footerChrome)
     }
 
     private var footerLeftLabel: String {
@@ -499,16 +471,24 @@ struct LauncherView: View {
         return "\(shown) of \(total)"
     }
 
-    private func hint(_ label: String, _ key: String) -> some View {
-        HStack(spacing: 4) {
-            Text(label)
-            Text(key)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Theme.kbd(scheme), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+    private var footerHints: [(String, String)] {
+        if model.clicking {
+            return [("Back", "Esc"), ("Click", "Return")]
         }
-        .font(.system(size: metaSize))
-        .foregroundStyle(Theme.secondary(scheme))
+        var h: [(String, String)] = []
+        if let verb = model.verb {
+            h.append((verb, "Return"))
+            if model.isListMode {
+                h.append(("Back", "Esc"))
+            } else if !model.askSelected {
+                h.append(("Ask AI", Theme.keyLabel(model.keymap["ask_ai"], "Tab")))
+            }
+        }
+        h.append(("Actions", Theme.keyLabel(model.keymap["actions"], "⌘K")))
+        if !model.isListMode {
+            h.append(("Click Text", Theme.keyLabel(model.keymap["click_text"], "`")))
+        }
+        return h
     }
 
     private func selectField() {
@@ -627,18 +607,28 @@ struct BackButton: View {
     }
 }
 
-struct HintBar: View {
+struct HintBar<Left: View>: View {
     @ScaledMetric(relativeTo: .caption) private var metaSize: CGFloat = 12
 
-    var left: String
+    var left: Left
     var hints: [(String, String)]
     @Environment(\.colorScheme) private var systemScheme
     @Environment(\.themePreference) private var themePreference
     private var scheme: ColorScheme { Theme.scheme(preference: themePreference, system: systemScheme) }
 
+    init(left: String, hints: [(String, String)]) where Left == Text {
+        self.left = Text(left)
+        self.hints = hints
+    }
+
+    init(@ViewBuilder left: () -> Left, hints: [(String, String)]) {
+        self.left = left()
+        self.hints = hints
+    }
+
     var body: some View {
         HStack {
-            Text(left)
+            left
                 .font(.system(size: metaSize))
                 .foregroundStyle(Theme.secondary(scheme))
             Spacer()

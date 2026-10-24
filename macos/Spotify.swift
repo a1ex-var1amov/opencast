@@ -13,7 +13,7 @@ enum Spotify {
     /// App icon path for list rows; falls back to the family glyph.
     static var appIcon: String {
         NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle)
-            .map { "fileicon:\($0.path)" } ?? "🎧"
+            .map { "fileicon:\($0.path)" } ?? "music.note"
     }
 
     /// Cover art for the current track: cached file path, else the app icon.

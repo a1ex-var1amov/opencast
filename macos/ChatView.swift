@@ -22,16 +22,7 @@ struct ChatView: View {
             field
             HintBar(
                 left: chatProviderHint,
-                hints: model.pendingApproval != nil
-                    ? [("Allow", "↩"), ("Deny", "esc")]
-                    : [
-                        ("Attach", "⌘O"),
-                        ("Clipboard", "⌘⇧V"),
-                        ("Screen", "⌘⇧S"),
-                        ("Paste answer", "⌘↩"),
-                        ("New", "⌘N"),
-                        (model.chatStreaming ? "Stop" : "Back", "esc"),
-                    ]
+                hints: chatHints
             )
         }
         .onAppear { composer = true }
@@ -42,6 +33,24 @@ struct ChatView: View {
         let p = model.chatProviderId ?? "Provider"
         if let m = model.activeChatModel { return "\(p) · \(m)" }
         return p
+    }
+
+    private var chatHints: [(String, String)] {
+        if model.pendingApproval != nil {
+            return [("Allow", "↩"), ("Deny", "esc")]
+        }
+        var hints: [(String, String)] = [
+            ("Attach", "⌘O"),
+            ("Clipboard", "⌘⇧V"),
+            ("Screen", "⌘⇧S"),
+            ("Paste answer", "⌘↩"),
+            ("New", "⌘N"),
+        ]
+        if (model.activeProvider?.models.count ?? 0) > 1 {
+            hints.append(("Model", Theme.keyLabel(model.keymap["model_next"], "⌘⇧M")))
+        }
+        hints.append((model.chatStreaming ? "Stop" : "Back", "esc"))
+        return hints
     }
 
     private var header: some View {

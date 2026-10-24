@@ -375,6 +375,8 @@ final class Model {
             ("next", ["ctrl"], "n"), ("previous", ["ctrl"], "p"),
             ("dictate", ["cmd"], "d"), ("quick_look", ["cmd"], "y"), ("preview", ["cmd"], "i"),
             ("large_type", ["cmd"], "l"), ("settings", ["cmd"], ","),
+            ("provider_prev", ["cmd", "shift"], "["), ("provider_next", ["cmd", "shift"], "]"),
+            ("model_next", ["cmd", "shift"], "m"),
         ]
         var out: [String: KeyBinding] = [:]
         for (name, mods, key) in specs {
@@ -552,6 +554,8 @@ final class Model {
         }
         focusTick += 1
         refreshSettings()
+        // Warnings deferred during Welcome: show them once the panel is up again (P3-3).
+        flushPendingWarningsToast()
     }
 
     func hide(fromRust: Bool = false) {
@@ -560,12 +564,8 @@ final class Model {
         guard !hiding else { return }
         let up = launcher?.isVisible == true || seek?.isVisible == true || NSApp.isActive
         guard up else { return }
-        let flushOnboard = isOnboardingList
         hiding = true
-        defer {
-            hiding = false
-            if flushOnboard { flushPendingWarningsToast() }
-        }
+        defer { hiding = false }
         WindowPreview.shared.hide()
         launcher?.orderOut(nil)
         seek?.orderOut(nil)
@@ -894,7 +894,6 @@ final class Model {
             return
         }
         pendingWarningsToast = nil
-        // Flash directly: hide() can flush while mode is still the Welcome list.
         let more = pending.count > 1 ? " (+\(pending.count - 1) more)" : ""
         flash(pending[0] + more, error: true, thenHide: false)
     }
@@ -1105,6 +1104,9 @@ final class Model {
             do {
                 let frame = try WindowManager.apply(action: action, frac: frac, app: target)
                 if hud, frame != nil || action.hasPrefix("space-") { WindowHUD.shared.show(action: action, on: frame) }
+            } catch WindowManager.WMError.permission {
+                Model.shared.show()
+                Model.shared.permissionToast("Window commands", needs: "Accessibility")
             } catch {
                 Model.shared.show()
                 Model.shared.flash("\(error)", error: true, thenHide: false)
@@ -1118,6 +1120,9 @@ final class Model {
                 let apps = try WindowManager.captureLayout()
                 let displays = WindowManager.displaySignature()
                 Model.shared.confirmLayout(name: name, apps: apps, displays: displays, excluded: [], selected: 0)
+            } catch WindowManager.WMError.permission {
+                Model.shared.show()
+                Model.shared.permissionToast("Window commands", needs: "Accessibility")
             } catch {
                 Model.shared.show()
                 Model.shared.flash("\(error)", error: true, thenHide: false)
@@ -1203,6 +1208,9 @@ final class Model {
                         Model.shared.flash("Restored “\(name)” · still starting: \(names)", error: false, thenHide: true)
                     }
                 }
+            } catch WindowManager.WMError.permission {
+                Model.shared.show()
+                Model.shared.permissionToast("Window commands", needs: "Accessibility")
             } catch {
                 Model.shared.show()
                 Model.shared.flash("\(error)", error: true, thenHide: false)
@@ -2477,9 +2485,6 @@ final class Model {
             return
         }
         let (track, problem) = Spotify.state()
-        if let problem {
-            flash(problem, error: true, thenHide: false)
-        }
         let app = Spotify.appIcon
         let cover = Spotify.coverIcon(for: track)
         var items: [ListItem] = []
@@ -2493,6 +2498,7 @@ final class Model {
             items.append(ListItem(title: row.title, subtitle: row.subtitle.isEmpty ? nil : row.subtitle, icon: app, arg: row.verb))
             verbs.append(row.verb)
         }
+        // Flash after showLocalList: that path clears query/selected and would drop the toast (P3-2).
         showLocalList(id: "spotify", title: "Spotify", icon: cover, items: items) { i in
             guard verbs.indices.contains(i) else { return }
             let verb = verbs[i]
@@ -2513,6 +2519,9 @@ final class Model {
                 self.flash(problem, error: true, thenHide: false)
             }
             Model.shared.showSpotify()
+        }
+        if let problem {
+            flash(problem, error: true, thenHide: false)
         }
     }
 
@@ -2597,11 +2606,11 @@ final class Model {
             ListItem(
                 title: entry.name,
                 subtitle: i == 0 && entry.pid == front ? "the app you were in — Return for its shortcuts" : "running",
-                icon: "⌨️",
+                icon: "keyboard",
                 arg: String(i)
             )
         }
-        showLocalList(id: "shortcuts", title: "App Menu Shortcuts", icon: "⌨️", items: items) { i in
+        showLocalList(id: "shortcuts", title: "App Menu Shortcuts", icon: "keyboard", items: items) { i in
             guard entries.indices.contains(i) else { return }
             self.showAppShortcuts(NSRunningApplication(processIdentifier: entries[i].pid), name: entries[i].name)
         }
@@ -2625,10 +2634,10 @@ final class Model {
                     return
                 }
                 let items = found.enumerated().map { (i, item) in
-                    ListItem(title: item.title, subtitle: item.path, icon: "⌨️", arg: String(i), hotkey: item.shortcut)
+                    ListItem(title: item.title, subtitle: item.path, icon: "keyboard", arg: String(i), hotkey: item.shortcut)
                 }
                 model.showLocalList(
-                    id: "shortcuts:\(pid)", title: "\(name) — Shortcuts", icon: "⌨️", items: items,
+                    id: "shortcuts:\(pid)", title: "\(name) — Shortcuts", icon: "keyboard", items: items,
                     back: { Model.shared.showShortcutApps() }
                 ) { i in
                     guard found.indices.contains(i) else { return }
@@ -3343,8 +3352,9 @@ final class Model {
     }
 
     /// Typing or moving the selection drops a toast so Return cannot fire a stale action (N-1).
+    /// Undo toasts keep their ⌘Z window — arrows must not commit the delete (P3-1).
     private func clearToastOnInput() {
-        guard toastText != nil else { return }
+        guard toastText != nil, undoAction == nil else { return }
         dismissToast()
     }
 

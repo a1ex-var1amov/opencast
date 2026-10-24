@@ -88,6 +88,9 @@ quick_look = "Cmd+Y"
 preview = "Cmd+I"               # show / hide the preview pane
 large_type = "Cmd+L"            # show the typed text or answer huge on screen
 settings = "Cmd+,"              # open Settings
+# provider_prev = "Cmd+Shift+["  # previous AI provider in chat
+# provider_next = "Cmd+Shift+]"  # next AI provider in chat
+# model_next = "Cmd+Shift+M"     # next model for the current provider
 
 # ---------------------------------------------------------------------------
 # AI providers. Three wire formats cover everything:

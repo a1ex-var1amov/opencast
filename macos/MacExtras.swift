@@ -86,7 +86,7 @@ enum ContactsSearch {
                 item.copy = p.emails.first ?? p.phones.first ?? p.name
                 var md = "# \(p.name)\n\n"
                 if !p.org.isEmpty { md += "\(p.org)\n\n" }
-                for e in p.emails { md += "- ✉️ \(e)\n" }
+                for e in p.emails { md += "- \(e)\n" }
                 for ph in p.phones { md += "- 📞 \(ph)\n" }
                 item.markdown = md
                 return item
@@ -163,7 +163,7 @@ enum RemindersBridge {
                         var item = ListItem(
                             title: r.title,
                             subtitle: [due, r.list].filter { !$0.isEmpty }.joined(separator: " · "),
-                            icon: "☑️",
+                            icon: "checklist",
                             arg: String(i)
                         )
                         item.actions = [
@@ -173,7 +173,7 @@ enum RemindersBridge {
                         if !r.notes.isEmpty { item.markdown = "# \(r.title)\n\n\(r.notes)" }
                         return item
                     }
-                    model.showLocalList(id: "reminders", title: "Reminders — Return completes", icon: "☑️", items: items, action: { i in
+                    model.showLocalList(id: "reminders", title: "Reminders — Return completes", icon: "checklist", items: items, action: { i in
                         guard rows.indices.contains(i), let r = store.calendarItem(withIdentifier: rows[i].id) as? EKReminder else { return }
                         r.isCompleted = true
                         try? store.save(r, commit: true)
@@ -521,7 +521,12 @@ final class FocusController {
     private func updateStatusItem() {
         guard let button = statusItem?.button else { return }
         let left = minutesLeft
-        button.title = isPaused ? "⏸ \(left)m" : "🎯 \(left)m"
+        let symbol = isPaused ? "pause.fill" : "target"
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Focus")
+        image?.isTemplate = true
+        button.image = image
+        button.title = "\(left)m"
+        button.imagePosition = .imageLeading
         button.toolTip = goal.isEmpty ? "Focus" : "Focus: \(goal)"
     }
 

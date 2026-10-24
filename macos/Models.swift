@@ -94,7 +94,7 @@ struct Command: Identifiable, Equatable, Sendable {
             case .file: "File"
             case .snippet: "Snippet"
             case .clipboard: "Clipboard"
-            case .shortcut: "Shortcuts"
+            case .shortcut: "Shortcut"
             case .mcp: "MCP Tool"
             case .mcpResource: "MCP Resource"
             case .mcpPrompt: "MCP Prompt"

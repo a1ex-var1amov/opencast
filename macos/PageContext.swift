@@ -97,7 +97,7 @@ enum PageContext {
         var description: String {
             switch self {
             case .unsupported(let n): "\(n) can't share its page (Safari, Chrome, Arc, Brave, Edge and Vivaldi can)"
-            case .noAccess(let n): "Allow OpenCast to control \(n): System Settings › Privacy & Security › Automation"
+            case .noAccess(let n): "Allow OpenCast to control \(n) (Automation)"
             case .noPage(let n): "\(n) has no page open"
             case .fetch(let e): "Couldn't read the page: \(e)"
             }
@@ -124,6 +124,8 @@ extension Model {
             await MainActor.run {
                 let m = Model.shared
                 switch result {
+                case .failure(.noAccess):
+                    m.permissionToast("Page context", needs: "Automation")
                 case .failure(let e):
                     m.flash(e.description, error: true, thenHide: false)
                 case .success(let page):

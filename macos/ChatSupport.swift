@@ -66,15 +66,15 @@ extension Model {
             attachScreen()
             return true
         }
-        if mods == [.command, .shift], chars == "[" {
+        if keyMatches(event, "provider_prev") {
             cycleProvider(-1)
             return true
         }
-        if mods == [.command, .shift], chars == "]" {
+        if keyMatches(event, "provider_next") {
             cycleProvider(1)
             return true
         }
-        if mods == [.command, .shift], chars == "m" {
+        if keyMatches(event, "model_next") {
             cycleModel(1)
             return true
         }
