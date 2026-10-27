@@ -5,6 +5,8 @@ works with **any provider you choose** and no account, subscription or licence
 key. MIT licensed. The panel is SwiftUI and the engine is Rust. macOS first;
 the core is portable.
 
+![OpenCast demo](docs/demo.gif)
+
 - **⌥Space** opens a panel: fuzzy search over apps, script commands, AI commands
   and quicklinks; type maths for an inline calculator.
 - **Tab** turns whatever you typed into an AI chat. Answers stream in; **⌘↵**
@@ -72,8 +74,17 @@ the core is portable.
 Requirements: Rust (stable) and the Xcode command-line tools.
 
 ```bash
+git clone git@github.com:a1ex-var1amov/opencast.git
+cd opencast
+./install.command          # builds, installs ~/Applications/OpenCast.app, launches it
+```
+
+`install.command` wraps `./build-app.command` (dev-signed, not notarized). For
+tests or a rebuild without launching:
+
+```bash
 cargo test                 # core tests: providers, scripts, search, calculator
-./build-app.command        # build and install ~/Applications/OpenCast.app
+./build-app.command        # build and install only
 ```
 
 On first launch OpenCast writes `~/.config/opencast/config.toml` and a few
