@@ -1255,11 +1255,14 @@ final class Model {
             if clicking, seekScan == nil { cancelClick() }
             flash(message, error: true, thenHide: false)
         case .output(let title, let text):
+            // show() clears .output → .search; open the panel before mutating mode (P10-1).
+            if launcher?.isVisible != true { show() }
             outputMarkdown = false
             let body = title == "OpenCast Doctor" ? withRecentMessages(text) : text
             mode = .output(title: title, text: body)
             noteContentChanged()
         case .markdown(let title, let text):
+            if launcher?.isVisible != true { show() }
             outputMarkdown = true
             mode = .output(title: title, text: text)
             noteContentChanged()
@@ -1277,6 +1280,7 @@ final class Model {
         case .layout(let op, let name, let apps):
             if op == "capture" { captureLayout(name: name) } else { applyLayout(name: name, apps: apps) }
         case .list(let command, let items, let filter, let options):
+            if launcher?.isVisible != true { show() }
             mode = .list(command: command, items: items, filter: filter)
             listOptions = options
             listBeforeActions = nil
@@ -1300,6 +1304,7 @@ final class Model {
             if clicking, seekScan == nil { cancelClick() }
             flash(message, error: true, thenHide: false)
         case .query(let q):
+            if launcher?.isVisible != true { show() }
             mode = .search
             query = q
             selected = 0
@@ -2974,7 +2979,10 @@ final class Model {
 
     /// Registry commands can have global hotkeys; transient rows cannot.
     static func takesHotkey(_ id: String) -> Bool {
-        let transient = ["clip:", "shot:", "item:", "local:", "note:", "chat:", "emoji:", "file:", "bm:", "calc:", "event:", "define:", "spell:", "quit:", "warning:"]
+        let transient = [
+            "clip:", "shot:", "item:", "local:", "note:", "chat:", "emoji:", "file:", "bm:", "calc:",
+            "event:", "define:", "spell:", "quit:", "warning:", "key:", "prefix:", "shortcut:",
+        ]
         return !transient.contains { id.hasPrefix($0) }
     }
 

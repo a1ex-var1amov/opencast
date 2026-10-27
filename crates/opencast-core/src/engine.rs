@@ -800,15 +800,15 @@ const KEY_LABELS: &[(&str, &str)] = &[
     ("paste_answer", "Paste answer"),
     ("copy_answer", "Copy answer"),
     ("new_chat", "New chat"),
-    ("next", "Next / Previous row"),
-    ("previous", "Next / Previous row"),
+    ("next", "Next row"),
+    ("previous", "Previous row"),
     ("dictate", "Dictate"),
     ("quick_look", "Quick Look"),
     ("preview", "Preview pane"),
     ("large_type", "Large Type"),
     ("settings", "Settings"),
-    ("provider_prev", "Previous / Next provider"),
-    ("provider_next", "Previous / Next provider"),
+    ("provider_prev", "Previous provider"),
+    ("provider_next", "Next provider"),
     ("model_next", "Next model"),
 ];
 
@@ -2557,9 +2557,10 @@ impl Engine {
             }
         }
 
-        // OpenCast Keys fills `shortcut`: system chords (already matched), then
-        // live `[keys]`, then typed prefixes.
+        // OpenCast Keys fills `shortcut`: keep only the five system chords from the
+        // fuzzy pass (drop Shortcuts.app / CheatSheet hits), then live `[keys]`, then prefixes.
         if ql == "shortcut" {
+            out.retain(|c| c.id.starts_with("shortcut:"));
             let keys = self.key_commands();
             let prefixes = prefix_commands();
             let room = limit.saturating_sub(keys.len() + prefixes.len());
@@ -3039,7 +3040,7 @@ impl Engine {
                 .find(|(n, _)| *n == name)
                 .map(|(_, s)| s)
                 .unwrap_or("");
-            return Ok(Plan::Hint(format!("{title}: {spec}")));
+            return Ok(Plan::Hint(format!("Press {spec} for {title}")));
         }
         match id {
             "shortcut:return" => {
@@ -3587,6 +3588,15 @@ mod tests {
         assert_eq!(WORD_PREFIXES[1].0, "define");
         let e = engine();
         let rows = e.search("shortcut", 120);
+        assert!(
+            rows.first().is_some_and(|c| c.id.starts_with("shortcut:")),
+            "list opens with a system chord, got {:?}",
+            rows.first().map(|c| &c.id)
+        );
+        assert!(
+            rows.iter().all(|c| !c.id.starts_with("sc:")),
+            "no Shortcuts.app rows: {rows:?}"
+        );
         for id in [
             "prefix:spell",
             "prefix:define",
@@ -3614,7 +3624,10 @@ mod tests {
         assert!(spell > live, "prefixes follow the live [keys]");
         assert!(matches!(e.plan("prefix:bm", &[]).unwrap(), Plan::FillQuery(q) if q == "bm "));
         assert!(matches!(e.plan("prefix:chat history", &[]).unwrap(), Plan::FillQuery(q) if q == "chat history "));
-        assert!(matches!(e.plan("key:actions", &[]).unwrap(), Plan::Hint(h) if h.contains("Cmd+K")));
+        assert!(matches!(
+            e.plan("key:actions", &[]).unwrap(),
+            Plan::Hint(h) if h == "Press Cmd+K for Actions"
+        ));
     }
 
     #[test]

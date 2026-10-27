@@ -71,7 +71,10 @@ pub fn tracked(id: &str) -> bool {
         || id.starts_with("item:")
         || id.starts_with("menu:")
         || id.starts_with("file:")
-        || id.starts_with("warning:"))
+        || id.starts_with("warning:")
+        || id.starts_with("key:")
+        || id.starts_with("prefix:")
+        || id.starts_with("shortcut:"))
 }
 
 impl Usage {
@@ -247,6 +250,7 @@ mod tests {
         assert_eq!(c.get("window:left-half"), Some(&2));
         assert_eq!(c.len(), 1);
         assert_eq!(boost(&c, "window:left-half"), 6);
+        assert!(!tracked("key:actions") && !tracked("prefix:bm"));
     }
 
     #[test]

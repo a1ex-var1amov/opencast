@@ -798,6 +798,7 @@ private struct AboutPane: View {
                     }
                 }
             }
+            .controlSize(.small)
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text("Releases from GitHub repo")
