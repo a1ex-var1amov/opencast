@@ -178,6 +178,8 @@ final class Model {
     var fallbackThreshold = 3
     /// App that was frontmost when the panel opened (AX target for selection / snaps).
     private(set) var previousApp: NSRunningApplication?
+    /// Launcher opened while OpenCast was already active (Settings / sticky / Notes).
+    private var openedFromInside = false
 
     var silentOutput: AiOutput?
     var silentBuffer = ""
@@ -520,6 +522,7 @@ final class Model {
         if case .args = mode { mode = .search }
         if case .output = mode { mode = .search }
         guard let launcher else { return }
+        openedFromInside = NSApp.isActive // launcher opened from Settings / a sticky / Notes
         if !NSApp.isActive, let front = WindowManager.frontApp() {
             previousApp = front
         }
@@ -560,7 +563,7 @@ final class Model {
         flushPendingWarningsToast()
     }
 
-    func hide(fromRust: Bool = false) {
+    func hide(fromRust: Bool = false, fromBlur: Bool = false) {
         // ExecResult hide is applied after the seek event. Leave the overlay up.
         if clicking || seekScan != nil { return }
         guard !hiding else { return }
@@ -571,10 +574,13 @@ final class Model {
         WindowPreview.shared.hide()
         launcher?.orderOut(nil)
         seek?.orderOut(nil)
-        // Preview/HUD are ordered out above. Settings, Notes, stickies stay up (P11-1).
-        let others = NSApp.windows.contains { $0.isVisible && $0 !== launcher && $0 !== seek }
-        if others {
-            previousApp?.activate()
+        // Settings, Notes, stickies stay up (P11-1).
+        if let other = NSApp.windows.first(where: { $0.isVisible && $0 !== launcher && $0 !== seek }) {
+            // Dismissed from inside (Esc, a command): hand focus back. If the user clicked
+            // another app, leave focus where it already moved (fromBlur / inactive).
+            if !fromBlur, NSApp.isActive, openedFromInside || previousApp?.activate() != true {
+                other.makeKey()
+            }
         } else {
             NSApp.hide(nil)
         }
@@ -590,7 +596,7 @@ final class Model {
             keepOnBlurOnce = false
             return
         }
-        hide()
+        hide(fromBlur: true)
     }
 
     func noteContentChanged() {
