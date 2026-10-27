@@ -571,7 +571,13 @@ final class Model {
         WindowPreview.shared.hide()
         launcher?.orderOut(nil)
         seek?.orderOut(nil)
-        NSApp.hide(nil)
+        // Preview/HUD are ordered out above. Settings, Notes, stickies stay up (P11-1).
+        let others = NSApp.windows.contains { $0.isVisible && $0 !== launcher && $0 !== seek }
+        if others {
+            previousApp?.activate()
+        } else {
+            NSApp.hide(nil)
+        }
         if !fromRust {
             Task.detached { _ = Engine.call(["op": "hidden"]) }
         }

@@ -13,8 +13,8 @@ final class SettingsWindowController {
     static let shared = SettingsWindowController()
     private var window: NSWindow?
 
-    func show(tab: SettingsTab = .general) {
-        SettingsState.shared.tab = tab
+    func show(tab: SettingsTab? = nil) {
+        if let tab { SettingsState.shared.tab = tab }
         SettingsState.shared.load()
         if window == nil {
             let w = NSWindow(

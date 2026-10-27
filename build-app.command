@@ -48,4 +48,7 @@ if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
 fi
 rm -rf "$HOME/Applications/OpenCast.app"
 ditto "$APP" "$HOME/Applications/OpenCast.app" || exit 1
+# Drop the debug bundle so Launch Services does not keep routing opencast:// to it (P11-3).
+rm -rf target/debug/OpenCast.app
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$HOME/Applications/OpenCast.app"
 echo "== Installed to ~/Applications/OpenCast.app =="
