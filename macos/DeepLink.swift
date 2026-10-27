@@ -20,8 +20,11 @@ enum DeepLink: Equatable {
         switch host {
         case "search":
             let q = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-                .queryItems?.first(where: { $0.name == "q" })?.value ?? ""
-            return .search(q)
+                .queryItems?.first(where: { $0.name == "q" })?.value
+            if let q { return .search(q) }
+            // opencast://search/spot — path form when there is no ?q=
+            let path = String(url.path.drop(while: { $0 == "/" }))
+            return .search(decode(path))
         case "run":
             // opencast://run/builtin:reload — the id may contain colons.
             let id = String(url.path.drop(while: { $0 == "/" }))

@@ -25,6 +25,7 @@ check(DeepLink.parse(url("opencast://search?q=coffee")) == .search("coffee"), "s
 check(DeepLink.parse(url("opencast://search")) == .search(""), "search with no query clears the field")
 check(DeepLink.parse(url("opencast://search?q=")) == .search(""), "search?q= is empty, not missing")
 check(DeepLink.parse(url("opencast://search?q=a%20b%20c")) == .search("a b c"), "query is percent-decoded")
+check(DeepLink.parse(url("opencast://search/spot")) == .search("spot"), "search/spot path form")
 check(DeepLink.parse(url("opencast://run/builtin:reload")) == .run("builtin:reload"), "run/ keeps colons in the id")
 check(DeepLink.parse(url("opencast://run/ai%3Afix-grammar")) == .run("ai:fix-grammar"), "run/ decodes an encoded colon")
 check(DeepLink.parse(url("opencast:///run/builtin:reload")) == .run("builtin:reload"), "run/ also works without a host")

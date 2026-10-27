@@ -3335,6 +3335,8 @@ final class Model {
             execute(id: "builtin:import-alfred", args: [path])
         case .search(let q):
             show()
+            if case .chat = mode { stopStream() }
+            mode = .search
             query = q
             selected = 0
             listStart = 0
