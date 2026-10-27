@@ -180,5 +180,31 @@ check(Command(["id": "builtin:reload", "title": "Reload Commands", "kind": "buil
 // Scenario 2: "Copied" toast up → Esc dismisses toast and also clears/hides as usual (one keypress).
 // Scenario 3: "Thinking…" during a stream → Esc stops the stream (toast dismiss is a side effect).
 
+// MARK: - Builtin icons map to Glyphs.byEmoji (P13-1)
+
+do {
+    let src = (try? String(contentsOfFile: "crates/opencast-core/src/engine.rs", encoding: .utf8)) ?? ""
+    let pattern = #"Builtin::\w+,\s*"[a-z0-9-]+",\s*"[^"]*",\s*"([^"]*)""#
+    let re = try! NSRegularExpression(pattern: pattern)
+    let ns = src as NSString
+    var offenders: [String] = []
+    re.enumerateMatches(in: src, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
+        guard let match, match.numberOfRanges > 1 else { return }
+        let icon = ns.substring(with: match.range(at: 1))
+        let key = String(icon.unicodeScalars.filter { $0.value != 0xfe0f && $0.value != 0xfe0e })
+        let bareSymbol = key.count > 1 && key.unicodeScalars.allSatisfy {
+            CharacterSet.alphanumerics.contains($0) || $0 == "."
+        }
+        if !bareSymbol, Glyphs.byEmoji[key] == nil {
+            offenders.append(icon.isEmpty ? "(empty)" : icon)
+        }
+    }
+    let uniq = Array(Set(offenders)).sorted()
+    check(uniq.isEmpty, "every BUILTINS icon is in Glyphs.byEmoji or a bare SF Symbol name")
+    if !uniq.isEmpty {
+        print("  offenders: \(uniq.joined(separator: ", "))")
+    }
+}
+
 print("\n\(checks - failures)/\(checks) panel logic checks passed")
 exit(failures == 0 ? 0 : 1)

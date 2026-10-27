@@ -154,6 +154,9 @@ struct ChatView: View {
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.accent.opacity(0.35), lineWidth: 1))
         .padding(.horizontal, 14)
         .padding(.top, 6)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Allow \(a.title)?")
+        .accessibilityHint("Return allows, Escape denies")
     }
 
     private var attachmentChips: some View {
@@ -216,6 +219,8 @@ struct ChatView: View {
                     )
                 }
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("You")
         } else {
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(turn.tools.enumerated()), id: \.offset) { _, tool in
@@ -237,6 +242,8 @@ struct ChatView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Assistant")
         }
     }
 

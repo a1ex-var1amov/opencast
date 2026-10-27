@@ -345,17 +345,17 @@ struct SettingsView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
+                    if !state.status.isEmpty {
+                        Text(state.status)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
                     switch state.tab {
                     case .general: GeneralPane(state: state)
                     case .ai: AIPane(state: state)
                     case .extensions: ExtensionsPane(state: state)
                     case .permissions: PermissionsPane(state: state)
                     case .about: AboutPane(state: state)
-                    }
-                    if !state.status.isEmpty {
-                        Text(state.status)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
                     }
                 }
                 .padding(24)
@@ -364,6 +364,7 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 680, minHeight: 540)
+        .onChange(of: state.tab) { _, _ in state.status = "" }
     }
 }
 
