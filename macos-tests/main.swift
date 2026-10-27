@@ -188,8 +188,10 @@ do {
     let re = try! NSRegularExpression(pattern: pattern)
     let ns = src as NSString
     var offenders: [String] = []
+    var matches = 0
     re.enumerateMatches(in: src, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
         guard let match, match.numberOfRanges > 1 else { return }
+        matches += 1
         let icon = ns.substring(with: match.range(at: 1))
         let key = String(icon.unicodeScalars.filter { $0.value != 0xfe0f && $0.value != 0xfe0e })
         let bareSymbol = key.count > 1 && key.unicodeScalars.allSatisfy {
@@ -199,6 +201,7 @@ do {
             offenders.append(icon.isEmpty ? "(empty)" : icon)
         }
     }
+    check(matches >= 50, "glyph guard found the BUILTINS table in engine.rs (\(matches))")
     let uniq = Array(Set(offenders)).sorted()
     check(uniq.isEmpty, "every BUILTINS icon is in Glyphs.byEmoji or a bare SF Symbol name")
     if !uniq.isEmpty {

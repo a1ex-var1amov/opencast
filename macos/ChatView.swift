@@ -218,9 +218,10 @@ struct ChatView: View {
                         )
                     )
                 }
+                // ponytail: .accessibilityValue is dropped after combine on this bubble (P14-1)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("You: \(turn.content)")
             }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("You")
         } else {
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(turn.tools.enumerated()), id: \.offset) { _, tool in
@@ -244,6 +245,7 @@ struct ChatView: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Assistant")
+            .accessibilityValue(turn.error.map { "\(turn.content) \($0)" } ?? turn.content)
         }
     }
 
