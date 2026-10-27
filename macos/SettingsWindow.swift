@@ -141,7 +141,7 @@ final class SettingsState {
         }
     }
 
-    /// Open config.toml; jump to `section` when Cursor/VS Code is on PATH (N-6).
+    /// Open config.toml; `--goto` only when Cursor/VS Code is the default .toml handler (P8-5).
     func openConfigSection(_ section: String? = nil) {
         let file = URL(fileURLWithPath: configDir).appendingPathComponent("config.toml")
         guard let section else {
@@ -162,14 +162,23 @@ final class SettingsState {
         }
         if let lineN {
             status = "\(section) is at line \(lineN)"
-            let bins = ["/usr/local/bin/cursor", "/opt/homebrew/bin/cursor",
-                        "/usr/local/bin/code", "/opt/homebrew/bin/code"]
-            if let bin = bins.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
-                let p = Process()
-                p.executableURL = URL(fileURLWithPath: bin)
-                p.arguments = ["--goto", "\(file.path):\(lineN)"]
-                try? p.run()
-                return
+            if let app = NSWorkspace.shared.urlForApplication(toOpen: file) {
+                let name = app.lastPathComponent
+                let bins: [String]
+                if name == "Cursor.app" {
+                    bins = ["/usr/local/bin/cursor", "/opt/homebrew/bin/cursor"]
+                } else if name == "Visual Studio Code.app" {
+                    bins = ["/usr/local/bin/code", "/opt/homebrew/bin/code"]
+                } else {
+                    bins = []
+                }
+                if let bin = bins.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
+                    let p = Process()
+                    p.executableURL = URL(fileURLWithPath: bin)
+                    p.arguments = ["--goto", "\(file.path):\(lineN)"]
+                    try? p.run()
+                    return
+                }
             }
         } else {
             status = "\(section) — not found in config.toml"
@@ -327,12 +336,13 @@ struct SettingsView: View {
     @Bindable var state: SettingsState
 
     var body: some View {
-        NavigationSplitView {
+        HStack(spacing: 0) {
             List(SettingsTab.allCases, selection: Binding(get: { state.tab }, set: { if let t = $0 { state.tab = t } })) { tab in
                 Label(tab.rawValue, systemImage: tab.symbol).tag(tab)
             }
-            .navigationSplitViewColumnWidth(170)
-        } detail: {
+            .listStyle(.sidebar)
+            .frame(width: 170)
+            Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     switch state.tab {
@@ -351,6 +361,7 @@ struct SettingsView: View {
                 .padding(24)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 680, minHeight: 540)
     }
@@ -457,7 +468,7 @@ private struct GeneralPane: View {
             }
         }
         PaneSection(title: "Config") {
-            Text("Everything else is in config.toml. These open the file at the right section when Cursor or VS Code is available.")
+            Text("Everything else is in config.toml. These open the file at the right section when Cursor or VS Code is your editor for .toml.")
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button("Open config.toml") { state.openConfigSection() }
@@ -465,6 +476,7 @@ private struct GeneralPane: View {
                 Button("Snippets…") { state.openConfigSection("[[snippets]]") }
                 Button("MCP servers…") { state.openConfigSection("[[mcp_servers]]") }
             }
+            .controlSize(.small)
         }
         PaneSection(title: "Search") {
             VStack(alignment: .leading, spacing: 2) {
@@ -564,9 +576,8 @@ private struct AIPane: View {
                         Text("no key").font(.caption).foregroundStyle(.orange)
                     }
                     Button("Test connection") { state.testProvider(p) }
-                        .buttonStyle(.borderless)
+                        .controlSize(.small)
                         .disabled(state.providerTestId != nil)
-                        .accessibilityLabel("Test connection")
                     Button(role: .destructive) { state.removeProvider(p.id) } label: { Image(systemName: "trash") }
                         .buttonStyle(.borderless)
                         .accessibilityLabel("Remove provider")
@@ -578,19 +589,22 @@ private struct AIPane: View {
             }
         }
         PaneSection(title: "Add a provider") {
-            Picker("Preset", selection: Binding(get: { preset.id }, set: { id in
-                if let p = Preset.all.first(where: { $0.id == id }) {
-                    preset = p
-                    newId = p.id == "custom" ? "" : p.id
-                    kind = p.kind
-                    baseUrl = p.baseUrl
-                    model = p.model
-                }
-            })) {
-                ForEach(Preset.all) { Text($0.id).tag($0.id) }
-            }
-            .frame(width: 260)
             Grid(alignment: .leading, verticalSpacing: 8) {
+                GridRow {
+                    Text("Preset")
+                    Picker("", selection: Binding(get: { preset.id }, set: { id in
+                        if let p = Preset.all.first(where: { $0.id == id }) {
+                            preset = p
+                            newId = p.id == "custom" ? "" : p.id
+                            kind = p.kind
+                            baseUrl = p.baseUrl
+                            model = p.model
+                        }
+                    })) {
+                        ForEach(Preset.all) { Text($0.id).tag($0.id) }
+                    }
+                    .labelsHidden()
+                }
                 GridRow {
                     Text("Id")
                     TextField("claude", text: $newId).textFieldStyle(.roundedBorder)
@@ -675,7 +689,7 @@ private struct PermissionsPane: View {
             )
             PermissionRow(
                 title: "Screen Recording",
-                detail: "Click Text (on-screen OCR) and attaching screen text to chats. Rebuilt or dev binaries often need the checkbox toggled off and on again.",
+                detail: "Click Text (on-screen OCR) and attaching screen text to chats.",
                 granted: CGPreflightScreenCaptureAccess(),
                 pane: "Privacy_ScreenCapture",
                 request: { _ = CGRequestScreenCaptureAccess() }
@@ -729,15 +743,27 @@ private struct PermissionRow: View {
     var pane: String
     var request: () -> Void
 
+    private var accessLabel: String {
+        switch granted {
+        case true: "\(title), granted. \(detail)"
+        case false: "\(title), not granted. \(detail)"
+        case nil: "\(title). \(detail)"
+        }
+    }
+
     var body: some View {
         let ok = granted == true
         HStack(alignment: .top) {
-            Image(systemName: granted == nil ? "info.circle" : (ok ? "checkmark.circle.fill" : "circle.dashed"))
-                .foregroundStyle(ok ? .green : .secondary)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 13, weight: .semibold))
-                Text(detail).font(.caption).foregroundStyle(.secondary)
+            HStack(alignment: .top) {
+                Image(systemName: granted == nil ? "info.circle" : (ok ? "checkmark.circle.fill" : "circle.dashed"))
+                    .foregroundStyle(ok ? .green : .secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.system(size: 13, weight: .semibold))
+                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                }
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(accessLabel)
             Spacer()
             if granted != true {
                 Button(granted == nil ? "Open System Settings…" : "Allow…") {
@@ -761,6 +787,8 @@ private struct AboutPane: View {
                 .foregroundStyle(.secondary)
             HStack {
                 Button("Open Config Folder") { NSWorkspace.shared.open(URL(fileURLWithPath: state.configDir)) }
+                Button("OpenCast Keys") { Model.shared.perform("builtin:shortcuts") }
+                Button("Welcome") { Model.shared.perform("builtin:welcome") }
                 Button("Check for Updates") {
                     Task.detached {
                         let r = Engine.call(["op": "execute", "id": "builtin:check-updates", "args": [String](), "quiet": true])

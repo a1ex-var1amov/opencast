@@ -354,5 +354,6 @@ enum Theme {
         "\u{1F9EE}": "plus.forwardslash.minus", // 🧮
         "\u{1F418}": "globe", // 🐙 used in quicklinks — keep link via kind
         "\u{1F50D}": "magnifyingglass", // 🔎
+        "\u{1FA7A}": "stethoscope", // doctor
     ]
 }

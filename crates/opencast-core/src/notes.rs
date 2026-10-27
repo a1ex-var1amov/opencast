@@ -79,14 +79,19 @@ pub fn get(dir: &Path, id: &str) -> Option<Note> {
     load_all(dir).into_iter().find(|n| n.id == id)
 }
 
+/// `note` / `notes`. Search matches these; OpenCast Keys lists them.
+pub const PREFIXES: &[(&str, &str)] = &[("note", "Search notes"), ("notes", "Search notes")];
+
 /// The search needle when `query` is a notes query (`note`, `notes x`), else None.
 pub fn needle(query: &str) -> Option<String> {
     let q = query.trim().to_lowercase();
-    if q == "note" || q == "notes" {
-        return Some(String::new());
-    }
-    if let Some(rest) = q.strip_prefix("note ").or_else(|| q.strip_prefix("notes ")) {
-        return Some(rest.trim().to_string());
+    for (prefix, _) in PREFIXES {
+        if q == *prefix {
+            return Some(String::new());
+        }
+        if let Some(rest) = q.strip_prefix(&format!("{prefix} ")) {
+            return Some(rest.trim().to_string());
+        }
     }
     None
 }

@@ -10,8 +10,8 @@ final class OpenCastStatusBar: NSObject, NSMenuDelegate {
     func install() {
         guard statusItem == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        // Template SF Symbol. The app icon is an opaque squircle; templating it draws a solid square.
-        let image = NSImage(systemSymbolName: "menubar.dock.rectangle", accessibilityDescription: "OpenCast")
+        // Same sparkles glyph as AI / OpenCast Keys family; template for menu-bar ink.
+        let image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "OpenCast")
             ?? NSImage(size: NSSize(width: 16, height: 16))
         image.isTemplate = true
         item.button?.image = image
@@ -43,6 +43,12 @@ final class OpenCastStatusBar: NSObject, NSMenuDelegate {
         let doctor = NSMenuItem(title: "OpenCast Doctor", action: #selector(runDoctor), keyEquivalent: "")
         doctor.target = self
         menu.addItem(doctor)
+        let keys = NSMenuItem(title: "OpenCast Keys", action: #selector(openKeys), keyEquivalent: "")
+        keys.target = self
+        menu.addItem(keys)
+        let welcome = NSMenuItem(title: "Welcome…", action: #selector(openWelcome), keyEquivalent: "")
+        welcome.target = self
+        menu.addItem(welcome)
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit", action: #selector(quitApp), keyEquivalent: "")
         quit.target = self
@@ -81,6 +87,14 @@ final class OpenCastStatusBar: NSObject, NSMenuDelegate {
 
     @objc private func runDoctor() {
         Model.shared.perform("builtin:doctor")
+    }
+
+    @objc private func openKeys() {
+        Model.shared.perform("builtin:shortcuts")
+    }
+
+    @objc private func openWelcome() {
+        Model.shared.perform("builtin:welcome")
     }
 
     @objc private func quitApp() {

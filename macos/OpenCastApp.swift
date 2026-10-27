@@ -108,13 +108,10 @@ final class Model {
     var toastAction: (() -> Void)?
     /// Last 20 toast strings (Doctor / debug).
     var recentToasts: [String] = []
-    /// Config/engine warnings kept for the footer count (FS-1).
+    /// Config/engine warnings. The footer shows the count; an empty query also
+    /// inserts a Doctor row at the top of the list.
     var warnings: [String] = []
     var warningCount: Int { warnings.count }
-    /// Empty search with a config warning: Return opens Doctor (FS-1).
-    var openDoctorOnReturn: Bool {
-        !isListMode && trimmedQuery.isEmpty && warningCount > 0
-    }
     /// Engine warnings deferred while the Welcome list is open (N-5).
     private var pendingWarningsToast: [String]?
     /// Soft-delete undo (⌘Z) while the grace toast is up.
@@ -318,7 +315,8 @@ final class Model {
         case .app: return "Open"
         case .clipboard: return "Show"
         case .builtin:
-            let key = command.id.hasPrefix("builtin:") ? String(command.id.dropFirst(8)) : command.id
+            let id = command.id.hasPrefix("warning:") ? String(command.id.dropFirst("warning:".count)) : command.id
+            let key = id.hasPrefix("builtin:") ? String(id.dropFirst(8)) : id
             if key.hasPrefix("theme-") || key.hasPrefix("presentation-") || key.hasPrefix("stay-awake")
                 || key.hasPrefix("set-")
             {
@@ -935,6 +933,25 @@ final class Model {
                 ), at: 0)
             }
         }
+        // One config warning used to steal bare Return. A fresh list keeps the
+        // highlight on the row beneath it. A redelivery must not kick an arrow
+        // off the warning row (P7-6).
+        if trimmedQuery.isEmpty, warningCount > 0 {
+            let n = warningCount
+            let staying = selected == 0 && commands.first?.id == "warning:doctor"
+            parsed.insert(Command(
+                id: "warning:doctor",
+                title: n == 1 ? "1 warning" : "\(n) warnings",
+                subtitle: "Open OpenCast Doctor",
+                icon: "\u{1FA7A}",
+                kind: .builtin,
+                arguments: [],
+                hotkey: nil
+            ), at: 0)
+            if selected == 0, parsed.count > 1, !staying {
+                selected = 1
+            }
+        }
         commands = parsed
         if selected >= rows.count {
             selected = 0
@@ -944,9 +961,10 @@ final class Model {
         noteContentChanged()
         if pendingReturn {
             pendingReturn = false
-            selected = 0
+            let i = parsed.first?.id == "warning:doctor" && parsed.count > 1 ? 1 : 0
+            selected = i
             listStart = 0
-            activate(0)
+            activate(i)
         }
         updatePreview()
     }
@@ -1509,10 +1527,6 @@ final class Model {
             }
         }
         if mods.isEmpty, event.keyCode == 36 || event.keyCode == 76 {
-            if openDoctorOnReturn {
-                perform("builtin:doctor")
-                return true
-            }
             // Typed fast and hit Return before this query's rows arrived: wait for
             // them (a few ms) instead of running the previous query's top hit.
             if !isListMode, deliveredGen < searchGen, selected == 0 {
@@ -2960,7 +2974,7 @@ final class Model {
 
     /// Registry commands can have global hotkeys; transient rows cannot.
     static func takesHotkey(_ id: String) -> Bool {
-        let transient = ["clip:", "shot:", "item:", "local:", "note:", "chat:", "emoji:", "file:", "bm:", "calc:", "event:", "define:", "spell:", "quit:"]
+        let transient = ["clip:", "shot:", "item:", "local:", "note:", "chat:", "emoji:", "file:", "bm:", "calc:", "event:", "define:", "spell:", "quit:", "warning:"]
         return !transient.contains { id.hasPrefix($0) }
     }
 
@@ -3417,10 +3431,12 @@ final class Model {
         finalizeUndoDelete()
     }
 
-    /// Typing or moving the selection drops a toast so Return cannot fire a stale action (N-1).
+    /// Typing or moving the selection drops an actionable toast so Return cannot
+    /// fire a stale action (N-1). A plain toast keeps its timer (P6-1); actionable
+    /// ones are thenHide: false, so dismissing them loses nothing (P7-1).
     /// Undo toasts keep their ⌘Z window — arrows must not commit the delete (P3-1).
     private func clearToastOnInput() {
-        guard toastText != nil, undoAction == nil else { return }
+        guard toastText != nil, undoAction == nil, toastAction != nil else { return }
         dismissToast()
     }
 

@@ -235,7 +235,7 @@ enum UniversalActions {
             UAction(id: "ua:move-to", title: "Move To…", icon: "arrow.right") {
                 transfer(files, move: true, model: model)
             },
-            UAction(id: "ua:copy-to", title: "Copy To…", icon: "⧉") {
+            UAction(id: "ua:copy-to", title: "Copy To…", icon: "doc.on.doc") {
                 transfer(files, move: false, model: model)
             },
             UAction(id: "ua:trash", title: "Move to Trash", icon: "trash.fill", key: "cmd+backspace") {

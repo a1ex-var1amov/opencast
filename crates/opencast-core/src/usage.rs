@@ -70,7 +70,8 @@ pub fn tracked(id: &str) -> bool {
         || id.starts_with("chat:")
         || id.starts_with("item:")
         || id.starts_with("menu:")
-        || id.starts_with("file:"))
+        || id.starts_with("file:")
+        || id.starts_with("warning:"))
 }
 
 impl Usage {

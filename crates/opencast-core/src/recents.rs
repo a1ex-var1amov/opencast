@@ -152,11 +152,14 @@ pub fn scan_here() -> Vec<Visit> {
     collect(&home)
 }
 
+/// `recent` / `recents`. Search matches these; OpenCast Keys lists them.
+pub const PREFIXES: &[(&str, &str)] = &[("recents", "Recent files"), ("recent", "Recent files")];
+
 /// `recent …` / `recents …` lists them; a plain 3+ letter query shows a few.
 pub fn needle(query: &str) -> (Option<String>, bool) {
     let q = query.trim().to_lowercase();
-    for prefix in ["recents", "recent"] {
-        if q == prefix {
+    for (prefix, _) in PREFIXES {
+        if q == *prefix {
             return (Some(String::new()), true);
         }
         if let Some(rest) = q.strip_prefix(&format!("{prefix} ")) {

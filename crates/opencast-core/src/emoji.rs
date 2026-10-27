@@ -398,14 +398,17 @@ const EMOJI: &[(&str, &str, &str, &[&str])] = &[
     ("electric_plug", "🔌", "Electric Plug", &[]),
 ];
 
+/// `emoji` / `emo` / `emojis`. Search matches these; OpenCast Keys lists them.
+pub const PREFIXES: &[(&str, &str)] = &[("emojis", "Emoji"), ("emoji", "Emoji"), ("emo", "Emoji")];
+
 /// The needle when `query` asks for emoji (`emoji`, `emo smile`), else None.
 pub fn needle(query: &str) -> Option<String> {
     let q = query.trim().to_lowercase();
-    if q == "emoji" || q == "emo" || q == "emojis" {
-        return Some(String::new());
-    }
-    for p in ["emojis ", "emoji ", "emo "] {
-        if let Some(rest) = q.strip_prefix(p) {
+    for (prefix, _) in PREFIXES {
+        if q == *prefix {
+            return Some(String::new());
+        }
+        if let Some(rest) = q.strip_prefix(&format!("{prefix} ")) {
             return Some(rest.trim().to_string());
         }
     }

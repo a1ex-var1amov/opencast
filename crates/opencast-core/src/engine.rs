@@ -181,14 +181,35 @@ const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
         "shortcuts",
         "OpenCast Keys",
         "⌨️",
-        &["hotkey", "keys", "keymap", "tab", "click", "shortcut", "opencast"],
+        &[
+            "hotkey",
+            "keys",
+            "keymap",
+            "tab",
+            "click",
+            "shortcut",
+            "opencast",
+            "help",
+            "tips",
+            "docs",
+            "cheatsheet",
+        ],
     ),
     (
         Builtin::Welcome,
         "welcome",
         "Welcome",
         "⌨️",
-        &["onboard", "setup", "permissions", "hotkey", "start"],
+        &[
+            "onboard",
+            "setup",
+            "permissions",
+            "hotkey",
+            "start",
+            "help",
+            "tips",
+            "getting started",
+        ],
     ),
     (
         Builtin::StayAwake,
@@ -646,16 +667,7 @@ const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
         "cheat-sheet",
         "App Menu Shortcuts",
         "⌨️",
-        &[
-            "cheat sheet",
-            "cheatsheet",
-            "shortcuts",
-            "keyboard",
-            "hotkeys",
-            "menu",
-            "keys",
-            "app menu",
-        ],
+        &["cheat sheet", "cheatsheet", "menu", "app menu", "menu shortcuts"],
     ),
     (
         Builtin::StickyNote,
@@ -777,6 +789,27 @@ const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
         "☠️",
         &["kill", "force", "quit", "system"],
     ),
+];
+
+/// Labels for `[keys]` rows shown under OpenCast Keys (`key:<name>`).
+const KEY_LABELS: &[(&str, &str)] = &[
+    ("ask_ai", "Ask AI"),
+    ("click_text", "Click Text"),
+    ("actions", "Actions"),
+    ("pin", "Pin"),
+    ("paste_answer", "Paste answer"),
+    ("copy_answer", "Copy answer"),
+    ("new_chat", "New chat"),
+    ("next", "Next / Previous row"),
+    ("previous", "Next / Previous row"),
+    ("dictate", "Dictate"),
+    ("quick_look", "Quick Look"),
+    ("preview", "Preview pane"),
+    ("large_type", "Large Type"),
+    ("settings", "Settings"),
+    ("provider_prev", "Previous / Next provider"),
+    ("provider_next", "Previous / Next provider"),
+    ("model_next", "Next model"),
 ];
 
 /// In-app key rows. Searchable via OpenCast Keys (`query` = `shortcut`).
@@ -2361,7 +2394,7 @@ impl Engine {
         for (i, row) in self.conversions(q).into_iter().enumerate() {
             out.insert(i, row);
         }
-        if let Some(word) = ql.strip_prefix("spell ").map(str::trim).filter(|w| !w.is_empty()) {
+        if let Some(word) = take_prefix(&ql, WORD_PREFIXES[0].0) {
             out.insert(
                 0,
                 Command {
@@ -2392,7 +2425,7 @@ impl Engine {
                 },
             );
         }
-        if let Some(word) = ql.strip_prefix("define ").map(str::trim).filter(|w| !w.is_empty()) {
+        if let Some(word) = take_prefix(&ql, WORD_PREFIXES[1].0) {
             out.insert(
                 0,
                 Command {
@@ -2524,6 +2557,18 @@ impl Engine {
             }
         }
 
+        // OpenCast Keys fills `shortcut`: system chords (already matched), then
+        // live `[keys]`, then typed prefixes.
+        if ql == "shortcut" {
+            let keys = self.key_commands();
+            let prefixes = prefix_commands();
+            let room = limit.saturating_sub(keys.len() + prefixes.len());
+            if out.len() > room {
+                out.truncate(room);
+            }
+            out.extend(keys);
+            out.extend(prefixes);
+        }
         if out.len() > limit {
             out.truncate(limit);
         }
@@ -2676,6 +2721,8 @@ impl Engine {
 
     /// Decide what running `id` with `args` means.
     pub fn plan(&self, id: &str, args: &[String]) -> Result<Plan> {
+        // The empty-query warning row must not share Doctor's id (duplicate ForEach ids).
+        let id = if id == "warning:doctor" { "builtin:doctor" } else { id };
         if let Some(value) = id.strip_prefix("calc:") {
             return Ok(Plan::Copy(value.to_string()));
         }
@@ -2977,6 +3024,23 @@ impl Engine {
         if let Some(text) = self.snippets.get(id) {
             return Ok(Plan::PasteText(text.clone()));
         }
+        if let Some(prefix) = id.strip_prefix("prefix:") {
+            if !prefix.is_empty() {
+                return Ok(Plan::FillQuery(format!("{prefix} ")));
+            }
+        }
+        if let Some(name) = id.strip_prefix("key:") {
+            let title = key_label(name);
+            let spec = self
+                .config
+                .keys
+                .entries()
+                .into_iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, s)| s)
+                .unwrap_or("");
+            return Ok(Plan::Hint(format!("{title}: {spec}")));
+        }
         match id {
             "shortcut:return" => {
                 return Ok(Plan::Hint("Press Return on a result to run it".into()));
@@ -3157,15 +3221,91 @@ const LANGUAGES: &[&str] = &[
     "latin",
 ];
 
+/// `translate ` / `tr ` / `tl `. Search matches these; OpenCast Keys lists them.
+const TRANSLATE_PREFIXES: &[(&str, &str)] = &[("translate ", "Translate"), ("tr ", "Translate"), ("tl ", "Translate")];
+
+/// `spell` / `define`. Index 0 is spell, index 1 is define (`search` relies on that).
+const WORD_PREFIXES: &[(&str, &str)] = &[("spell", "Check spelling"), ("define", "Define a word")];
+
+fn take_prefix<'a>(q: &'a str, prefix: &str) -> Option<&'a str> {
+    let rest = q.strip_prefix(prefix)?.strip_prefix(' ')?.trim();
+    (!rest.is_empty()).then_some(rest)
+}
+
+/// One row per `[keys]` binding, for the OpenCast Keys list.
+fn key_label(name: &str) -> &str {
+    KEY_LABELS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, t)| *t)
+        .unwrap_or(name)
+}
+
+impl Engine {
+    fn key_commands(&self) -> Vec<Command> {
+        self.config
+            .keys
+            .entries()
+            .into_iter()
+            .map(|(name, spec)| Command {
+                id: format!("key:{name}"),
+                title: key_label(name).into(),
+                subtitle: Some(format!("In-app key · {spec}")),
+                icon: Some("⌨️".into()),
+                kind: CommandKind::Builtin,
+                arguments: vec![],
+                hotkey: None,
+                keywords: vec!["shortcut".into()],
+            })
+            .collect()
+    }
+}
+
+/// One row per typed prefix, in the order OpenCast Keys shows them.
+fn prefix_commands() -> Vec<Command> {
+    let tables: [&[(&str, &str)]; 8] = [
+        WORD_PREFIXES,
+        TRANSLATE_PREFIXES,
+        crate::bookmarks::PREFIXES,
+        crate::recents::PREFIXES,
+        crate::history::PREFIXES,
+        crate::notes::PREFIXES,
+        crate::chats::PREFIXES,
+        crate::emoji::PREFIXES,
+    ];
+    let mut seen = Vec::new();
+    let mut out = Vec::new();
+    for table in tables {
+        for (prefix, subtitle) in table {
+            let title = prefix.trim();
+            if title.is_empty() || seen.contains(&title) {
+                continue;
+            }
+            seen.push(title);
+            out.push(Command {
+                id: format!("prefix:{title}"),
+                title: title.into(),
+                subtitle: Some((*subtitle).into()),
+                icon: Some("⌨️".into()),
+                kind: CommandKind::Builtin,
+                arguments: vec![],
+                hotkey: None,
+                keywords: vec!["shortcut".into()],
+            });
+        }
+    }
+    out
+}
+
 /// `translate hola` / `tr hello to german` / `translate to french: hi` →
 /// (text, language). The language is only split off when it is a known one,
 /// so "translate how to cook" keeps its words.
 pub fn parse_translate(q: &str) -> Option<(String, Option<String>)> {
     let lower = q.to_lowercase();
-    let rest = ["translate ", "tr ", "tl "]
+    let rest = TRANSLATE_PREFIXES
         .iter()
-        .find(|p| lower.starts_with(*p))
-        .map(|p| q[p.len()..].trim())?;
+        .find(|(p, _)| lower.starts_with(p))
+        .map(|(p, _)| q[p.len()..].trim())?;
     if rest.is_empty() {
         return None;
     }
@@ -3439,6 +3579,51 @@ mod tests {
             }
         ));
         assert!(e.accepting("text").iter().any(|c| c.id == "builtin:translate"));
+    }
+
+    #[test]
+    fn shortcut_lists_typed_prefixes() {
+        assert_eq!(WORD_PREFIXES[0].0, "spell");
+        assert_eq!(WORD_PREFIXES[1].0, "define");
+        let e = engine();
+        let rows = e.search("shortcut", 120);
+        for id in [
+            "prefix:spell",
+            "prefix:define",
+            "prefix:tr",
+            "prefix:bm",
+            "prefix:recent",
+            "key:actions",
+            "key:model_next",
+        ] {
+            assert!(rows.iter().any(|c| c.id == id), "missing {id}");
+        }
+        let actions = rows.iter().find(|c| c.id == "key:actions").unwrap();
+        assert!(
+            actions.subtitle.as_deref().is_some_and(|s| s.contains("Cmd+K")),
+            "actions subtitle shows the configured spec, got {:?}",
+            actions.subtitle
+        );
+        let bm = rows.iter().find(|c| c.id == "prefix:bm").unwrap();
+        assert_eq!(bm.title, "bm");
+        assert_eq!(bm.subtitle.as_deref(), Some("Search bookmarks"));
+        let keys = rows.iter().position(|c| c.id == "shortcut:return").unwrap();
+        let live = rows.iter().position(|c| c.id == "key:actions").unwrap();
+        let spell = rows.iter().position(|c| c.id == "prefix:spell").unwrap();
+        assert!(live > keys, "live [keys] follow the system chords");
+        assert!(spell > live, "prefixes follow the live [keys]");
+        assert!(matches!(e.plan("prefix:bm", &[]).unwrap(), Plan::FillQuery(q) if q == "bm "));
+        assert!(matches!(e.plan("prefix:chat history", &[]).unwrap(), Plan::FillQuery(q) if q == "chat history "));
+        assert!(matches!(e.plan("key:actions", &[]).unwrap(), Plan::Hint(h) if h.contains("Cmd+K")));
+    }
+
+    #[test]
+    fn help_finds_opencast_keys_and_welcome() {
+        let e = engine();
+        let rows = e.search("help", 5);
+        assert!(rows.iter().any(|c| c.id == "builtin:shortcuts"), "{rows:?}");
+        assert!(rows.iter().any(|c| c.id == "builtin:welcome"), "{rows:?}");
+        assert_eq!(e.search("keys", 3)[0].id, "builtin:shortcuts");
     }
 
     #[test]
@@ -3961,6 +4146,7 @@ steps = ["ai:nope"]
         assert_eq!(e.search("", 5)[0].id, "window:left-half");
         e.bump_usage("window:maximize", "max");
         e.bump_usage("window:maximize", "max");
+        e.bump_usage("warning:doctor", "");
         let note = e.add_note("Todo", "ship it");
         assert!(e.search("note ship", 20).iter().any(|c| c.id == note.id));
         assert_eq!(
@@ -3977,6 +4163,7 @@ steps = ["ai:nope"]
         let e2 = Engine::assemble(cfg, dir.path().to_path_buf(), vec![], vec![], vec![], vec![]);
         assert!(e2.is_pinned("window:left-half"));
         assert_eq!(crate::usage::counts(dir.path()).get("window:maximize"), Some(&2));
+        assert!(crate::usage::counts(dir.path()).get("warning:doctor").is_none());
         assert!(e2.search("notes", 20).iter().any(|c| c.id == note.id));
     }
 
@@ -4407,6 +4594,8 @@ steps = ["ai:nope"]
         assert_eq!(e.plan("builtin:menu-items", &[]).unwrap(), Plan::Ui("menu-items"));
         assert_eq!(e.plan("builtin:settings", &[]).unwrap(), Plan::Ui("settings"));
         assert_eq!(e.plan("builtin:welcome", &[]).unwrap(), Plan::Ui("welcome"));
+        assert_eq!(e.plan("builtin:doctor", &[]).unwrap(), Plan::Doctor);
+        assert_eq!(e.plan("warning:doctor", &[]).unwrap(), Plan::Doctor);
         let welcome = &e.search("welcome", 3)[0];
         assert_eq!(welcome.id, "builtin:welcome");
         assert_eq!(welcome.subtitle.as_deref(), Some("Hotkey, permissions, AI setup"));

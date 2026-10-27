@@ -95,11 +95,19 @@ pub fn remove(chats: &mut Vec<SavedChat>, id: &str) -> bool {
     chats.len() != before
 }
 
+/// `chats` / `chat history` / `history`. Search matches these; OpenCast Keys lists them.
+/// `history` is also browser history; the Keys list keeps the first one.
+pub const PREFIXES: &[(&str, &str)] = &[
+    ("chat history", "Saved chats"),
+    ("chats", "Saved chats"),
+    ("history", "Saved chats"),
+];
+
 /// The search needle when `query` asks for chats (`chats`, `chat history`, `chats rust`).
 pub fn needle(query: &str) -> Option<String> {
     let q = query.trim().to_lowercase();
-    for prefix in ["chat history", "chats", "history"] {
-        if q == prefix {
+    for (prefix, _) in PREFIXES {
+        if q == *prefix {
             return Some(String::new());
         }
         if let Some(rest) = q.strip_prefix(&format!("{prefix} ")) {

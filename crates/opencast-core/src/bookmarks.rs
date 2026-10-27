@@ -313,11 +313,18 @@ pub fn why_empty(scan: &Scan) -> String {
     format!("OpenCast read your {stores} bookmark store{many} but found no web bookmarks in them.")
 }
 
+/// `bm` / `bookmark` / `bookmarks`. Search matches these; OpenCast Keys lists them.
+pub const PREFIXES: &[(&str, &str)] = &[
+    ("bookmarks", "Search bookmarks"),
+    ("bookmark", "Search bookmarks"),
+    ("bm", "Search bookmarks"),
+];
+
 /// `bm …` / `bookmarks …` lists bookmarks; a plain 3+ letter query shows a few.
 pub fn needle(query: &str) -> (Option<String>, bool) {
     let q = query.trim().to_lowercase();
-    for prefix in ["bookmarks", "bookmark", "bm"] {
-        if q == prefix {
+    for (prefix, _) in PREFIXES {
+        if q == *prefix {
             return (Some(String::new()), true);
         }
         if let Some(rest) = q.strip_prefix(&format!("{prefix} ")) {

@@ -275,11 +275,14 @@ pub fn why_empty(scan: &Scan) -> String {
     format!("OpenCast read your {stores} history store{many} but found no recent web visits in them.")
 }
 
+/// `hist` / `history`. Search matches these; OpenCast Keys lists them.
+pub const PREFIXES: &[(&str, &str)] = &[("history", "Browser history"), ("hist", "Browser history")];
+
 /// `history …` / `hist …` lists history; a plain 3+ letter query shows a few.
 pub fn needle(query: &str) -> (Option<String>, bool) {
     let q = query.trim().to_lowercase();
-    for prefix in ["history", "hist"] {
-        if q == prefix {
+    for (prefix, _) in PREFIXES {
+        if q == *prefix {
             return (Some(String::new()), true);
         }
         if let Some(rest) = q.strip_prefix(&format!("{prefix} ")) {

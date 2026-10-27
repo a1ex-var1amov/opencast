@@ -397,7 +397,7 @@ struct LauncherView: View {
                 .resizable()
                 .interpolation(.high)
                 .frame(width: 28, height: 28)
-                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         } else if let path = fileIconPath(command), let image = model.appIcons[path] {
             Image(nsImage: image)
                 .resizable()
@@ -477,9 +477,7 @@ struct LauncherView: View {
             return [("Back", "Esc"), ("Click", "Return")]
         }
         var h: [(String, String)] = []
-        if model.openDoctorOnReturn {
-            h.append(("Doctor", "↩"))
-        } else if let verb = model.verb {
+        if let verb = model.verb {
             h.append((verb, "Return"))
             if model.isListMode {
                 h.append(("Back", "Esc"))
@@ -603,7 +601,7 @@ struct BackButton: View {
                 .font(.system(size: metaSize, weight: .semibold))
                 .foregroundStyle(Theme.secondary(scheme))
                 .frame(width: 26, height: 26)
-                .background(Theme.kbd(scheme), in: RoundedRectangle(cornerRadius: 7))
+                .background(Theme.kbd(scheme), in: RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Back")
