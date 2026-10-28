@@ -70,12 +70,12 @@ struct LauncherView: View {
             syncTypeScale()
             selectField()
             // ready may already be true before first appear (see AppShell); still fill the list.
-            if model.ready { model.search() }
+            if model.ready { model.search(immediate: true) }
         }
         .onChange(of: bodySize) { _, _ in syncTypeScale() }
         .onChange(of: model.focusTick) { _, _ in selectField() }
         .onChange(of: model.ready) { _, ready in
-            if ready { model.search() }
+            if ready { model.search(immediate: true) }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification)) { _ in
             reduceTransparency = Theme.reduceTransparency

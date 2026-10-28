@@ -640,7 +640,10 @@ final class Model {
         launcher.invalidateShadow()
     }
 
-    func search() {
+    /// - Parameter immediate: skip debounce and run on this turn (boot / Esc back).
+    ///   Typing keeps a short debounce. Engine.call stays on the main actor — Tahoe was
+    ///   dropping `Task.detached` results when a newer search cancelled the parent task.
+    func search(immediate: Bool = false) {
         searchStarted = CFAbsoluteTimeGetCurrent()
         if case .list(let command, _, let filter) = mode {
             if filter {
@@ -656,45 +659,56 @@ final class Model {
         fileSearchTask?.cancel()
         searchTask?.cancel()
         searchingFiles = false
-        // Debounce first, then take a generation: rapid search() calls (boot + appear +
-        // typing) cancel only the sleep, so one Engine call runs instead of cancelling
-        // each other after Rust returns and leaving commands empty.
-        searchTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 50_000_000)
-            guard !Task.isCancelled else { return }
-            searchGen += 1
-            let gen = searchGen
-            let q = query
+        searchGen += 1
+        let gen = searchGen
+        let run: @MainActor () -> Void = { [weak self] in
+            guard let self, gen == self.searchGen else { return }
+            let q = self.query
+            let result: [String: Any]
             if Self.isPathQuery(q) {
-                let hidden = showHiddenFiles
-                let rows: [Command] = await Task.detached {
-                    let raw = Engine.call(["op": "listPath", "query": q.trimmingCharacters(in: .whitespaces), "hidden": hidden])
-                    return (raw["commands"] as? [[String: Any]] ?? []).compactMap(Command.init)
-                }.value
-                guard !Task.isCancelled, gen == searchGen else { return }
-                deliverSearch(rows, gen: gen)
-                return
+                result = Engine.call([
+                    "op": "listPath",
+                    "query": q.trimmingCharacters(in: .whitespaces),
+                    "hidden": self.showHiddenFiles,
+                ])
+            } else {
+                result = Engine.call(["op": "search", "query": q])
             }
-            let (parsed, searchError): ([Command], String?) = await Task.detached {
-                let result = Engine.call(["op": "search", "query": q])
-                if let err = result["error"] as? String, !err.isEmpty {
-                    return ([], err)
-                }
-                let raw = result["commands"] as? [[String: Any]] ?? []
-                return (raw.compactMap(Command.init), nil)
-            }.value
-            guard !Task.isCancelled, gen == searchGen else { return }
-            if let searchError {
-                flash("Search failed: \(searchError)", error: true, thenHide: false)
+            guard gen == self.searchGen else { return }
+            if let err = result["error"] as? String, !err.isEmpty {
+                self.flash("Search failed: \(err)", error: true, thenHide: false)
+            }
+            let raw = result["commands"] as? [[String: Any]] ?? []
+            let parsed = raw.compactMap(Command.init)
+            if parsed.isEmpty, q.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let rawCount = raw.count
+                self.flash(
+                    rawCount == 0
+                        ? "Engine returned no commands"
+                        : "Engine sent \(rawCount) rows; panel decoded 0",
+                    error: true,
+                    thenHide: false
+                )
             }
             let merged = ClipboardHistory.shared.merge(into: parsed, query: q)
             let windowIds = merged.filter { $0.kind == .window }.map(\.id)
             if !windowIds.isEmpty {
-                WindowGlyphs.load(windowIds, portrait: WindowManager.isPortraitScreen(for: previousApp))
+                WindowGlyphs.load(windowIds, portrait: WindowManager.isPortraitScreen(for: self.previousApp))
             }
+            guard gen == self.searchGen else { return }
+            self.deliverSearch(merged, gen: gen)
+            if !Self.isPathQuery(q) {
+                self.scheduleFileSearch(query: q, inMenu: merged, gen: gen)
+            }
+        }
+        if immediate {
+            run()
+            return
+        }
+        searchTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 50_000_000)
             guard !Task.isCancelled, gen == searchGen else { return }
-            deliverSearch(merged, gen: gen)
-            scheduleFileSearch(query: q, inMenu: merged, gen: gen)
+            run()
         }
     }
 
@@ -1537,7 +1551,7 @@ final class Model {
         mode = .search
         noteContentChanged()
         focusTick += 1
-        if ready { search() }
+        if ready { search(immediate: true) }
     }
 
     func pickProvider(_ id: String) {

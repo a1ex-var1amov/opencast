@@ -110,7 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // Don't rely on LauncherView.onChange(of: ready): if the view mounts after
                 // ready is already true (common on slower Macs), that change never fires and
                 // the list stays on "No results" until something else triggers search.
-                Model.shared.search()
+                Model.shared.search(immediate: true)
                 Model.shared.checkHotkeys()
                 Model.shared.prefetchAppIcons()
                 SnippetExpander.shared.reload()
