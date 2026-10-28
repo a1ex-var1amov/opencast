@@ -13,7 +13,10 @@ sleep 1
 # ad-hoc signature changes every build, and macOS then forgets the app's
 # Accessibility / Screen Recording grants.
 if [ -z "$APPLE_SIGNING_IDENTITY" ]; then
-  ID=$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(.*\)".*/\1/p' | head -1)
+  # Prefer a self-signed "OpenCast" identity when present (else first valid one).
+  IDS=$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(.*\)".*/\1/p')
+  ID=$(print -l -- ${(f)IDS} | grep -Fx 'OpenCast' | head -1)
+  [ -z "$ID" ] && ID=$(print -l -- ${(f)IDS} | head -1)
   [ -n "$ID" ] && export APPLE_SIGNING_IDENTITY="$ID" && echo "== Signing as $ID =="
 fi
 ARCHS=(${(s: :)${OC_ARCH:-$(uname -m)}})
