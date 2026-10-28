@@ -9,7 +9,7 @@ import SwiftUI
 /// A real settings window. Everything still lives in `config.toml` (this
 /// window writes it with comments kept), so dotfiles keep working.
 @MainActor
-final class SettingsWindowController {
+final class SettingsWindowController: NSObject, NSWindowDelegate {
     static let shared = SettingsWindowController()
     private var window: NSWindow?
 
@@ -25,12 +25,25 @@ final class SettingsWindowController {
             )
             w.title = "OpenCast Settings"
             w.isReleasedWhenClosed = false
+            w.delegate = self
             w.contentView = NSHostingView(rootView: SettingsView(state: SettingsState.shared))
             w.center()
             window = w
         }
+        // Accessory (LSUIElement) apps often cannot key a titled window on Tahoe
+        // until activation policy is briefly `.regular`.
+        if NSApp.activationPolicy() != .regular {
+            NSApp.setActivationPolicy(.regular)
+        }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        // Back to menu-bar-only when the launcher is not up.
+        if Model.shared.launcher?.isVisible != true {
+            NSApp.setActivationPolicy(.accessory)
+        }
     }
 }
 
@@ -90,39 +103,38 @@ final class SettingsState {
     var providerTestStatus = ""
 
     func load() {
-        Task.detached {
+        // MainActor Task — not Task.detached (Tahoe drops those completions).
+        Task { @MainActor in
             let r = Engine.call(["op": "configGet"])
-            await MainActor.run {
-                let s = SettingsState.shared
-                s.general = r["general"] as? [String: Any] ?? [:]
-                s.providers = (r["providers"] as? [[String: Any]] ?? []).map {
-                    ProviderRow(
-                        id: $0["id"] as? String ?? "",
-                        kind: $0["kind"] as? String ?? "",
-                        model: $0["model"] as? String ?? "",
-                        baseUrl: $0["baseUrl"] as? String,
-                        hasKey: $0["hasKey"] as? Bool ?? false,
-                        local: $0["local"] as? Bool ?? false
-                    )
-                }
-                s.snippets = (r["snippets"] as? [[String: Any]] ?? []).compactMap { row in
-                    guard let k = row["keyword"] as? String, let t = row["text"] as? String else { return nil }
-                    return SnippetRow(keyword: k, text: t)
-                }
-                s.mcp = (r["mcp"] as? [[String: Any]] ?? []).compactMap { row in
-                    guard let id = row["id"] as? String else { return nil }
-                    return McpServerRow(
-                        id: id,
-                        oauth: row["oauth"] as? Bool ?? false,
-                        signedIn: row["signedIn"] as? Bool ?? false
-                    )
-                }
-                s.configDir = r["configDir"] as? String ?? ""
-                s.version = r["version"] as? String ?? ""
-                s.synced = r["synced"] as? Bool ?? false
-                s.hotkeyDraft = s.general["hotkey"] as? String ?? ""
-                s.updateRepoDraft = s.general["update_repo"] as? String ?? ""
+            let s = SettingsState.shared
+            s.general = r["general"] as? [String: Any] ?? [:]
+            s.providers = (r["providers"] as? [[String: Any]] ?? []).map {
+                ProviderRow(
+                    id: $0["id"] as? String ?? "",
+                    kind: $0["kind"] as? String ?? "",
+                    model: $0["model"] as? String ?? "",
+                    baseUrl: $0["baseUrl"] as? String,
+                    hasKey: $0["hasKey"] as? Bool ?? false,
+                    local: $0["local"] as? Bool ?? false
+                )
             }
+            s.snippets = (r["snippets"] as? [[String: Any]] ?? []).compactMap { row in
+                guard let k = row["keyword"] as? String, let t = row["text"] as? String else { return nil }
+                return SnippetRow(keyword: k, text: t)
+            }
+            s.mcp = (r["mcp"] as? [[String: Any]] ?? []).compactMap { row in
+                guard let id = row["id"] as? String else { return nil }
+                return McpServerRow(
+                    id: id,
+                    oauth: row["oauth"] as? Bool ?? false,
+                    signedIn: row["signedIn"] as? Bool ?? false
+                )
+            }
+            s.configDir = r["configDir"] as? String ?? ""
+            s.version = r["version"] as? String ?? ""
+            s.synced = r["synced"] as? Bool ?? false
+            s.hotkeyDraft = s.general["hotkey"] as? String ?? ""
+            s.updateRepoDraft = s.general["update_repo"] as? String ?? ""
         }
     }
 
@@ -131,13 +143,11 @@ final class SettingsState {
 
     func set(_ key: String, _ value: Any) {
         general[key] = value
-        Task.detached {
+        Task { @MainActor in
             let r = Engine.call(["op": "configSet", "key": key, "value": value])
-            await MainActor.run {
-                SettingsState.shared.status = (r["error"] as? String) ?? (r["text"] as? String ?? "Saved")
-                Model.shared.refreshSettings()
-                SnippetExpander.shared.reload()
-            }
+            status = (r["error"] as? String) ?? (r["text"] as? String ?? "Saved")
+            Model.shared.refreshSettings()
+            SnippetExpander.shared.reload()
         }
     }
 

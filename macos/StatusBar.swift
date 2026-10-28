@@ -1,7 +1,9 @@
 import AppKit
 
 /// Persistent menu-bar entry for OpenCast itself (not Focus / Stay Awake).
-@MainActor
+///
+/// Not `@MainActor`-isolated: AppKit invokes `@objc` menu actions off that
+/// isolation on some macOS versions (Tahoe), which left every item inert.
 final class OpenCastStatusBar: NSObject, NSMenuDelegate {
     static let shared = OpenCastStatusBar()
 
@@ -78,26 +80,26 @@ final class OpenCastStatusBar: NSObject, NSMenuDelegate {
     }
 
     @objc private func openPanel() {
-        Model.shared.show()
+        Task { @MainActor in Model.shared.show() }
     }
 
     @objc private func openSettings() {
-        SettingsWindowController.shared.show()
+        Task { @MainActor in SettingsWindowController.shared.show() }
     }
 
     @objc private func runDoctor() {
-        Model.shared.perform("builtin:doctor")
+        Task { @MainActor in Model.shared.perform("builtin:doctor") }
     }
 
     @objc private func openKeys() {
-        Model.shared.perform("builtin:shortcuts")
+        Task { @MainActor in Model.shared.perform("builtin:shortcuts") }
     }
 
     @objc private func openWelcome() {
-        Model.shared.perform("builtin:welcome")
+        Task { @MainActor in Model.shared.perform("builtin:welcome") }
     }
 
     @objc private func quitApp() {
-        NSApp.terminate(nil)
+        Task { @MainActor in NSApp.terminate(nil) }
     }
 }

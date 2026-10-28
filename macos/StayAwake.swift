@@ -3,7 +3,8 @@ import IOKit.pwr_mgt
 
 /// Amphetamine-lite: an IOKit power assertion (no `caffeinate` child process)
 /// plus a menu-bar state dot.
-@MainActor
+///
+/// Not `@MainActor`-isolated so AppKit can invoke `@objc` menu actions on Tahoe.
 final class StayAwakeController: NSObject {
     static let shared = StayAwakeController()
 
@@ -157,7 +158,7 @@ final class StayAwakeController: NSObject {
 
     @objc private func pick(_ sender: NSMenuItem) {
         guard let mode = sender.representedObject as? String else { return }
-        apply(mode)
+        Task { @MainActor in self.apply(mode) }
     }
 
     private func label(for mode: String) -> String {
