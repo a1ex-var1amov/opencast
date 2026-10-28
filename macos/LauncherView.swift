@@ -77,7 +77,6 @@ struct LauncherView: View {
         .onChange(of: model.ready) { _, ready in
             if ready { model.search() }
         }
-        // Query → search is handled in Model.query.didSet (Tahoe-safe).
         .onReceive(NotificationCenter.default.publisher(for: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification)) { _ in
             reduceTransparency = Theme.reduceTransparency
         }
@@ -132,7 +131,9 @@ struct LauncherView: View {
                             model.seekQuery = value
                             model.seekIndex = 0
                         } else {
-                            model.query = value
+                            // Don't assign query alone — Tahoe often skips onChange for
+                            // @Observable TextField edits; setQuery always runs search.
+                            model.setQuery(value)
                         }
                     }
                 ),

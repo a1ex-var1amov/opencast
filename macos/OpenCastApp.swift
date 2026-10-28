@@ -90,17 +90,23 @@ final class Model {
     }
 
     var query = "" {
-        didSet {
-            guard oldValue != query else { return }
-            clearToastOnInput()
-            // Drive search from didSet, not only LauncherView.onChange(of: query):
-            // on Tahoe (and some SDK-skewed builds) that onChange never fires for
-            // @Observable TextField edits, so the list stays on the empty-query rows.
+        // Keep didSet tiny: @Observable + didSet that calls search()/noteContentChanged
+        // re-entered the TextField binding on Tahoe and cancelled every in-flight search,
+        // leaving the list permanently empty.
+        didSet { if oldValue != query { clearToastOnInput() } }
+    }
+
+    /// TextField entry point. Runs search without doing it from `query.didSet`.
+    /// No-ops when the value is unchanged so layout passes cannot cancel in-flight search.
+    func setQuery(_ value: String, resetSelection: Bool = true) {
+        guard query != value else { return }
+        query = value
+        if resetSelection {
             selected = 0
             listStart = 0
-            noteContentChanged()
-            if ready { search() }
         }
+        noteContentChanged()
+        if ready { search() }
     }
     var commands: [Command] = []
     var selected = 0 {
@@ -647,16 +653,17 @@ final class Model {
             }
             return
         }
-        searchGen += 1
-        let gen = searchGen
         fileSearchTask?.cancel()
         searchTask?.cancel()
         searchingFiles = false
-        // Debounce + single-flight: fast typing used to spawn parallel Rust searches
-        // that held the sidecars lock and stalled Return/click on bump_usage.
+        // Debounce first, then take a generation: rapid search() calls (boot + appear +
+        // typing) cancel only the sleep, so one Engine call runs instead of cancelling
+        // each other after Rust returns and leaving commands empty.
         searchTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 50_000_000)
-            guard !Task.isCancelled, gen == searchGen else { return }
+            guard !Task.isCancelled else { return }
+            searchGen += 1
+            let gen = searchGen
             let q = query
             if Self.isPathQuery(q) {
                 let hidden = showHiddenFiles
