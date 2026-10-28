@@ -17,7 +17,9 @@ FLAGS=$(awk -F'native-static-libs: ' '/native-static-libs:/ { print $2; exit }' 
 APP=target/debug/OpenCast.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 cp macos/Info.plist "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" -c "Set :CFBundleVersion $VERSION" "$APP/Contents/Info.plist"
 cp macos/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 eval swiftc -parse-as-library -g -target arm64-apple-macos14.0 \
   -import-objc-header macos/opencast.h \

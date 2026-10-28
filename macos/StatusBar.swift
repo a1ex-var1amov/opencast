@@ -79,27 +79,29 @@ final class OpenCastStatusBar: NSObject, NSMenuDelegate {
         return out.isEmpty ? "⌥Space" : out
     }
 
+    // DispatchQueue.main — not Task { @MainActor }: Tahoe has dropped those
+    // completions from @objc menu actions, leaving every item inert.
     @objc private func openPanel() {
-        Task { @MainActor in Model.shared.show() }
+        DispatchQueue.main.async { Model.shared.show() }
     }
 
     @objc private func openSettings() {
-        Task { @MainActor in SettingsWindowController.shared.show() }
+        DispatchQueue.main.async { SettingsWindowController.shared.show() }
     }
 
     @objc private func runDoctor() {
-        Task { @MainActor in Model.shared.perform("builtin:doctor") }
+        DispatchQueue.main.async { Model.shared.perform("builtin:doctor") }
     }
 
     @objc private func openKeys() {
-        Task { @MainActor in Model.shared.perform("builtin:shortcuts") }
+        DispatchQueue.main.async { Model.shared.perform("builtin:shortcuts") }
     }
 
     @objc private func openWelcome() {
-        Task { @MainActor in Model.shared.perform("builtin:welcome") }
+        DispatchQueue.main.async { Model.shared.perform("builtin:welcome") }
     }
 
     @objc private func quitApp() {
-        Task { @MainActor in NSApp.terminate(nil) }
+        DispatchQueue.main.async { NSApp.terminate(nil) }
     }
 }

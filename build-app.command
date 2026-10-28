@@ -31,7 +31,9 @@ done
 APP=target/release/OpenCast.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 cp macos/Info.plist "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" -c "Set :CFBundleVersion $VERSION" "$APP/Contents/Info.plist"
 cp macos/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 if [ "${#SLICES[@]}" -gt 1 ]; then
   lipo -create "${SLICES[@]}" -output "$APP/Contents/MacOS/OpenCast" || exit 1

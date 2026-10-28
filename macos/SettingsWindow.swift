@@ -103,39 +103,38 @@ final class SettingsState {
     var providerTestStatus = ""
 
     func load() {
-        // MainActor Task — not Task.detached (Tahoe drops those completions).
-        Task { @MainActor in
-            let r = Engine.call(["op": "configGet"])
-            let s = SettingsState.shared
-            s.general = r["general"] as? [String: Any] ?? [:]
-            s.providers = (r["providers"] as? [[String: Any]] ?? []).map {
-                ProviderRow(
-                    id: $0["id"] as? String ?? "",
-                    kind: $0["kind"] as? String ?? "",
-                    model: $0["model"] as? String ?? "",
-                    baseUrl: $0["baseUrl"] as? String,
-                    hasKey: $0["hasKey"] as? Bool ?? false,
-                    local: $0["local"] as? Bool ?? false
-                )
-            }
-            s.snippets = (r["snippets"] as? [[String: Any]] ?? []).compactMap { row in
-                guard let k = row["keyword"] as? String, let t = row["text"] as? String else { return nil }
-                return SnippetRow(keyword: k, text: t)
-            }
-            s.mcp = (r["mcp"] as? [[String: Any]] ?? []).compactMap { row in
-                guard let id = row["id"] as? String else { return nil }
-                return McpServerRow(
-                    id: id,
-                    oauth: row["oauth"] as? Bool ?? false,
-                    signedIn: row["signedIn"] as? Bool ?? false
-                )
-            }
-            s.configDir = r["configDir"] as? String ?? ""
-            s.version = r["version"] as? String ?? ""
-            s.synced = r["synced"] as? Bool ?? false
-            s.hotkeyDraft = s.general["hotkey"] as? String ?? ""
-            s.updateRepoDraft = s.general["update_repo"] as? String ?? ""
+        // Synchronous: already on MainActor from show()/callers. A nested
+        // Task { @MainActor } was dropped on Tahoe, leaving About version empty
+        // and Settings toggles stuck on defaults.
+        let r = Engine.call(["op": "configGet"])
+        general = r["general"] as? [String: Any] ?? [:]
+        providers = (r["providers"] as? [[String: Any]] ?? []).map {
+            ProviderRow(
+                id: $0["id"] as? String ?? "",
+                kind: $0["kind"] as? String ?? "",
+                model: $0["model"] as? String ?? "",
+                baseUrl: $0["baseUrl"] as? String,
+                hasKey: $0["hasKey"] as? Bool ?? false,
+                local: $0["local"] as? Bool ?? false
+            )
         }
+        snippets = (r["snippets"] as? [[String: Any]] ?? []).compactMap { row in
+            guard let k = row["keyword"] as? String, let t = row["text"] as? String else { return nil }
+            return SnippetRow(keyword: k, text: t)
+        }
+        mcp = (r["mcp"] as? [[String: Any]] ?? []).compactMap { row in
+            guard let id = row["id"] as? String else { return nil }
+            return McpServerRow(
+                id: id,
+                oauth: row["oauth"] as? Bool ?? false,
+                signedIn: row["signedIn"] as? Bool ?? false
+            )
+        }
+        configDir = r["configDir"] as? String ?? ""
+        version = r["version"] as? String ?? ""
+        synced = r["synced"] as? Bool ?? false
+        hotkeyDraft = general["hotkey"] as? String ?? ""
+        updateRepoDraft = general["update_repo"] as? String ?? ""
     }
 
     func bool(_ key: String) -> Bool { general[key] as? Bool ?? false }
@@ -143,12 +142,12 @@ final class SettingsState {
 
     func set(_ key: String, _ value: Any) {
         general[key] = value
-        Task { @MainActor in
-            let r = Engine.call(["op": "configSet", "key": key, "value": value])
-            status = (r["error"] as? String) ?? (r["text"] as? String ?? "Saved")
-            Model.shared.refreshSettings()
-            SnippetExpander.shared.reload()
-        }
+        // Sync write — nested Task { @MainActor } was dropped on Tahoe, so
+        // toggles flipped in the UI but never reached config.toml.
+        let r = Engine.call(["op": "configSet", "key": key, "value": value])
+        status = (r["error"] as? String) ?? (r["text"] as? String ?? "Saved")
+        Model.shared.refreshSettings()
+        SnippetExpander.shared.reload()
     }
 
     /// Open config.toml; `--goto` only when Cursor/VS Code is the default .toml handler (P8-5).
