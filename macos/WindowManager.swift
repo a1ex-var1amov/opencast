@@ -186,6 +186,17 @@ enum WindowManager {
         return (w, f)
     }
 
+    /// Name shown under Move Left / snap rows — the window that would move.
+    /// Window title when AX works; otherwise the app name.
+    static func targetWindowLabel(for app: NSRunningApplication?) -> String? {
+        guard let app else { return nil }
+        let appName = app.localizedName ?? ""
+        guard accessibilityTrusted, let window = focusedWindow(pid: app.processIdentifier) else {
+            return WindowTarget.label(windowTitle: "", appName: appName)
+        }
+        return WindowTarget.label(windowTitle: title(of: window), appName: appName)
+    }
+
     /// Whether the screen holding `app`'s window (else the main screen) is
     /// taller than wide, i.e. a rotated monitor.
     static func isPortraitScreen(for app: NSRunningApplication?) -> Bool {

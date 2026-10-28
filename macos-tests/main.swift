@@ -176,6 +176,54 @@ check(appRow?.actions.last?.key == "cmd+f", "and its key, when it has one")
 check(Command(["id": "builtin:reload", "title": "Reload Commands", "kind": "builtin"])?.actions.isEmpty == true,
       "a row with no integration carries no verbs")
 
+// MARK: - Window target subtitle (Move Left shows what would move)
+
+check(WindowTarget.label(windowTitle: "README.md", appName: "Cursor") == "README.md · Cursor",
+      "window title and app when they differ")
+check(WindowTarget.label(windowTitle: "Safari", appName: "Safari") == "Safari",
+      "no duplicate when title equals app")
+check(WindowTarget.label(windowTitle: "safari", appName: "Safari") == "safari",
+      "case-insensitive same name stays a single token")
+check(WindowTarget.label(windowTitle: "", appName: "Mail") == "Mail",
+      "AX title missing falls back to app name")
+check(WindowTarget.label(windowTitle: "Inbox", appName: "") == "Inbox",
+      "app name missing still shows the window title")
+check(WindowTarget.label(windowTitle: "  ", appName: "  ") == nil,
+      "blank title and app means no subtitle")
+check(WindowTarget.label(windowTitle: "", appName: "") == nil, "both empty means no subtitle")
+
+let move = Command(id: "window:move-left", title: "Move Left", subtitle: nil, icon: "⇤",
+                   kind: .window, arguments: [], hotkey: nil)
+let other = Command(id: "builtin:reload", title: "Reload Commands", subtitle: nil, icon: "↻",
+                    kind: .builtin, arguments: [], hotkey: nil)
+let tagged = WindowTarget.tag([move, other], label: "Notes · TextEdit")
+check(tagged[0].subtitle == "Notes · TextEdit", "window rows get the live target subtitle")
+check(tagged[1].subtitle == nil, "non-window rows stay untouched")
+check(WindowTarget.tag([move], label: nil)[0].subtitle == nil, "nil label leaves subtitles alone")
+check(WindowTarget.tag([move], label: "")[0].subtitle == nil, "empty label leaves subtitles alone")
+let custom = Command(id: "window:custom:foo", title: "My Snap", subtitle: "Window", icon: "▣",
+                     kind: .window, arguments: [], hotkey: nil)
+check(WindowTarget.tag([custom], label: "Slack")[0].subtitle == "Slack",
+      "live target replaces a generic Window subtitle")
+
+// MARK: - Hotkey chord (Use ⌘Space button)
+
+check(HotkeyChord.isCmdSpace("Cmd+Space"), "Cmd+Space is Spotlight's chord")
+check(HotkeyChord.isCmdSpace("Command+Space"), "Command+Space is the same chord")
+check(HotkeyChord.isCmdSpace("cmd+space"), "case does not matter")
+check(!HotkeyChord.isCmdSpace("Alt+Space"), "Alt+Space is not Spotlight")
+check(!HotkeyChord.isCmdSpace("Cmd+Shift+Space"), "extra modifiers are not bare ⌘Space")
+check(!HotkeyChord.isCmdSpace("Cmd+S"), "not Space")
+check(!HotkeyChord.isCmdSpace(""), "empty is not ⌘Space")
+
+// MARK: - Menu bar tint policy (Tahoe dark bar)
+
+check(!MenuBarSymbol.forcesAppLabelTint,
+      "status items must not force app .labelColor (goes black on dark menu bars)")
+check(MenuBarSymbol.needsMonochrome("sparkles"), "sparkles ships multicolor and needs monochrome")
+check(!MenuBarSymbol.needsMonochrome("circle"), "circle is already a mono template")
+check(!MenuBarSymbol.needsMonochrome("circle.fill"), "circle.fill is already mono")
+
 // MARK: - Toast key semantics (N-1, N-2) — Model lives in AppKit; verify by hand
 // Scenario 1: permission error toast up → type "slack" → Return opens Slack (not Settings).
 // Scenario 2: "Copied" toast up → Esc dismisses toast and also clears/hides as usual (one keypress).

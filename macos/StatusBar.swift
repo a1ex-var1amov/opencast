@@ -13,10 +13,12 @@ final class OpenCastStatusBar: NSObject, NSMenuDelegate {
         guard statusItem == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         // Multicolor SF Symbols ignore menu-bar template ink unless monochrome.
-        // Do not set contentTintColor — .labelColor follows the app appearance and
-        // paints black while system items stay white on a dark menu bar.
-        let conf = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
-            .applying(.preferringMonochrome())
+        // Never force .labelColor — see MenuBarSymbol.forcesAppLabelTint.
+        precondition(!MenuBarSymbol.forcesAppLabelTint)
+        var conf = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
+        if MenuBarSymbol.needsMonochrome("sparkles") {
+            conf = conf.applying(.preferringMonochrome())
+        }
         let image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "OpenCast")?
             .withSymbolConfiguration(conf)
             ?? NSImage(size: NSSize(width: 16, height: 16))

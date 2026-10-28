@@ -413,13 +413,6 @@ struct PaneSection<Content: View>: View {
 
 private let hotkeyBeforeSpotlightKey = "opencast.hotkeyBeforeSpotlight"
 
-/// `Cmd+Space` / `Command+Space` (any case) — Spotlight's default chord.
-private func isCmdSpace(_ spec: String) -> Bool {
-    let parts = spec.split(separator: "+").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-    guard parts.count == 2, parts.last == "space" else { return false }
-    return parts[0] == "cmd" || parts[0] == "command"
-}
-
 private func openSpotlightShortcuts() {
     let urls = [
         "x-apple.systempreferences:com.apple.Keyboard-Settings.extension?Keyboard_Shortcuts_Spotlight",
@@ -433,7 +426,7 @@ private func openSpotlightShortcuts() {
 @MainActor
 private func claimCmdSpace(_ state: SettingsState) {
     let prev = state.hotkeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-    if !prev.isEmpty, !isCmdSpace(prev) {
+    if !prev.isEmpty, !HotkeyChord.isCmdSpace(prev) {
         UserDefaults.standard.set(prev, forKey: hotkeyBeforeSpotlightKey)
     }
     state.hotkeyDraft = "Cmd+Space"
@@ -446,7 +439,7 @@ private func claimCmdSpace(_ state: SettingsState) {
 private func restoreSpotlightHotkey(_ state: SettingsState) {
     let saved = UserDefaults.standard.string(forKey: hotkeyBeforeSpotlightKey)?
         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    let next = (!saved.isEmpty && !isCmdSpace(saved)) ? saved : "Alt+Space"
+    let next = (!saved.isEmpty && !HotkeyChord.isCmdSpace(saved)) ? saved : "Alt+Space"
     state.hotkeyDraft = next
     state.set("hotkey", next)
     state.hotkeyStatus = "Saved \(next)"
@@ -459,7 +452,7 @@ private struct GeneralPane: View {
     @State private var newKeyword = ""
     @State private var newText = ""
 
-    private var hotkeyIsCmdSpace: Bool { isCmdSpace(state.hotkeyDraft) }
+    private var hotkeyIsCmdSpace: Bool { HotkeyChord.isCmdSpace(state.hotkeyDraft) }
 
     var body: some View {
         PaneSection(title: "Launcher") {

@@ -13,6 +13,7 @@ swiftc -O -target "${ARCH}-apple-macos14.0" \
   macos/DeepLink.swift macos/MeetingLinks.swift macos/SnippetMatch.swift macos/SpaceLabel.swift \
   macos/ListFilter.swift macos/ShortcutApps.swift macos/SpotifyText.swift \
   macos/Models.swift macos/Glyphs.swift \
+  macos/WindowTarget.swift macos/HotkeyChord.swift macos/MenuBarSymbol.swift \
   macos-tests/main.swift \
   -o target/tests/panel-logic || exit 1
 ./target/tests/panel-logic

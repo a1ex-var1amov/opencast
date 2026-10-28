@@ -194,6 +194,8 @@ final class Model {
     var fallbackThreshold = 3
     /// App that was frontmost when the panel opened (AX target for selection / snaps).
     private(set) var previousApp: NSRunningApplication?
+    /// Cached label for that app's focused window — subtitles on `window:*` rows.
+    private var windowTargetLabel: String?
     /// Launcher opened while OpenCast was already active (Settings / sticky / Notes).
     private var openedFromInside = false
 
@@ -560,6 +562,7 @@ final class Model {
         if !NSApp.isActive, let front = WindowManager.frontApp() {
             previousApp = front
         }
+        refreshWindowTargetLabel()
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
         guard let screen else { return }
         self.screen = screen
@@ -978,6 +981,10 @@ final class Model {
     /// Return was pressed while the rows were stale: run the top hit when they land.
     private var pendingReturn = false
 
+    private func refreshWindowTargetLabel() {
+        windowTargetLabel = WindowManager.targetWindowLabel(for: previousApp)
+    }
+
     private func deliverSearch(_ parsed: [Command], gen: Int) {
         guard gen == searchGen else { return }
         deliveredGen = gen
@@ -989,7 +996,7 @@ final class Model {
             return appIcons[path] == nil ? path : nil
         }
         if !missing.isEmpty { loadIcons(missing) }
-        var parsed = parsed
+        var parsed = WindowTarget.tag(parsed, label: windowTargetLabel)
         if trimmedQuery.isEmpty, calendarEnabled, Schedule.shared.authorized {
             Schedule.shared.refresh()
             if let e = Schedule.shared.next(within: 60), let i = Schedule.shared.upcoming.firstIndex(of: e) {
@@ -2483,6 +2490,7 @@ final class Model {
         // From a hotkey the panel is down: the app in front is the one with the selection.
         if launcher?.isVisible != true, !NSApp.isActive, let front = WindowManager.frontApp() {
             previousApp = front
+            refreshWindowTargetLabel()
         }
         let app = previousApp
         // AX read (main actor, fast); Finder's file selection needs AppleScript, off the main thread.
