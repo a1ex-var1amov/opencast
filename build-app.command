@@ -6,6 +6,8 @@
 # is what ./release.command does for the dmg.
 cd "$(dirname "$0")"
 command -v cargo >/dev/null || { [ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"; }
+# See release.command — redirected CARGO_TARGET_DIR leaves a stale staticlib.
+unset CARGO_TARGET_DIR
 echo "== Stopping OpenCast (if any) =="
 pkill -x OpenCast 2>/dev/null
 sleep 1

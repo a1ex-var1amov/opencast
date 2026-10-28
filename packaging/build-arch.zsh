@@ -38,6 +38,9 @@ fi
 # app's minimum. C/asm in dependencies (ring) still needs a minimum, or ld warns
 # "built for newer macOS".
 unset MACOSX_DEPLOYMENT_TARGET
+# Must build into this repo's target/ — a redirected CARGO_TARGET_DIR leaves
+# packaging looking at a stale libopencast_ffi.a (wrong About version).
+unset CARGO_TARGET_DIR
 export "CFLAGS_${RT//-/_}"="-mmacosx-version-min=14.0"
 
 # One cargo invocation: build and print the native libs the Swift link needs.

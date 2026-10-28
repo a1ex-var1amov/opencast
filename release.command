@@ -15,6 +15,10 @@
 set -e
 cd "$(dirname "$0")"
 command -v cargo >/dev/null || { [ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"; }
+# Cursor/sandbox may export CARGO_TARGET_DIR elsewhere; build-arch links
+# target/release/libopencast_ffi.a from this tree, so a redirected dir leaves
+# a stale .a (wrong CARGO_PKG_VERSION in About).
+unset CARGO_TARGET_DIR
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 NOTARY_PROFILE=${NOTARY_PROFILE:-opencast-notary}
 if [ -z "$DEVELOPER_ID" ]; then
