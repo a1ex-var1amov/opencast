@@ -23,9 +23,9 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>CFBundleShortVersionString</key>
-	<string>0.2.8</string>
+	<string>0.2.9</string>
 	<key>CFBundleVersion</key>
-	<string>0.2.8</string>
+	<string>0.2.9</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>OpenCast listens only while you dictate into the search field or chat.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>

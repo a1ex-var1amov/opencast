@@ -15,7 +15,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     func show(tab: SettingsTab? = nil) {
         if let tab { SettingsState.shared.tab = tab }
-        SettingsState.shared.load()
         if window == nil {
             let w = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 680, height: 540),
@@ -26,6 +25,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             w.title = "OpenCast Settings"
             w.isReleasedWhenClosed = false
             w.delegate = self
+            w.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
             w.contentView = NSHostingView(rootView: SettingsView(state: SettingsState.shared))
             w.center()
             window = w
@@ -36,7 +36,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             NSApp.setActivationPolicy(.regular)
         }
         NSApp.activate(ignoringOtherApps: true)
+        // Show first — a blocked Engine.call in load() must not prevent the window.
         window?.makeKeyAndOrderFront(nil)
+        window?.orderFrontRegardless()
+        SettingsState.shared.load()
     }
 
     func windowWillClose(_ notification: Notification) {

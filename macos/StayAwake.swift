@@ -158,8 +158,12 @@ final class StayAwakeController: NSObject {
 
     @objc private func pick(_ sender: NSMenuItem) {
         guard let mode = sender.representedObject as? String else { return }
-        // DispatchQueue.main — not Task { @MainActor }: Tahoe drops those from @objc.
-        DispatchQueue.main.async { self.apply(mode) }
+        // Inline on main — async can be lost during menu teardown on Tahoe.
+        if Thread.isMainThread {
+            apply(mode)
+        } else {
+            DispatchQueue.main.async { self.apply(mode) }
+        }
     }
 
     private func label(for mode: String) -> String {

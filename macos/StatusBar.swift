@@ -79,29 +79,38 @@ final class OpenCastStatusBar: NSObject, NSMenuDelegate {
         return out.isEmpty ? "⌥Space" : out
     }
 
-    // DispatchQueue.main — not Task { @MainActor }: Tahoe has dropped those
-    // completions from @objc menu actions, leaving every item inert.
+    /// Menu actions already run on the main thread. `DispatchQueue.main.async`
+    /// (and `Task { @MainActor }`) can be deferred past menu teardown on Tahoe
+    /// and never fire — call the work inline when we are already on main.
+    private static func onMain(_ work: @escaping @MainActor () -> Void) {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated(work)
+        } else {
+            DispatchQueue.main.async { MainActor.assumeIsolated(work) }
+        }
+    }
+
     @objc private func openPanel() {
-        DispatchQueue.main.async { Model.shared.show() }
+        Self.onMain { Model.shared.show() }
     }
 
     @objc private func openSettings() {
-        DispatchQueue.main.async { SettingsWindowController.shared.show() }
+        Self.onMain { SettingsWindowController.shared.show() }
     }
 
     @objc private func runDoctor() {
-        DispatchQueue.main.async { Model.shared.perform("builtin:doctor") }
+        Self.onMain { Model.shared.perform("builtin:doctor") }
     }
 
     @objc private func openKeys() {
-        DispatchQueue.main.async { Model.shared.perform("builtin:shortcuts") }
+        Self.onMain { Model.shared.perform("builtin:shortcuts") }
     }
 
     @objc private func openWelcome() {
-        DispatchQueue.main.async { Model.shared.perform("builtin:welcome") }
+        Self.onMain { Model.shared.perform("builtin:welcome") }
     }
 
     @objc private func quitApp() {
-        DispatchQueue.main.async { NSApp.terminate(nil) }
+        Self.onMain { NSApp.terminate(nil) }
     }
 }
