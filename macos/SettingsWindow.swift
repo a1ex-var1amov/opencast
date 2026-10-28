@@ -390,11 +390,55 @@ struct PaneSection<Content: View>: View {
     }
 }
 
+private let hotkeyBeforeSpotlightKey = "opencast.hotkeyBeforeSpotlight"
+
+/// `Cmd+Space` / `Command+Space` (any case) — Spotlight's default chord.
+private func isCmdSpace(_ spec: String) -> Bool {
+    let parts = spec.split(separator: "+").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+    guard parts.count == 2, parts.last == "space" else { return false }
+    return parts[0] == "cmd" || parts[0] == "command"
+}
+
+private func openSpotlightShortcuts() {
+    let urls = [
+        "x-apple.systempreferences:com.apple.Keyboard-Settings.extension?Keyboard_Shortcuts_Spotlight",
+        "x-apple.systempreferences:com.apple.Keyboard-Settings.extension",
+    ]
+    for s in urls {
+        if let url = URL(string: s), NSWorkspace.shared.open(url) { return }
+    }
+}
+
+@MainActor
+private func claimCmdSpace(_ state: SettingsState) {
+    let prev = state.hotkeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !prev.isEmpty, !isCmdSpace(prev) {
+        UserDefaults.standard.set(prev, forKey: hotkeyBeforeSpotlightKey)
+    }
+    state.hotkeyDraft = "Cmd+Space"
+    state.set("hotkey", "Cmd+Space")
+    state.hotkeyStatus = "Saved Cmd+Space"
+    openSpotlightShortcuts()
+}
+
+@MainActor
+private func restoreSpotlightHotkey(_ state: SettingsState) {
+    let saved = UserDefaults.standard.string(forKey: hotkeyBeforeSpotlightKey)?
+        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let next = (!saved.isEmpty && !isCmdSpace(saved)) ? saved : "Alt+Space"
+    state.hotkeyDraft = next
+    state.set("hotkey", next)
+    state.hotkeyStatus = "Saved \(next)"
+    openSpotlightShortcuts()
+}
+
 private struct GeneralPane: View {
     @Bindable var state: SettingsState
     @State private var loginItem = SMAppService.mainApp.status == .enabled
     @State private var newKeyword = ""
     @State private var newText = ""
+
+    private var hotkeyIsCmdSpace: Bool { isCmdSpace(state.hotkeyDraft) }
 
     var body: some View {
         PaneSection(title: "Launcher") {
@@ -407,11 +451,18 @@ private struct GeneralPane: View {
                     Model.shared.beginRecordLauncherHotkey()
                 }
                 .disabled(Model.shared.recordingLauncherHotkey)
+                if hotkeyIsCmdSpace {
+                    Button("Restore Spotlight") { restoreSpotlightHotkey(state) }
+                } else {
+                    Button("Use ⌘Space") { claimCmdSpace(state) }
+                }
                 if !state.hotkeyStatus.isEmpty {
                     Text(state.hotkeyStatus).font(.caption).foregroundStyle(.secondary)
                 }
             }
             Text("Examples: Alt+Space, Cmd+Space, Ctrl+Alt+K, F18. With the hyper key on, Hyper+Space works too.")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("Also turn Spotlight’s ⌘Space off/on in the Shortcuts pane.")
                 .font(.caption).foregroundStyle(.secondary)
             if !state.hotkeyProblems.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
