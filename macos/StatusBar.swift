@@ -12,11 +12,16 @@ final class OpenCastStatusBar: NSObject, NSMenuDelegate {
     func install() {
         guard statusItem == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        // Same sparkles glyph as AI / OpenCast Keys family; template for menu-bar ink.
-        let image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "OpenCast")
+        // `sparkles` is multicolor by default — without preferringMonochrome + an
+        // explicit tint it paints black on a dark menu bar (invisible on Tahoe).
+        let conf = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
+            .applying(.preferringMonochrome())
+        let image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "OpenCast")?
+            .withSymbolConfiguration(conf)
             ?? NSImage(size: NSSize(width: 16, height: 16))
         image.isTemplate = true
         item.button?.image = image
+        item.button?.contentTintColor = .labelColor
         item.button?.imagePosition = .imageOnly
         item.button?.toolTip = "OpenCast"
         let menu = NSMenu()
