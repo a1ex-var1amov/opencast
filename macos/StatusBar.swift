@@ -79,38 +79,42 @@ final class OpenCastStatusBar: NSObject, NSMenuDelegate {
         return out.isEmpty ? "⌥Space" : out
     }
 
-    /// Menu actions already run on the main thread. `DispatchQueue.main.async`
-    /// (and `Task { @MainActor }`) can be deferred past menu teardown on Tahoe
-    /// and never fire — call the work inline when we are already on main.
-    private static func onMain(_ work: @escaping @MainActor () -> Void) {
-        if Thread.isMainThread {
-            MainActor.assumeIsolated(work)
-        } else {
-            DispatchQueue.main.async { MainActor.assumeIsolated(work) }
-        }
+    /// Run after the menu finishes dismissing. `afterDelay: 0` is the AppKit
+    /// hop that survives Tahoe; Swift `Task` / `MainActor.assumeIsolated` do not.
+    private func afterMenu(_ sel: Selector) {
+        NSObject.cancelPreviousPerformRequests(withTarget: self, selector: sel, object: nil)
+        perform(sel, with: nil, afterDelay: 0)
     }
 
-    @objc private func openPanel() {
-        Self.onMain { Model.shared.show() }
+    @objc private func openPanel() { afterMenu(#selector(openPanelNow)) }
+    @objc private func openSettings() { afterMenu(#selector(openSettingsNow)) }
+    @objc private func runDoctor() { afterMenu(#selector(runDoctorNow)) }
+    @objc private func openKeys() { afterMenu(#selector(openKeysNow)) }
+    @objc private func openWelcome() { afterMenu(#selector(openWelcomeNow)) }
+    @objc private func quitApp() { afterMenu(#selector(quitAppNow)) }
+
+    @objc private func openPanelNow() {
+        Task { @MainActor in Model.shared.show() }
     }
 
-    @objc private func openSettings() {
-        Self.onMain { SettingsWindowController.shared.show() }
+    @objc private func openSettingsNow() {
+        // SettingsWindowController is deliberately not @MainActor.
+        SettingsWindowController.shared.show()
     }
 
-    @objc private func runDoctor() {
-        Self.onMain { Model.shared.perform("builtin:doctor") }
+    @objc private func runDoctorNow() {
+        Task { @MainActor in Model.shared.perform("builtin:doctor") }
     }
 
-    @objc private func openKeys() {
-        Self.onMain { Model.shared.perform("builtin:shortcuts") }
+    @objc private func openKeysNow() {
+        Task { @MainActor in Model.shared.perform("builtin:shortcuts") }
     }
 
-    @objc private func openWelcome() {
-        Self.onMain { Model.shared.perform("builtin:welcome") }
+    @objc private func openWelcomeNow() {
+        Task { @MainActor in Model.shared.perform("builtin:welcome") }
     }
 
-    @objc private func quitApp() {
-        Self.onMain { NSApp.terminate(nil) }
+    @objc private func quitAppNow() {
+        NSApp.terminate(nil)
     }
 }

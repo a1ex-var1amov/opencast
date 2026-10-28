@@ -6,17 +6,35 @@ import ServiceManagement
 import Speech
 import SwiftUI
 
+/// Titled windows from an LSUIElement / `.accessory` app need this or
+/// `makeKeyAndOrderFront` is a no-op on Tahoe (window never appears).
+private final class SettingsKeyWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+}
+
 /// A real settings window. Everything still lives in `config.toml` (this
 /// window writes it with comments kept), so dotfiles keep working.
-@MainActor
+///
+/// Not `@MainActor`: AppKit menu `@objc` callbacks on Tahoe are on the main
+/// *thread* but not the MainActor executor — `MainActor.assumeIsolated` trapped
+/// and `Task { @MainActor }` was dropped, so Settings never opened.
 final class SettingsWindowController: NSObject, NSWindowDelegate {
     static let shared = SettingsWindowController()
     private var window: NSWindow?
 
     func show(tab: SettingsTab? = nil) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        // Regular policy before creating/keying the window — accessory cannot
+        // key a titled window on Tahoe.
+        if NSApp.activationPolicy() != .regular {
+            NSApp.setActivationPolicy(.regular)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+
         if let tab { SettingsState.shared.tab = tab }
         if window == nil {
-            let w = NSWindow(
+            let w = SettingsKeyWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 680, height: 540),
                 styleMask: [.titled, .closable, .miniaturizable],
                 backing: .buffered,
@@ -30,21 +48,19 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             w.center()
             window = w
         }
-        // Accessory (LSUIElement) apps often cannot key a titled window on Tahoe
-        // until activation policy is briefly `.regular`.
-        if NSApp.activationPolicy() != .regular {
-            NSApp.setActivationPolicy(.regular)
-        }
-        NSApp.activate(ignoringOtherApps: true)
-        // Show first — a blocked Engine.call in load() must not prevent the window.
+        // Show first — a blocked Engine.call in load() must not prevent opening.
         window?.makeKeyAndOrderFront(nil)
         window?.orderFrontRegardless()
         SettingsState.shared.load()
+        NSLog("opencast: settings window shown (key=%@ visible=%@)",
+              "\(window?.isKeyWindow == true)", "\(window?.isVisible == true)")
     }
 
     func windowWillClose(_ notification: Notification) {
-        // Back to menu-bar-only when the launcher is not up.
-        if Model.shared.launcher?.isVisible != true {
+        // Back to menu-bar-only when no other OpenCast window is up.
+        // Avoid Model/@MainActor here — same Tahoe isolation trap as the menu.
+        let otherVisible = NSApp.windows.contains { $0 !== window && $0.isVisible }
+        if !otherVisible {
             NSApp.setActivationPolicy(.accessory)
         }
     }
@@ -79,7 +95,8 @@ struct SnippetRow: Identifiable, Equatable {
     var text: String
 }
 
-@MainActor
+/// Not `@MainActor` — must be reachable from `SettingsWindowController.show`
+/// which is called from AppKit `@objc` menu actions outside the MainActor.
 @Observable
 final class SettingsState {
     static let shared = SettingsState()
@@ -149,8 +166,10 @@ final class SettingsState {
         // toggles flipped in the UI but never reached config.toml.
         let r = Engine.call(["op": "configSet", "key": key, "value": value])
         status = (r["error"] as? String) ?? (r["text"] as? String ?? "Saved")
-        Model.shared.refreshSettings()
-        SnippetExpander.shared.reload()
+        Task { @MainActor in
+            Model.shared.refreshSettings()
+            SnippetExpander.shared.reload()
+        }
     }
 
     /// Open config.toml; `--goto` only when Cursor/VS Code is the default .toml handler (P8-5).
