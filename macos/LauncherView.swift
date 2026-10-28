@@ -186,7 +186,9 @@ struct LauncherView: View {
                 Text(
                     q.isEmpty
                         ? "No results"
-                        : "No results for “\(q)” · Tab asks AI · / browses files"
+                        : model.isListMode
+                            ? "No matches — Esc searches all commands"
+                            : "No results for “\(q)” · Tab asks AI · / browses files"
                 )
                     .foregroundStyle(Theme.secondary(scheme))
                     .frame(maxWidth: .infinity, minHeight: model.rowHeight)

@@ -223,6 +223,10 @@ final class Model {
         return rows
     }
 
+    /// Escape hatch when a filtered local list (Welcome, etc.) matches nothing —
+    /// typing a command name used to show an empty list with no way out but Esc.
+    static let searchAllRowId = "local:search-all"
+
     /// Script Filter items as rows. Ids are `item:<index>` so Return can map back.
     static func listRows(command: Command, items: [ListItem], filter: Bool, query: String) -> [Row] {
         let kept: [(index: Int, item: ListItem)]
@@ -231,7 +235,7 @@ final class Model {
         } else {
             kept = items.enumerated().map { ($0.offset, $0.element) }
         }
-        return kept.map { (index, item) in
+        var rows = kept.map { (index, item) in
             Row.command(Command(
                 id: "item:\(index)",
                 title: item.title,
@@ -242,6 +246,18 @@ final class Model {
                 hotkey: item.hotkey
             ))
         }
+        if rows.isEmpty, filter, !query.trimmingCharacters(in: .whitespaces).isEmpty {
+            rows.append(.command(Command(
+                id: searchAllRowId,
+                title: "Search all commands",
+                subtitle: "“\(query)”",
+                icon: "magnifyingglass",
+                kind: .builtin,
+                arguments: [],
+                hotkey: nil
+            )))
+        }
+        return rows
     }
 
     /// From LauncherView `@ScaledMetric` (1.0 at default Dynamic Type).
@@ -757,6 +773,11 @@ final class Model {
     func activate(_ index: Int) {
         guard rows.indices.contains(index) else { return }
         if case .list(let command, let items, _) = mode, case .command(let row) = rows[index] {
+            if row.id == Self.searchAllRowId {
+                backToSearch(clearQuery: false)
+                search()
+                return
+            }
             guard let i = Int(row.id.dropFirst("item:".count)), items.indices.contains(i) else { return }
             if command.id.hasPrefix("local:") {
                 localListAction?(Int(items[i].arg) ?? i)
