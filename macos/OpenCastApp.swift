@@ -551,6 +551,8 @@ final class Model {
             keepOnBlur = ProcessInfo.processInfo.environment["OPENCAST_KEEP_ON_BLUR"] != nil
             readKeep = true
         }
+        // A dropped Task.detached execute on Tahoe could leave this true forever.
+        busy = false
         if case .args = mode { mode = .search }
         if case .output = mode { mode = .search }
         guard let launcher else { return }
@@ -1168,12 +1170,12 @@ final class Model {
         if let action { body["action"] = action }
         if let output { body["output"] = output }
         let request = body
-        Task.detached {
+        // MainActor Task — not Task.detached. Tahoe was dropping detached
+        // completions after Return, so busy stuck true and nothing ran.
+        Task { @MainActor in
             let outcome = ExecOutcome(Engine.call(request))
-            await MainActor.run {
-                Model.shared.busy = false
-                Model.shared.apply(outcome)
-            }
+            busy = false
+            apply(outcome)
         }
     }
 
@@ -1603,9 +1605,11 @@ final class Model {
             }
         }
         if mods.isEmpty, event.keyCode == 36 || event.keyCode == 76 {
-            // Typed fast and hit Return before this query's rows arrived: wait for
-            // them (a few ms) instead of running the previous query's top hit.
-            if !isListMode, deliveredGen < searchGen, selected == 0 {
+            // Only defer when a debounced search Task is actually in flight. Comparing
+            // gens alone left Return inert after immediate search (searchTask == nil
+            // but gens briefly disagreed) or when a detached execute had stuck `busy`.
+            let waiting = !isListMode && searchTask != nil && deliveredGen < searchGen && selected == 0
+            if waiting {
                 pendingReturn = true
             } else {
                 activate(selected)

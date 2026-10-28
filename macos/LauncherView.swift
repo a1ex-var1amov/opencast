@@ -147,6 +147,8 @@ struct LauncherView: View {
             .focusEffectDisabled()
             .focused($focused)
             .autocorrectionDisabled()
+            // Tahoe: Return in the field does not always reach the NSEvent monitor.
+            .onSubmit { model.activate(model.selected) }
             if model.dictating {
                 Image(systemName: "mic.fill")
                     .foregroundStyle(Theme.danger)
