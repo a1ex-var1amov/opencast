@@ -13,12 +13,15 @@ cd "$(dirname "$0")"
 
 command -v cargo >/dev/null || { [ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"; }
 if ! command -v cargo >/dev/null; then
-  echo "Rust is missing. Install it from https://rustup.rs then re-run."
+  echo "Rust is missing. Easiest path (no compiler needed):"
+  echo "  brew tap a1ex-var1amov/tap && brew trust a1ex-var1amov/tap && brew install --cask opencast"
+  echo "Or install Rust from https://rustup.rs and re-run this script."
   exit 1
 fi
 if ! command -v swiftc >/dev/null; then
   echo "swiftc is missing. Install the Xcode command-line tools:"
   echo "  xcode-select --install"
+  echo "Or use the prebuilt cask: brew install --cask a1ex-var1amov/tap/opencast"
   exit 1
 fi
 

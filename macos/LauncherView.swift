@@ -69,6 +69,8 @@ struct LauncherView: View {
         .onAppear {
             syncTypeScale()
             selectField()
+            // ready may already be true before first appear (see AppShell); still fill the list.
+            if model.ready { model.search() }
         }
         .onChange(of: bodySize) { _, _ in syncTypeScale() }
         .onChange(of: model.focusTick) { _, _ in selectField() }

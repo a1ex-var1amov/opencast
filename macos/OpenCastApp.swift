@@ -658,12 +658,18 @@ final class Model {
                 deliverSearch(rows, gen: gen)
                 return
             }
-            let parsed: [Command] = await Task.detached {
+            let (parsed, searchError): ([Command], String?) = await Task.detached {
                 let result = Engine.call(["op": "search", "query": q])
+                if let err = result["error"] as? String, !err.isEmpty {
+                    return ([], err)
+                }
                 let raw = result["commands"] as? [[String: Any]] ?? []
-                return raw.compactMap(Command.init)
+                return (raw.compactMap(Command.init), nil)
             }.value
             guard !Task.isCancelled, gen == searchGen else { return }
+            if let searchError {
+                flash("Search failed: \(searchError)", error: true, thenHide: false)
+            }
             let merged = ClipboardHistory.shared.merge(into: parsed, query: q)
             let windowIds = merged.filter { $0.kind == .window }.map(\.id)
             if !windowIds.isEmpty {
@@ -1514,6 +1520,7 @@ final class Model {
         mode = .search
         noteContentChanged()
         focusTick += 1
+        if ready { search() }
     }
 
     func pickProvider(_ id: String) {

@@ -107,6 +107,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Model.shared.ready = true
                 // First show happens here, with the right presentation (the engine used to show too early).
                 Model.shared.show()
+                // Don't rely on LauncherView.onChange(of: ready): if the view mounts after
+                // ready is already true (common on slower Macs), that change never fires and
+                // the list stays on "No results" until something else triggers search.
+                Model.shared.search()
                 Model.shared.checkHotkeys()
                 Model.shared.prefetchAppIcons()
                 SnippetExpander.shared.reload()
