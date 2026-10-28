@@ -90,7 +90,17 @@ final class Model {
     }
 
     var query = "" {
-        didSet { if oldValue != query { clearToastOnInput() } }
+        didSet {
+            guard oldValue != query else { return }
+            clearToastOnInput()
+            // Drive search from didSet, not only LauncherView.onChange(of: query):
+            // on Tahoe (and some SDK-skewed builds) that onChange never fires for
+            // @Observable TextField edits, so the list stays on the empty-query rows.
+            selected = 0
+            listStart = 0
+            noteContentChanged()
+            if ready { search() }
+        }
     }
     var commands: [Command] = []
     var selected = 0 {

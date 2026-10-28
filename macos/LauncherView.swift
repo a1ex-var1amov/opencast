@@ -77,12 +77,7 @@ struct LauncherView: View {
         .onChange(of: model.ready) { _, ready in
             if ready { model.search() }
         }
-        .onChange(of: model.query) { _, _ in
-            model.selected = 0
-            model.listStart = 0
-            model.noteContentChanged()
-            if model.ready { model.search() }
-        }
+        // Query → search is handled in Model.query.didSet (Tahoe-safe).
         .onReceive(NotificationCenter.default.publisher(for: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification)) { _ in
             reduceTransparency = Theme.reduceTransparency
         }
