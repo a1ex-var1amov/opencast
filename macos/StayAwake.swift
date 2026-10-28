@@ -118,11 +118,16 @@ final class StayAwakeController: NSObject {
     private func refreshButton() {
         guard let button = statusItem?.button else { return }
         let on = mode != "off"
-        // Always template so contentTintColor applies; non-template fills vanish on the menu bar.
-        let image = NSImage(systemSymbolName: on ? "circle.fill" : "circle", accessibilityDescription: "Stay Awake")
+        // Template only — system status items tint white/black from the menu bar.
+        // .labelColor / .secondaryLabelColor follow the *app* appearance and go
+        // black while Control Center icons stay white on a dark bar.
+        let conf = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
+            .applying(.preferringMonochrome())
+        let image = NSImage(systemSymbolName: on ? "circle.fill" : "circle", accessibilityDescription: "Stay Awake")?
+            .withSymbolConfiguration(conf)
         image?.isTemplate = true
         button.image = image
-        button.contentTintColor = on ? .controlAccentColor : .secondaryLabelColor
+        button.contentTintColor = nil
         button.toolTip = on ? "Stay Awake: \(label(for: mode))" : "Stay Awake: Off"
     }
 

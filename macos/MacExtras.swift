@@ -522,9 +522,13 @@ final class FocusController {
         guard let button = statusItem?.button else { return }
         let left = minutesLeft
         let symbol = isPaused ? "pause.fill" : "target"
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Focus")
+        let conf = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
+            .applying(.preferringMonochrome())
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Focus")?
+            .withSymbolConfiguration(conf)
         image?.isTemplate = true
         button.image = image
+        button.contentTintColor = nil
         button.title = "\(left)m"
         button.imagePosition = .imageLeading
         button.toolTip = goal.isEmpty ? "Focus" : "Focus: \(goal)"

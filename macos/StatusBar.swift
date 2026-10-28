@@ -12,8 +12,9 @@ final class OpenCastStatusBar: NSObject, NSMenuDelegate {
     func install() {
         guard statusItem == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        // `sparkles` is multicolor by default — without preferringMonochrome + an
-        // explicit tint it paints black on a dark menu bar (invisible on Tahoe).
+        // Multicolor SF Symbols ignore menu-bar template ink unless monochrome.
+        // Do not set contentTintColor — .labelColor follows the app appearance and
+        // paints black while system items stay white on a dark menu bar.
         let conf = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
             .applying(.preferringMonochrome())
         let image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "OpenCast")?
@@ -21,7 +22,7 @@ final class OpenCastStatusBar: NSObject, NSMenuDelegate {
             ?? NSImage(size: NSSize(width: 16, height: 16))
         image.isTemplate = true
         item.button?.image = image
-        item.button?.contentTintColor = .labelColor
+        item.button?.contentTintColor = nil
         item.button?.imagePosition = .imageOnly
         item.button?.toolTip = "OpenCast"
         let menu = NSMenu()
