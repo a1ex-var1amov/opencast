@@ -216,13 +216,29 @@ check(!HotkeyChord.isCmdSpace("Cmd+Shift+Space"), "extra modifiers are not bare 
 check(!HotkeyChord.isCmdSpace("Cmd+S"), "not Space")
 check(!HotkeyChord.isCmdSpace(""), "empty is not ⌘Space")
 
-// MARK: - Menu bar tint policy (Tahoe dark bar)
+// MARK: - Menu bar tint / click policy (Tahoe dark bar + GG visibility)
 
 check(!MenuBarSymbol.forcesAppLabelTint,
       "status items must not force app .labelColor (goes black on dark menu bars)")
+check(!MenuBarSymbol.usesTaskAfterMenu,
+      "menu actions must not use Task { @MainActor } after AppKit menu hops (Tahoe drops them)")
 check(MenuBarSymbol.needsMonochrome("sparkles"), "sparkles ships multicolor and needs monochrome")
 check(!MenuBarSymbol.needsMonochrome("circle"), "circle is already a mono template")
 check(!MenuBarSymbol.needsMonochrome("circle.fill"), "circle.fill is already mono")
+check(MenuBarSymbol.fallbacks(for: "sparkles").contains("star.fill"),
+      "sparkles has a fallback when the symbol is missing on an OS")
+let sparkles = MenuBarSymbol.templateImage(systemName: "sparkles", accessibilityDescription: "OpenCast")
+check(sparkles.isTemplate, "menu-bar sparkles is a template for system tint")
+check(sparkles.size.width > 0 && sparkles.size.height > 0, "menu-bar sparkles has a non-zero size")
+let stay = MenuBarSymbol.templateImage(systemName: "circle", accessibilityDescription: "Stay Awake")
+check(stay.isTemplate && stay.size.width > 0, "Stay Awake circle is a visible template")
+
+// MARK: - Overlay / Click Text panel policy (Tahoe invisible graphics)
+
+check(OverlayPanelPolicy.orderFrontRegardless,
+      "Click Text / HUD overlays must orderFrontRegardless while accessory")
+check(OverlayPanelPolicy.backingAlpha > 0 && OverlayPanelPolicy.backingAlpha < 0.01,
+      "overlay backing keeps a hair of alpha so SwiftUI fills composite on Tahoe")
 
 // MARK: - Toast key semantics (N-1, N-2) — Model lives in AppKit; verify by hand
 // Scenario 1: permission error toast up → type "slack" → Return opens Slack (not Settings).

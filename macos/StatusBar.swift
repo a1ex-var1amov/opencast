@@ -11,19 +11,14 @@ final class OpenCastStatusBar: NSObject, NSMenuDelegate {
 
     func install() {
         guard statusItem == nil else { return }
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        // Multicolor SF Symbols ignore menu-bar template ink unless monochrome.
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         // Never force .labelColor — see MenuBarSymbol.forcesAppLabelTint.
         precondition(!MenuBarSymbol.forcesAppLabelTint)
-        var conf = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
-        if MenuBarSymbol.needsMonochrome("sparkles") {
-            conf = conf.applying(.preferringMonochrome())
-        }
-        let image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "OpenCast")?
-            .withSymbolConfiguration(conf)
-            ?? NSImage(size: NSSize(width: 16, height: 16))
-        image.isTemplate = true
-        item.button?.image = image
+        precondition(!MenuBarSymbol.usesTaskAfterMenu)
+        item.button?.image = MenuBarSymbol.templateImage(
+            systemName: "sparkles",
+            accessibilityDescription: "OpenCast"
+        )
         item.button?.contentTintColor = nil
         item.button?.imagePosition = .imageOnly
         item.button?.toolTip = "OpenCast"
@@ -102,7 +97,8 @@ final class OpenCastStatusBar: NSObject, NSMenuDelegate {
     @objc private func quitApp() { afterMenu(#selector(quitAppNow)) }
 
     @objc private func openPanelNow() {
-        Task { @MainActor in Model.shared.show() }
+        // Inline — Task { @MainActor } after menu hops is dropped on Tahoe.
+        MainActor.assumeIsolated { Model.shared.show() }
     }
 
     @objc private func openSettingsNow() {
@@ -111,15 +107,15 @@ final class OpenCastStatusBar: NSObject, NSMenuDelegate {
     }
 
     @objc private func runDoctorNow() {
-        Task { @MainActor in Model.shared.perform("builtin:doctor") }
+        MainActor.assumeIsolated { Model.shared.perform("builtin:doctor") }
     }
 
     @objc private func openKeysNow() {
-        Task { @MainActor in Model.shared.perform("builtin:shortcuts") }
+        MainActor.assumeIsolated { Model.shared.perform("builtin:shortcuts") }
     }
 
     @objc private func openWelcomeNow() {
-        Task { @MainActor in Model.shared.perform("builtin:welcome") }
+        MainActor.assumeIsolated { Model.shared.perform("builtin:welcome") }
     }
 
     @objc private func quitAppNow() {

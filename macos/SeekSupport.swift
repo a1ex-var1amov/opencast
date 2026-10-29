@@ -84,8 +84,11 @@ extension Model {
         } else {
             seekLeaderFrom = nil
         }
-        seek.orderFront(nil)
-        launcher?.orderFront(nil)
+        seek.alphaValue = 1
+        // Tahoe: plain orderFront is a no-op while accessory; clear backing drops fills.
+        precondition(OverlayPanelPolicy.orderFrontRegardless)
+        seek.orderFrontRegardless()
+        launcher?.orderFrontRegardless()
     }
 
     private func endSeek() {

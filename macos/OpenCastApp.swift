@@ -442,9 +442,12 @@ final class Model {
         seek.refusesKey = true
         seek.hasShadow = false // full-monitor overlay; shadow belongs on the search island
         seek.sharingType = .none
+        seek.styleMask = [.borderless, .nonactivatingPanel]
+        // Above the launcher so Click Text hits paint over the island chrome.
+        seek.level = NSWindow.Level(rawValue: 26)
         let seekHost = ClearHost(rootView: SeekView(model: self))
         seekHost.wantsLayer = true
-        seekHost.layer?.backgroundColor = NSColor.clear.cgColor
+        seekHost.layer?.backgroundColor = NSColor.black.withAlphaComponent(OverlayPanelPolicy.backingAlpha).cgColor
         seek.contentView = seekHost
         self.seek = seek
 
@@ -595,7 +598,8 @@ final class Model {
             launcher.makeKeyAndOrderFront(nil)
         }
         focusTick += 1
-        refreshSettings()
+        // Settings come from boot / ConfigWatcher / Settings saves — not every show.
+        // (refreshSettings reset WindowGlyphs and re-hit the engine; felt slow on Tahoe.)
         // Warnings deferred during Welcome: show them once the panel is up again (P3-3).
         flushPendingWarningsToast()
     }

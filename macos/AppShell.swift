@@ -11,7 +11,8 @@ final class IslandPanel: NSPanel {
             defer: true
         )
         isOpaque = false
-        backgroundColor = .clear
+        // Hair of alpha — fully clear backing can drop SwiftUI fills on Tahoe.
+        backgroundColor = NSColor.black.withAlphaComponent(OverlayPanelPolicy.backingAlpha)
         hasShadow = true
         level = NSWindow.Level(rawValue: 25)
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -38,7 +39,11 @@ final class ClearHost<Content: View>: NSHostingView<Content> {
         super.viewDidMoveToWindow()
         wantsLayer = true
         layer?.isOpaque = false
-        layer?.backgroundColor = NSColor.clear.cgColor
+        // Match IslandPanel: full clear can erase SwiftUI fills on Tahoe overlays.
+        layer?.backgroundColor = NSColor.black.withAlphaComponent(OverlayPanelPolicy.backingAlpha).cgColor
+        if #available(macOS 13.0, *) {
+            sizingOptions = []
+        }
     }
 }
 

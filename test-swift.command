@@ -14,6 +14,7 @@ swiftc -O -target "${ARCH}-apple-macos14.0" \
   macos/ListFilter.swift macos/ShortcutApps.swift macos/SpotifyText.swift \
   macos/Models.swift macos/Glyphs.swift \
   macos/WindowTarget.swift macos/HotkeyChord.swift macos/MenuBarSymbol.swift \
+  macos/OverlayPanelPolicy.swift \
   macos-tests/main.swift \
   -o target/tests/panel-logic || exit 1
 ./target/tests/panel-logic

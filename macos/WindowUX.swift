@@ -109,7 +109,7 @@ final class WindowHUD {
             let p = NSPanel(contentRect: rect, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             p.level = .statusBar
             p.isOpaque = false
-            p.backgroundColor = .clear
+            p.backgroundColor = NSColor.black.withAlphaComponent(OverlayPanelPolicy.backingAlpha)
             p.ignoresMouseEvents = true
             p.hasShadow = true
             p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
@@ -119,6 +119,7 @@ final class WindowHUD {
         p.contentView = host
         p.setFrame(rect, display: true)
         p.alphaValue = 1
+        precondition(OverlayPanelPolicy.orderFrontRegardless)
         p.orderFrontRegardless()
         panel = p
         hideTask?.cancel()
@@ -158,7 +159,7 @@ final class WindowPreview {
         let w = window ?? {
             let w = NSWindow(contentRect: r.appKitFrame, styleMask: .borderless, backing: .buffered, defer: false)
             w.isOpaque = false
-            w.backgroundColor = .clear
+            w.backgroundColor = NSColor.black.withAlphaComponent(OverlayPanelPolicy.backingAlpha)
             w.ignoresMouseEvents = true
             w.level = .floating
             w.hasShadow = false
@@ -182,6 +183,7 @@ final class WindowPreview {
         } else {
             w.setFrame(r.appKitFrame, display: true)
         }
+        precondition(OverlayPanelPolicy.orderFrontRegardless)
         w.orderFrontRegardless()
         window = w
     }
