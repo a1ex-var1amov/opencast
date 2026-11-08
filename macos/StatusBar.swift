@@ -1,6 +1,7 @@
 import AppKit
 
-/// Persistent menu-bar entry for OpenCast itself (not Focus / Stay Awake).
+/// Persistent menu-bar entry for OpenCast itself, with Stay Awake as a submenu
+/// (Focus keeps its own countdown item while a session runs).
 ///
 /// Not `@MainActor`-isolated: AppKit invokes `@objc` menu actions off that
 /// isolation on some macOS versions (Tahoe), which left every item inert.
@@ -55,6 +56,11 @@ final class OpenCastStatusBar: NSObject, NSMenuDelegate {
         let welcome = NSMenuItem(title: "Welcome…", action: #selector(openWelcome), keyEquivalent: "")
         welcome.target = self
         menu.addItem(welcome)
+        menu.addItem(.separator())
+        // One icon: Stay Awake rides along as a submenu instead of its own status item.
+        let awake = NSMenuItem(title: StayAwakeController.shared.menuTitle, action: nil, keyEquivalent: "")
+        awake.submenu = StayAwakeController.shared.submenu()
+        menu.addItem(awake)
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit", action: #selector(quitApp), keyEquivalent: "")
         quit.target = self

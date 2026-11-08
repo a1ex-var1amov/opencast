@@ -1,8 +1,8 @@
 import AppKit
 import IOKit.pwr_mgt
 
-/// Amphetamine-lite: an IOKit power assertion (no `caffeinate` child process)
-/// plus a menu-bar state dot.
+/// Amphetamine-lite: an IOKit power assertion (no `caffeinate` child process).
+/// Lives in the OpenCast status menu as a submenu (one icon, not two).
 ///
 /// Not `@MainActor`-isolated so AppKit can invoke `@objc` menu actions on Tahoe.
 final class StayAwakeController: NSObject {
@@ -12,17 +12,16 @@ final class StayAwakeController: NSObject {
     private var assertion: IOPMAssertionID = 0
     private var endsAt: Date?
     private var endTimer: Timer?
-    private var statusItem: NSStatusItem?
-    private var tick: Timer?
 
-    func install() {
-        guard statusItem == nil else { return }
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.imagePosition = .imageOnly
-        item.button?.toolTip = "OpenCast Stay Awake"
-        statusItem = item
-        rebuildMenu()
-        refreshButton()
+    /// Title for the OpenCast menu entry: state at a glance, countdown when timed.
+    var menuTitle: String {
+        guard mode != "off" else { return "Stay Awake" }
+        var title = "Stay Awake: \(label(for: mode))"
+        if let endsAt {
+            let m = Int(max(0, endsAt.timeIntervalSinceNow)) / 60
+            title += m > 0 ? " · \(m)m left" : " · ending"
+        }
+        return title
     }
 
     func apply(_ mode: String) {
@@ -43,21 +42,12 @@ final class StayAwakeController: NSObject {
         } else {
             self.mode = "off"
         }
-        rebuildMenu()
-        refreshButton()
-        scheduleTick()
     }
 
     func shutdown() {
         release()
         mode = "off"
         endsAt = nil
-        tick?.invalidate()
-        tick = nil
-        if let item = statusItem {
-            NSStatusBar.system.removeStatusItem(item)
-            statusItem = nil
-        }
     }
 
     /// `kIOPMAssertionTypePreventUserIdleSystemSleep` is what `caffeinate -i` takes.
@@ -82,15 +72,10 @@ final class StayAwakeController: NSObject {
         endTimer = nil
         if seconds > 0 {
             endTimer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    guard let self, self.mode != "off" else { return }
-                    self.release()
-                    self.mode = "off"
-                    self.endsAt = nil
-                    self.rebuildMenu()
-                    self.refreshButton()
-                    self.scheduleTick()
-                }
+                guard let self, self.mode != "off" else { return }
+                self.release()
+                self.mode = "off"
+                self.endsAt = nil
             }
         }
     }
@@ -103,50 +88,16 @@ final class StayAwakeController: NSObject {
         assertion = 0
     }
 
-    private func scheduleTick() {
-        tick?.invalidate()
-        tick = nil
-        guard mode != "off", endsAt != nil else { return }
-        tick = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.rebuildMenu()
-                self?.refreshButton()
-            }
-        }
-    }
-
-    private func refreshButton() {
-        guard let button = statusItem?.button else { return }
-        let on = mode != "off"
-        precondition(!MenuBarSymbol.forcesAppLabelTint)
-        button.image = MenuBarSymbol.templateImage(
-            systemName: on ? "circle.fill" : "circle",
-            accessibilityDescription: "Stay Awake"
-        )
-        button.contentTintColor = nil
-        button.toolTip = on ? "Stay Awake: \(label(for: mode))" : "Stay Awake: Off"
-    }
-
-    private func rebuildMenu() {
+    /// Submenu for the OpenCast status menu. Built fresh on every open
+    /// (`menuNeedsUpdate`), so the checkmark and countdown are always current.
+    func submenu() -> NSMenu {
         let menu = NSMenu()
-        if mode != "off" {
-            var title = "Stay Awake: \(label(for: mode))"
-            if let endsAt {
-                let left = max(0, endsAt.timeIntervalSinceNow)
-                let m = Int(left) / 60
-                title += m > 0 ? " · \(m)m left" : " · ending"
-            }
-            let header = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-            header.isEnabled = false
-            menu.addItem(header)
-            menu.addItem(.separator())
-        }
         add(menu, title: "Off", mode: "off")
         add(menu, title: "Indefinite", mode: "indefinite")
         add(menu, title: "30 minutes", mode: "30m")
         add(menu, title: "1 hour", mode: "1h")
         add(menu, title: "3 hours", mode: "3h")
-        statusItem?.menu = menu
+        return menu
     }
 
     private func add(_ menu: NSMenu, title: String, mode: String) {

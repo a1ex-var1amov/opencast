@@ -99,7 +99,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         MainActor.assumeIsolated {
             Model.shared.install()
             OpenCastStatusBar.shared.install()
-            StayAwakeController.shared.install()
             ClipboardHistory.shared.install()
         }
         Task.detached {
