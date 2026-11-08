@@ -1,6 +1,6 @@
 import AppKit
 
-/// The one OpenCast menu-bar item: a sparkle that fills in while Stay Awake is
+/// The one OpenCast menu-bar item: a star that fills in while Stay Awake is
 /// on (submenu to pick a duration), Focus as a countdown badge plus Pause /
 /// Stop entries while a session runs.
 ///
@@ -33,7 +33,7 @@ final class OpenCastStatusBar: NSObject, NSMenuDelegate {
         refresh()
     }
 
-    /// Same sparkle always: outline idle, filled while Stay Awake is on.
+    /// Same star always: outline idle, filled while Stay Awake is on.
     /// Focus adds its countdown as the title; width grows only then.
     private func refresh() {
         guard let item = statusItem, let button = item.button else { return }

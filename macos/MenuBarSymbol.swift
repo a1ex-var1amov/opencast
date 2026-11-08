@@ -28,7 +28,6 @@ enum MenuBarSymbol {
     /// Prefer these when the primary SF Symbol is missing on a given OS.
     static func fallbacks(for systemName: String) -> [String] {
         switch systemName {
-        case "sparkle": ["sparkles", "star.fill", "star"]
         case "sparkles": ["star.fill", "star"]
         case "circle.fill": ["circle"]
         case "target": ["scope", "circle"]
@@ -59,31 +58,11 @@ enum MenuBarSymbol {
         return fallback
     }
 
-    /// The one OpenCast status glyph: a single large sparkle. Outline when idle,
-    /// filled while Stay Awake is on. SF Symbols has no hollow sparkle, so the
-    /// outline is derived: the glyph dilated by `stroke`, minus the glyph itself.
-    /// Both states share one canvas size so the item never shifts.
+    /// The one OpenCast status glyph: a star, outline when idle and filled
+    /// while Stay Awake is on. SF Symbols ships the pair at identical metrics,
+    /// so the item never shifts between states.
     static func statusImage(awake: Bool) -> NSImage {
-        let glyph = templateImage(systemName: "sparkle", accessibilityDescription: "OpenCast", pointSize: 16)
-        let stroke: CGFloat = 1.4
-        let size = NSSize(width: glyph.size.width + 2 * stroke, height: glyph.size.height + 2 * stroke)
-        let image = NSImage(size: size, flipped: false) { _ in
-            let origin = NSPoint(x: stroke, y: stroke)
-            if awake {
-                glyph.draw(at: origin, from: .zero, operation: .sourceOver, fraction: 1)
-            } else {
-                for i in 0..<16 {
-                    let a = CGFloat(i) / 16 * 2 * .pi
-                    let p = NSPoint(x: origin.x + stroke * cos(a), y: origin.y + stroke * sin(a))
-                    glyph.draw(at: p, from: .zero, operation: .sourceOver, fraction: 1)
-                }
-                glyph.draw(at: origin, from: .zero, operation: .destinationOut, fraction: 1)
-            }
-            return true
-        }
-        image.isTemplate = true
-        image.accessibilityDescription = "OpenCast"
-        return image
+        templateImage(systemName: awake ? "star.fill" : "star", accessibilityDescription: "OpenCast", pointSize: 16)
     }
 
     private static func configured(_ name: String, pointSize: CGFloat, mono: Bool) -> NSImage? {

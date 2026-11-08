@@ -98,7 +98,7 @@ enum AppKitSettingsTests {
         check(idle.isTemplate && awake.isTemplate, "status glyph is a template image in both states")
         check(idle.size == awake.size, "idle and awake glyphs share one size so the item never shifts")
         check(centerAlpha(idle) < 0.1 && centerAlpha(awake) > 0.9,
-              "idle sparkle is hollow at the centre, awake sparkle is filled")
+              "idle star is hollow at the centre, awake star is filled")
         check(awake.accessibilityDescription == "OpenCast", "status glyph keeps the OpenCast accessibility name")
 
         settings.close()
