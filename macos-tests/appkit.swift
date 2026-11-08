@@ -38,8 +38,8 @@ enum AppKitSettingsTests {
         settings.title = "OpenCast Settings Test"
         check(settings.canBecomeKey, "SettingsKeyWindow can become key")
         check(settings.canBecomeMain, "SettingsKeyWindow can become main")
-        check(SettingsPresentation.windowLevel.rawValue > SettingsPresentation.islandLevel,
-              "Settings window level is above the launcher island")
+        check(SettingsPresentation.windowLevel == .normal,
+              "Settings window level is normal (not floating over other apps)")
 
         // MARK: Island still up (Tahoe status-item click does not hide it)
 
@@ -62,8 +62,7 @@ enum AppKitSettingsTests {
 
         check(!island.isVisible, "present() orders the island out so it cannot cover Settings")
         check(settings.isVisible, "Settings is visible from .accessory after present()")
-        check(settings.level.rawValue > SettingsPresentation.islandLevel,
-              "presented Settings sits above island level")
+        check(settings.level == .normal, "presented Settings stays a normal-level window")
 
         // MARK: hide() then show() (builtin:settings / handleUi)
 

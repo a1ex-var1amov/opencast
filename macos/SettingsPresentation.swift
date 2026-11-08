@@ -11,9 +11,11 @@ final class SettingsKeyWindow: NSWindow {
 /// `./test-appkit.command` can actually create windows and fail the release.
 enum SettingsPresentation {
     /// Launcher / Click Text overlays sit at 25 (status bar). A normal titled
-    /// window is level 0 and opens *behind* them when the island is still up.
+    /// window is level 0 and opens *behind* them when the island is still up,
+    /// so `present` orders the islands out instead of floating Settings above
+    /// every other app (a settings window must not be always-on-top).
     static let islandLevel = 25
-    static var windowLevel: NSWindow.Level { NSWindow.Level(rawValue: islandLevel + 1) }
+    static var windowLevel: NSWindow.Level { .normal }
 
     /// `handleUi("settings")` calls `hide()` first, which may `NSApp.hide` the
     /// whole accessory app. Unhide + regular policy before keying the window.

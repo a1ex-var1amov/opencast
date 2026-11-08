@@ -542,15 +542,21 @@ final class FocusController {
 }
 
 /// Target for the Focus menu bar item's menu.
-@MainActor
+///
+/// Not `@MainActor`: Tahoe/Golden Gate deliver status-menu `@objc` actions off
+/// the MainActor executor (see OpenCastStatusBar), so hop via the main queue.
 final class FocusMenuTarget: NSObject {
     static let shared = FocusMenuTarget()
 
     @objc func pause() {
-        FocusController.shared.togglePause(model: Model.shared)
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated { FocusController.shared.togglePause(model: Model.shared) }
+        }
     }
 
     @objc func stop() {
-        FocusController.shared.stop(announce: false)
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated { FocusController.shared.stop(announce: false) }
+        }
     }
 }

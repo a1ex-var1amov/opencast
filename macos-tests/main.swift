@@ -224,8 +224,8 @@ check(!MenuBarSymbol.usesTaskAfterMenu,
       "menu actions must not use Task { @MainActor } after AppKit menu hops (Tahoe drops them)")
 check(!MenuBarSymbol.usesAssumeIsolatedAfterMenu,
       "menu actions must not assumeIsolated after AppKit hops (Tahoe traps)")
-check(SettingsPresentation.windowLevel.rawValue > SettingsPresentation.islandLevel,
-      "Settings opens above the launcher island")
+check(SettingsPresentation.windowLevel == .normal,
+      "Settings is a normal window, not always-on-top (islands are ordered out instead)")
 check(MenuBarSymbol.needsMonochrome("sparkles"), "sparkles ships multicolor and needs monochrome")
 check(!MenuBarSymbol.needsMonochrome("circle"), "circle is already a mono template")
 check(!MenuBarSymbol.needsMonochrome("circle.fill"), "circle.fill is already mono")
