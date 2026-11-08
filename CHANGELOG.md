@@ -91,6 +91,13 @@ first tag is in `git log`.
   `SnippetMatch.swift`.
 
 ### Changed
+- **One menu-bar icon.** Stay Awake and Focus no longer add their own status
+  items. The OpenCast star fills in while Stay Awake is on (durations live in
+  a submenu of the OpenCast menu), and a running Focus session shows its
+  countdown beside the star with Pause / Resume and Stop in the same menu.
+- Settings opens as a normal window (the launcher island is ordered out
+  instead), and status-menu actions hop onto the main queue so they work on
+  macOS 26 and 27.
 - An empty launcher shows a mix of kinds instead of one wall of window commands:
   at most 12 window and 16 built-in rows, with apps and Recents kept. Anything
   you pinned, boosted or actually use is exempt from the cap.
