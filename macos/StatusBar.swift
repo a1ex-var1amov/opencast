@@ -1,7 +1,8 @@
 import AppKit
 
-/// The one OpenCast menu-bar item: Stay Awake as a submenu, Focus as a
-/// countdown badge plus Pause / Stop entries while a session runs.
+/// The one OpenCast menu-bar item: a sparkle that fills in while Stay Awake is
+/// on (submenu to pick a duration), Focus as a countdown badge plus Pause /
+/// Stop entries while a session runs.
 ///
 /// Not `@MainActor`-isolated: AppKit invokes `@objc` menu actions off that
 /// isolation on some macOS versions (Tahoe), which left every item inert.
@@ -19,21 +20,36 @@ final class OpenCastStatusBar: NSObject, NSMenuDelegate {
     }
 
     private var focus: FocusBadge?
+    private var awake = false
 
     func setFocus(_ badge: FocusBadge?) {
         focus = badge
+        refresh()
+    }
+
+    /// Pushed by StayAwakeController on every mode change.
+    func setAwake(_ on: Bool) {
+        awake = on
+        refresh()
+    }
+
+    /// Same sparkle always: outline idle, filled while Stay Awake is on.
+    /// Focus adds its countdown as the title; width grows only then.
+    private func refresh() {
         guard let item = statusItem, let button = item.button else { return }
-        if let badge {
-            item.length = NSStatusItem.variableLength
+        button.image = MenuBarSymbol.statusImage(awake: awake)
+        var tips = ["OpenCast"]
+        if awake { tips.append(StayAwakeController.shared.menuTitle) }
+        if let focus {
+            button.title = focus.paused ? "\(focus.minutesLeft)m paused" : "\(focus.minutesLeft)m"
             button.imagePosition = .imageLeading
-            button.title = badge.paused ? "\(badge.minutesLeft)m paused" : "\(badge.minutesLeft)m"
-            button.toolTip = badge.goal.isEmpty ? "OpenCast · Focus" : "OpenCast · Focus: \(badge.goal)"
+            tips.append(focus.goal.isEmpty ? "Focus" : "Focus: \(focus.goal)")
         } else {
-            item.length = NSStatusItem.squareLength
-            button.imagePosition = .imageOnly
             button.title = ""
-            button.toolTip = "OpenCast"
+            button.imagePosition = .imageOnly
         }
+        item.length = focus == nil ? NSStatusItem.squareLength : NSStatusItem.variableLength
+        button.toolTip = tips.joined(separator: " · ")
     }
 
     func install() {
@@ -43,10 +59,7 @@ final class OpenCastStatusBar: NSObject, NSMenuDelegate {
         precondition(!MenuBarSymbol.forcesAppLabelTint)
         precondition(!MenuBarSymbol.usesTaskAfterMenu)
         precondition(!MenuBarSymbol.usesAssumeIsolatedAfterMenu)
-        item.button?.image = MenuBarSymbol.templateImage(
-            systemName: "sparkles",
-            accessibilityDescription: "OpenCast"
-        )
+        item.button?.image = MenuBarSymbol.statusImage(awake: awake)
         item.button?.contentTintColor = nil
         item.button?.imagePosition = .imageOnly
         item.button?.toolTip = "OpenCast"

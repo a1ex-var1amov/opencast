@@ -8,7 +8,9 @@ import IOKit.pwr_mgt
 final class StayAwakeController: NSObject {
     static let shared = StayAwakeController()
 
-    private(set) var mode = "off"
+    private(set) var mode = "off" {
+        didSet { OpenCastStatusBar.shared.setAwake(mode != "off") }
+    }
     private var assertion: IOPMAssertionID = 0
     private var endsAt: Date?
     private var endTimer: Timer?

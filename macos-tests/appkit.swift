@@ -88,6 +88,19 @@ enum AppKitSettingsTests {
         check(!MenuBarSymbol.usesTaskAfterMenu,
               "policy: no Task after AppKit menu hops")
 
+        // MARK: One status glyph — outline idle, filled while Stay Awake is on
+        func centerAlpha(_ image: NSImage) -> CGFloat {
+            guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else { return -1 }
+            return rep.colorAt(x: rep.pixelsWide / 2, y: rep.pixelsHigh / 2)?.alphaComponent ?? -1
+        }
+        let idle = MenuBarSymbol.statusImage(awake: false)
+        let awake = MenuBarSymbol.statusImage(awake: true)
+        check(idle.isTemplate && awake.isTemplate, "status glyph is a template image in both states")
+        check(idle.size == awake.size, "idle and awake glyphs share one size so the item never shifts")
+        check(centerAlpha(idle) < 0.1 && centerAlpha(awake) > 0.9,
+              "idle sparkle is hollow at the centre, awake sparkle is filled")
+        check(awake.accessibilityDescription == "OpenCast", "status glyph keeps the OpenCast accessibility name")
+
         settings.close()
         island.close()
 
