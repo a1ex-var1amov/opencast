@@ -1,7 +1,7 @@
 import AppKit
 
-/// Persistent menu-bar entry for OpenCast itself, with Stay Awake as a submenu
-/// (Focus keeps its own countdown item while a session runs).
+/// The one OpenCast menu-bar item: Stay Awake as a submenu, Focus as a
+/// countdown badge plus Pause / Stop entries while a session runs.
 ///
 /// Not `@MainActor`-isolated: AppKit invokes `@objc` menu actions off that
 /// isolation on some macOS versions (Tahoe), which left every item inert.
@@ -9,6 +9,32 @@ final class OpenCastStatusBar: NSObject, NSMenuDelegate {
     static let shared = OpenCastStatusBar()
 
     private var statusItem: NSStatusItem?
+
+    /// Focus session shown on the one OpenCast item: minutes beside the glyph,
+    /// Pause / Stop in the menu. Pushed by FocusController; nil when idle.
+    struct FocusBadge {
+        let minutesLeft: Int
+        let paused: Bool
+        let goal: String
+    }
+
+    private var focus: FocusBadge?
+
+    func setFocus(_ badge: FocusBadge?) {
+        focus = badge
+        guard let item = statusItem, let button = item.button else { return }
+        if let badge {
+            item.length = NSStatusItem.variableLength
+            button.imagePosition = .imageLeading
+            button.title = badge.paused ? "\(badge.minutesLeft)m paused" : "\(badge.minutesLeft)m"
+            button.toolTip = badge.goal.isEmpty ? "OpenCast · Focus" : "OpenCast · Focus: \(badge.goal)"
+        } else {
+            item.length = NSStatusItem.squareLength
+            button.imagePosition = .imageOnly
+            button.title = ""
+            button.toolTip = "OpenCast"
+        }
+    }
 
     func install() {
         guard statusItem == nil else { return }
@@ -57,6 +83,24 @@ final class OpenCastStatusBar: NSObject, NSMenuDelegate {
         welcome.target = self
         menu.addItem(welcome)
         menu.addItem(.separator())
+        if let f = focus {
+            var title = f.goal.isEmpty ? "Focus" : "Focus: \(f.goal)"
+            title += f.paused ? " · paused, \(f.minutesLeft)m left" : " · \(f.minutesLeft)m left"
+            let header = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            menu.addItem(header)
+            let pause = NSMenuItem(
+                title: f.paused ? "Resume Focus" : "Pause Focus",
+                action: #selector(FocusMenuTarget.pause),
+                keyEquivalent: ""
+            )
+            pause.target = FocusMenuTarget.shared
+            menu.addItem(pause)
+            let stop = NSMenuItem(title: "Stop Focus", action: #selector(FocusMenuTarget.stop), keyEquivalent: "")
+            stop.target = FocusMenuTarget.shared
+            menu.addItem(stop)
+            menu.addItem(.separator())
+        }
         // One icon: Stay Awake rides along as a submenu instead of its own status item.
         let awake = NSMenuItem(title: StayAwakeController.shared.menuTitle, action: nil, keyEquivalent: "")
         awake.submenu = StayAwakeController.shared.submenu()

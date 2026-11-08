@@ -331,7 +331,7 @@ private struct LargeTypeView: View {
 /// Focus sessions: the `[focus]` apps are hidden at the start and every time
 /// they come forward, and `[focus] domains` are closed when they open in the
 /// front browser tab, until the timer ends or Stop Focus. Pause lifts the
-/// blocks and freezes the timer. A menu bar item shows the countdown.
+/// blocks and freezes the timer. The OpenCast menu-bar item shows the countdown.
 @MainActor
 final class FocusController {
     static let shared = FocusController()
@@ -344,7 +344,6 @@ final class FocusController {
     private var observer: NSObjectProtocol?
     private var timer: Task<Void, Never>?
     private var tabWatch: Task<Void, Never>?
-    private var statusItem: NSStatusItem?
     private var tick: Task<Void, Never>?
     private var menuBar = true
 
@@ -494,20 +493,9 @@ final class FocusController {
 
     // MARK: Menu bar
 
+    // Shown on the single OpenCast status item (badge + menu entries), not its own.
     private func showStatusItem() {
         guard menuBar else { return }
-        if statusItem == nil {
-            let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-            let menu = NSMenu()
-            let pause = NSMenuItem(title: "Pause / Resume Focus", action: #selector(FocusMenuTarget.pause), keyEquivalent: "")
-            pause.target = FocusMenuTarget.shared
-            let stop = NSMenuItem(title: "Stop Focus", action: #selector(FocusMenuTarget.stop), keyEquivalent: "")
-            stop.target = FocusMenuTarget.shared
-            menu.addItem(pause)
-            menu.addItem(stop)
-            item.menu = menu
-            statusItem = item
-        }
         updateStatusItem()
         tick?.cancel()
         tick = Task { @MainActor in
@@ -519,29 +507,18 @@ final class FocusController {
     }
 
     private func updateStatusItem() {
-        guard let button = statusItem?.button else { return }
-        let left = minutesLeft
-        let symbol = isPaused ? "pause.fill" : "target"
-        precondition(!MenuBarSymbol.forcesAppLabelTint)
-        button.image = MenuBarSymbol.templateImage(
-            systemName: symbol,
-            accessibilityDescription: "Focus"
-        )
-        button.contentTintColor = nil
-        button.title = "\(left)m"
-        button.imagePosition = .imageLeading
-        button.toolTip = goal.isEmpty ? "Focus" : "Focus: \(goal)"
+        guard menuBar, isActive else { return }
+        OpenCastStatusBar.shared.setFocus(.init(minutesLeft: minutesLeft, paused: isPaused, goal: goal))
     }
 
     private func hideStatusItem() {
         tick?.cancel()
         tick = nil
-        if let item = statusItem { NSStatusBar.system.removeStatusItem(item) }
-        statusItem = nil
+        OpenCastStatusBar.shared.setFocus(nil)
     }
 }
 
-/// Target for the Focus menu bar item's menu.
+/// Target for the Focus entries in the OpenCast status menu.
 ///
 /// Not `@MainActor`: Tahoe/Golden Gate deliver status-menu `@objc` actions off
 /// the MainActor executor (see OpenCastStatusBar), so hop via the main queue.
