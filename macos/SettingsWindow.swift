@@ -6,13 +6,6 @@ import ServiceManagement
 import Speech
 import SwiftUI
 
-/// Titled windows from an LSUIElement / `.accessory` app need this or
-/// `makeKeyAndOrderFront` is a no-op on Tahoe (window never appears).
-private final class SettingsKeyWindow: NSWindow {
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
-}
-
 /// A real settings window. Everything still lives in `config.toml` (this
 /// window writes it with comments kept), so dotfiles keep working.
 ///
@@ -25,12 +18,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     func show(tab: SettingsTab? = nil) {
         dispatchPrecondition(condition: .onQueue(.main))
-        // Regular policy before creating/keying the window — accessory cannot
-        // key a titled window on Tahoe.
-        if NSApp.activationPolicy() != .regular {
-            NSApp.setActivationPolicy(.regular)
-        }
-        NSApp.activate(ignoringOtherApps: true)
+        SettingsPresentation.prepareApp()
 
         if let tab { SettingsState.shared.tab = tab }
         if window == nil {
@@ -43,14 +31,15 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             w.title = "OpenCast Settings"
             w.isReleasedWhenClosed = false
             w.delegate = self
-            w.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
             w.contentView = NSHostingView(rootView: SettingsView(state: SettingsState.shared))
             w.center()
             window = w
         }
         // Show first — a blocked Engine.call in load() must not prevent opening.
-        window?.makeKeyAndOrderFront(nil)
-        window?.orderFrontRegardless()
+        // Island panels (level 25) stay up on Tahoe when the status item is
+        // clicked; hide them or Settings opens behind / never becomes key.
+        let islands = NSApp.windows.filter { $0 is IslandPanel }
+        SettingsPresentation.present(window!, hiding: islands)
         SettingsState.shared.load()
         NSLog("opencast: settings window shown (key=%@ visible=%@)",
               "\(window?.isKeyWindow == true)", "\(window?.isVisible == true)")

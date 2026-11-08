@@ -222,6 +222,10 @@ check(!MenuBarSymbol.forcesAppLabelTint,
       "status items must not force app .labelColor (goes black on dark menu bars)")
 check(!MenuBarSymbol.usesTaskAfterMenu,
       "menu actions must not use Task { @MainActor } after AppKit menu hops (Tahoe drops them)")
+check(!MenuBarSymbol.usesAssumeIsolatedAfterMenu,
+      "menu actions must not assumeIsolated after AppKit hops (Tahoe traps)")
+check(SettingsPresentation.windowLevel.rawValue > SettingsPresentation.islandLevel,
+      "Settings opens above the launcher island")
 check(MenuBarSymbol.needsMonochrome("sparkles"), "sparkles ships multicolor and needs monochrome")
 check(!MenuBarSymbol.needsMonochrome("circle"), "circle is already a mono template")
 check(!MenuBarSymbol.needsMonochrome("circle.fill"), "circle.fill is already mono")

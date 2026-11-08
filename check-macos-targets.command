@@ -37,6 +37,8 @@ done
 
 echo "== panel logic tests =="
 ./test-swift.command || fail=1
+echo "== AppKit Settings tests (real windows) =="
+./test-appkit.command || fail=1
 
 if [ $fail -eq 0 ]; then
   echo "\n== All deploy-target typechecks + panel tests passed =="

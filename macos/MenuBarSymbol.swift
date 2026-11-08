@@ -10,9 +10,12 @@ enum MenuBarSymbol {
     static let forcesAppLabelTint = false
 
     /// After an AppKit menu hop, `Task { @MainActor }` is dropped on Tahoe.
-    /// Call Model work with `MainActor.assumeIsolated` (or a non-MainActor
-    /// controller) inline on the main thread instead.
+    /// Settings uses a non-MainActor controller; Model hops via `DispatchQueue.main`.
     static let usesTaskAfterMenu = false
+
+    /// `MainActor.assumeIsolated` after `perform(afterDelay:)` traps on Tahoe —
+    /// the callback is main-thread AppKit, not the MainActor executor.
+    static let usesAssumeIsolatedAfterMenu = false
 
     /// SF Symbols that ship multicolor and ignore template ink unless monochrome.
     static func needsMonochrome(_ systemName: String) -> Bool {

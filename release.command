@@ -19,6 +19,10 @@ command -v cargo >/dev/null || { [ -f "$HOME/.cargo/env" ] && source "$HOME/.car
 # target/release/libopencast_ffi.a from this tree, so a redirected dir leaves
 # a stale .a (wrong CARGO_PKG_VERSION in About).
 unset CARGO_TARGET_DIR
+echo "== Pre-release tests (must pass before any dmg) =="
+./test-swift.command
+./test-appkit.command
+cargo test --offline --quiet 2>/dev/null || cargo test --quiet
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 NOTARY_PROFILE=${NOTARY_PROFILE:-opencast-notary}
 if [ -z "$DEVELOPER_ID" ]; then

@@ -15,6 +15,7 @@ final class OpenCastStatusBar: NSObject, NSMenuDelegate {
         // Never force .labelColor — see MenuBarSymbol.forcesAppLabelTint.
         precondition(!MenuBarSymbol.forcesAppLabelTint)
         precondition(!MenuBarSymbol.usesTaskAfterMenu)
+        precondition(!MenuBarSymbol.usesAssumeIsolatedAfterMenu)
         item.button?.image = MenuBarSymbol.templateImage(
             systemName: "sparkles",
             accessibilityDescription: "OpenCast"
@@ -97,8 +98,10 @@ final class OpenCastStatusBar: NSObject, NSMenuDelegate {
     @objc private func quitApp() { afterMenu(#selector(quitAppNow)) }
 
     @objc private func openPanelNow() {
-        // Inline — Task { @MainActor } after menu hops is dropped on Tahoe.
-        MainActor.assumeIsolated { Model.shared.show() }
+        // afterDelay already left menu tracking. MainActor.assumeIsolated traps
+        // here on Tahoe (AppKit @objc ≠ MainActor); Task is dropped. Main-queue
+        // async is the hop onto Model's actor without trapping.
+        DispatchQueue.main.async { Model.shared.show() }
     }
 
     @objc private func openSettingsNow() {
@@ -107,15 +110,15 @@ final class OpenCastStatusBar: NSObject, NSMenuDelegate {
     }
 
     @objc private func runDoctorNow() {
-        MainActor.assumeIsolated { Model.shared.perform("builtin:doctor") }
+        DispatchQueue.main.async { Model.shared.perform("builtin:doctor") }
     }
 
     @objc private func openKeysNow() {
-        MainActor.assumeIsolated { Model.shared.perform("builtin:shortcuts") }
+        DispatchQueue.main.async { Model.shared.perform("builtin:shortcuts") }
     }
 
     @objc private func openWelcomeNow() {
-        MainActor.assumeIsolated { Model.shared.perform("builtin:welcome") }
+        DispatchQueue.main.async { Model.shared.perform("builtin:welcome") }
     }
 
     @objc private func quitAppNow() {
