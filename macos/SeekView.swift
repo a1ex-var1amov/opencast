@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import OSLog
 import SwiftUI
 import Vision
 
@@ -29,10 +30,26 @@ enum SeekOCR {
     }
 
     /// Screenshot the display under the cursor and OCR it. Hits are screen points (CG), with word boxes.
+    /// Diag: `log stream --predicate 'subsystem == "dev.opencast.launcher"'`.
+    /// NSLog lines never reach the unified log on macOS 27; os.Logger does.
+    static let log = Logger(subsystem: "dev.opencast.launcher", category: "seek")
+
     static func scan() throws -> SeekScan {
-        let monitor = try cursorMonitor()
-        let image = try capture(monitor)
-        return try recognize(image, monitor: monitor)
+        let t0 = Date()
+        var ms: Int { Int(-t0.timeIntervalSinceNow * 1000) }
+        do {
+            let m = try cursorMonitor()
+            let preflight = CGPreflightScreenCaptureAccess()
+            log.notice("monitor \(Int(m.w))x\(Int(m.h)) at \(Int(m.x)),\(Int(m.y)) preflight=\(preflight)")
+            let image = try capture(m)
+            log.notice("captured \(image.width)x\(image.height) px in \(ms) ms")
+            let scan = try recognize(image, monitor: m)
+            log.notice("\(scan.hits.count) text hits in \(ms) ms")
+            return scan
+        } catch {
+            log.error("failed after \(ms) ms: \(String(describing: error), privacy: .public)")
+            throw error
+        }
     }
 
     private static func cursorMonitor() throws -> SeekRect {

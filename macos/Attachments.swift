@@ -80,11 +80,14 @@ enum Attachments {
         while p.isRunning, Date() < deadline { usleep(50_000) }
         if p.isRunning {
             p.terminate()
+            SeekOCR.log.error("screencapture \(tag, privacy: .public) still running after \(Int(timeout)) s, killed")
             return nil
         }
         defer { try? FileManager.default.removeItem(atPath: path) }
+        let data = try? Data(contentsOf: URL(fileURLWithPath: path))
+        SeekOCR.log.notice("screencapture \(tag, privacy: .public) exit=\(p.terminationStatus) bytes=\(data?.count ?? 0)")
         guard p.terminationStatus == 0 else { return nil }
-        return try? Data(contentsOf: URL(fileURLWithPath: path))
+        return data
     }
 
     static func imageData(of url: URL) -> (b64: String, mime: String)? {
