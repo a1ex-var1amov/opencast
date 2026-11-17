@@ -80,12 +80,12 @@ enum Attachments {
         while p.isRunning, Date() < deadline { usleep(50_000) }
         if p.isRunning {
             p.terminate()
-            SeekOCR.log.error("screencapture \(tag, privacy: .public) still running after \(Int(timeout)) s, killed")
+            Diagnostics.log("screencapture \(tag) still running after \(Int(timeout)) s, killed", error: true)
             return nil
         }
         defer { try? FileManager.default.removeItem(atPath: path) }
         let data = try? Data(contentsOf: URL(fileURLWithPath: path))
-        SeekOCR.log.notice("screencapture \(tag, privacy: .public) exit=\(p.terminationStatus) bytes=\(data?.count ?? 0)")
+        Diagnostics.log("screencapture \(tag) exit=\(p.terminationStatus) bytes=\(data?.count ?? 0)")
         guard p.terminationStatus == 0 else { return nil }
         return data
     }

@@ -8,6 +8,20 @@ struct SeekRect {
     var x, y, w, h: CGFloat
 }
 
+/// Opt-in diagnostics (Settings → About). NSLog lines never reach the unified
+/// log on macOS 27; os.Logger with public interpolation does.
+enum Diagnostics {
+    static let key = "diagnostics"
+    static let command = "log stream --style compact --predicate 'subsystem == \"dev.opencast.launcher\"'"
+    private static let logger = Logger(subsystem: "dev.opencast.launcher", category: "diag")
+
+    static func log(_ message: @autoclosure () -> String, error: Bool = false) {
+        guard UserDefaults.standard.bool(forKey: key) else { return }
+        let text = message()
+        if error { logger.error("\(text, privacy: .public)") } else { logger.notice("\(text, privacy: .public)") }
+    }
+}
+
 /// In-process Seek OCR (Vision). Replaces the old Rust→osascript JXA path.
 enum SeekOCR {
     enum Failure: Error, LocalizedError {
@@ -30,24 +44,20 @@ enum SeekOCR {
     }
 
     /// Screenshot the display under the cursor and OCR it. Hits are screen points (CG), with word boxes.
-    /// Diag: `log stream --predicate 'subsystem == "dev.opencast.launcher"'`.
-    /// NSLog lines never reach the unified log on macOS 27; os.Logger does.
-    static let log = Logger(subsystem: "dev.opencast.launcher", category: "seek")
-
     static func scan() throws -> SeekScan {
         let t0 = Date()
         var ms: Int { Int(-t0.timeIntervalSinceNow * 1000) }
         do {
             let m = try cursorMonitor()
             let preflight = CGPreflightScreenCaptureAccess()
-            log.notice("monitor \(Int(m.w))x\(Int(m.h)) at \(Int(m.x)),\(Int(m.y)) preflight=\(preflight)")
+            Diagnostics.log("seek monitor \(Int(m.w))x\(Int(m.h)) at \(Int(m.x)),\(Int(m.y)) preflight=\(preflight)")
             let image = try capture(m)
-            log.notice("captured \(image.width)x\(image.height) px in \(ms) ms")
+            Diagnostics.log("seek captured \(image.width)x\(image.height) px in \(ms) ms")
             let scan = try recognize(image, monitor: m)
-            log.notice("\(scan.hits.count) text hits in \(ms) ms")
+            Diagnostics.log("seek \(scan.hits.count) text hits in \(ms) ms")
             return scan
         } catch {
-            log.error("failed after \(ms) ms: \(String(describing: error), privacy: .public)")
+            Diagnostics.log("seek failed after \(ms) ms: \(error)", error: true)
             throw error
         }
     }

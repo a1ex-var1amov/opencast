@@ -7,6 +7,10 @@ first tag is in `git log`.
 ## Unreleased
 
 ### Added
+- **Diagnostic logging** (Settings → About, off by default, this Mac only):
+  Click Text logs each step (capture exit and size, OCR hits, timing, any
+  failure) to the system log under `dev.opencast.launcher`; the pane shows the
+  `log stream` command to read it.
 - **Integrations, detachable as a unit**: `integrations = "auto"` (the default)
   registers an app bridge only when its app is installed, `"off"` drops its
   commands, its app-row actions and its hotkeys together, and a list forces one

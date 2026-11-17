@@ -883,6 +883,21 @@ private struct AboutPane: View {
                 Text("Check for updates once a week.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            VStack(alignment: .leading, spacing: 2) {
+                Toggle("Diagnostic logging", isOn: $diagnostics)
+                Text("Click Text logs each step (capture, OCR, timing) to the system log. Off by default; this Mac only. Read it with:")
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    Text(Diagnostics.command).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                    Button("Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(Diagnostics.command, forType: .string)
+                    }
+                    .controlSize(.mini)
+                }
+            }
         }
     }
+
+    @AppStorage(Diagnostics.key) private var diagnostics = false
 }
