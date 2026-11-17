@@ -41,8 +41,9 @@ enum SeekOCR {
             case .noText: return "no readable text on screen"
             case .recognitionFailed: return "text recognition failed"
             case .recognitionStuck:
-                return "macOS text recognition did not respond. It may still be downloading its assets after "
-                    + "an upgrade: check Live Text works in Preview, stay online, and restart the Mac if it does not"
+                return "macOS text recognition did not respond. English OCR ships with the OS, so this is the "
+                    + "service, not a missing download: open a screenshot in Preview and try Live Text. "
+                    + "If that hangs too, restart the Mac"
             }
         }
     }
@@ -96,28 +97,60 @@ enum SeekOCR {
         return cg
     }
 
-    /// Vision's `perform` can block forever when macOS is still fetching (or has
-    /// wedged) its text-recognition assets after an OS upgrade. Bound it, and try
-    /// the bundled `.fast` model before giving up; a thread that never comes back
-    /// is leaked rather than hanging Click Text for the session.
+    /// Longest edge sent to Vision. A retina capture is ~4x the pixels of the
+    /// screen points, and `perform` at that size can sit past any timeout on a
+    /// cold model load. Boxes are normalized, so the smaller image still maps
+    /// onto the real screen.
+    private static func forOCR(_ image: CGImage) -> CGImage {
+        let maxEdge = 2560
+        let w = image.width, h = image.height
+        let edge = max(w, h)
+        guard edge > maxEdge else { return image }
+        let scale = Double(maxEdge) / Double(edge)
+        let nw = Int((Double(w) * scale).rounded())
+        let nh = Int((Double(h) * scale).rounded())
+        guard let ctx = CGContext(
+            data: nil, width: nw, height: nh, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return image }
+        ctx.interpolationQuality = .high
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: nw, height: nh))
+        return ctx.makeImage() ?? image
+    }
+
+    /// Vision's `perform` can block forever when the text-recognition service is
+    /// wedged after an OS upgrade. Bound it. Attempts run one at a time: a second
+    /// `perform` started while the first is still inside Vision queues behind it
+    /// and times out too, which looks like both models are missing.
     private static func recognize(_ image: CGImage, monitor: SeekRect) throws -> SeekScan {
+        let image = forOCR(image)
+        Diagnostics.log("seek ocr image \(image.width)x\(image.height)")
         var results: [VNRecognizedTextObservation]?
-        for level in [VNRequestTextRecognitionLevel.accurate, .fast] {
+        // Revision 3 ships in the OS since macOS 13; it is not a separate download.
+        let attempts: [(VNRequestTextRecognitionLevel, TimeInterval)] = [(.accurate, 15), (.fast, 8)]
+        for (level, limit) in attempts {
+            let name = level == .accurate ? "accurate" : "fast"
             let done = DispatchSemaphore(value: 0)
             let request = VNRecognizeTextRequest()
             request.recognitionLevel = level
+            request.revision = VNRecognizeTextRequestRevision3
             request.usesLanguageCorrection = false
             var failed = false
             DispatchQueue.global(qos: .userInitiated).async {
                 failed = (try? VNImageRequestHandler(cgImage: image, options: [:]).perform([request])) == nil
                 done.signal()
             }
-            if done.wait(timeout: .now() + 8) == .timedOut {
-                Diagnostics.log("seek OCR (\(level == .accurate ? "accurate" : "fast")) did not return in 8 s", error: true)
+            if done.wait(timeout: .now() + limit) == .timedOut {
+                request.cancel()
+                Diagnostics.log("seek OCR (\(name)) did not return in \(Int(limit)) s", error: true)
+                // Let cancel unwind before the next perform, or that one queues behind this one.
+                _ = done.wait(timeout: .now() + 2)
                 continue
             }
             if failed { throw Failure.recognitionFailed }
             results = request.results
+            Diagnostics.log("seek OCR (\(name)) returned \(results?.count ?? 0) observations")
             break
         }
         guard let results else { throw Failure.recognitionStuck }
