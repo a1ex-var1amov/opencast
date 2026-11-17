@@ -19,8 +19,9 @@ enum SeekOCR {
             switch self {
             case .noMonitor: return "no monitors found"
             case .screenRecording:
-                return "OpenCast needs the Screen Recording permission to find text on screen: "
-                    + "System Settings → Privacy & Security → Screen Recording → enable OpenCast, then try again"
+                return "OpenCast could not capture the screen. System Settings → Privacy & Security → "
+                    + "Screen Recording: enable OpenCast (after a macOS upgrade, remove it and add it back), "
+                    + "then quit and relaunch OpenCast"
             case .noText: return "no readable text on screen"
             case .recognitionFailed: return "text recognition failed"
             }
@@ -54,20 +55,8 @@ enum SeekOCR {
     }
 
     private static func capture(_ monitor: SeekRect) throws -> CGImage {
-        let path = NSTemporaryDirectory() + "opencast-seek-\(ProcessInfo.processInfo.processIdentifier).png"
         let region = [monitor.x, monitor.y, monitor.w, monitor.h].map { "\(Int($0.rounded()))" }.joined(separator: ",")
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-        p.arguments = ["-x", "-R", region, path]
-        do {
-            try p.run()
-            p.waitUntilExit()
-        } catch {
-            throw Failure.screenRecording
-        }
-        defer { try? FileManager.default.removeItem(atPath: path) }
-        guard p.terminationStatus == 0,
-              let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+        guard let data = Attachments.screencapture(["-R", region], tag: "seek"),
               let image = NSImage(data: data),
               let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
         else {

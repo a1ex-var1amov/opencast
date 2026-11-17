@@ -62,17 +62,28 @@ enum Attachments {
 
     /// A screenshot of the main display, as PNG data.
     static func screenCaptureData() -> Data? {
-        let path = NSTemporaryDirectory() + "opencast-attach-\(ProcessInfo.processInfo.processIdentifier).png"
+        screencapture(["-m"], tag: "attach")
+    }
+
+    /// Run `/usr/sbin/screencapture -x <args> <png>` and return the PNG. Bounded:
+    /// when Screen Recording needs re-approval (every macOS upgrade, and the
+    /// periodic prompt on 26+), the child blocks on a system dialog that can sit
+    /// behind our panel; an unbounded wait left Click Text stuck "busy" for the
+    /// rest of the session with nothing on screen to say why.
+    static func screencapture(_ args: [String], tag: String, timeout: TimeInterval = 10) -> Data? {
+        let path = NSTemporaryDirectory() + "opencast-\(tag)-\(ProcessInfo.processInfo.processIdentifier).png"
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-        p.arguments = ["-x", "-m", path]
-        do {
-            try p.run()
-            p.waitUntilExit()
-        } catch {
+        p.arguments = ["-x"] + args + [path]
+        guard (try? p.run()) != nil else { return nil }
+        let deadline = Date().addingTimeInterval(timeout)
+        while p.isRunning, Date() < deadline { usleep(50_000) }
+        if p.isRunning {
+            p.terminate()
             return nil
         }
         defer { try? FileManager.default.removeItem(atPath: path) }
+        guard p.terminationStatus == 0 else { return nil }
         return try? Data(contentsOf: URL(fileURLWithPath: path))
     }
 
