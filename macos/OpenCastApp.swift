@@ -400,6 +400,9 @@ final class Model {
             if b.key.hasPrefix("f"), let n = Int(b.key.dropFirst()), (1 ... 20).contains(n) {
                 return event.keyCode == Self.fKeyCode(n)
             }
+            // The physical backtick key counts too: on Cyrillic and other layouts
+            // it types another character, which left Click Text unreachable.
+            if b.key == "`", event.keyCode == 50 { return true }
             return event.charactersIgnoringModifiers?.lowercased() == b.key
         }
     }

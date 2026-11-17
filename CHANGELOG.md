@@ -121,11 +121,12 @@ first tag is in `git log`.
   Recents) keeps its order when nothing is typed.
 
 ### Fixed
-- **Click Text could hang silently.** The screen capture behind it waited
-  forever when macOS wanted Screen Recording re-approved (after an OS upgrade,
-  or the periodic prompt on macOS 26+), leaving the pill busy with no message
-  for the rest of the session. It now gives up after 10 s and says what to do:
-  remove and re-add OpenCast under Screen Recording, then relaunch.
+- **Click Text could hang silently.** Two unbounded waits behind it: the
+  screen capture, when macOS wanted Screen Recording re-approved (after an OS
+  upgrade, or the periodic prompt on macOS 26+), and Vision text recognition,
+  which can block forever while macOS is still fetching its OCR assets after an
+  upgrade. Both are bounded now (10 s and 8 s); recognition retries with the
+  bundled fast model before giving up, and each failure says what to do.
 - **MCP resources and prompts never reached the panel.** Core serialized their
   kinds as `mcpresource` and `mcpprompt`, and the panel's kind enum could not
   decode either one, so those rows were dropped before display: the engine had

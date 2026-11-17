@@ -29,6 +29,7 @@ enum SeekOCR {
         case screenRecording
         case noText
         case recognitionFailed
+        case recognitionStuck
 
         var errorDescription: String? {
             switch self {
@@ -39,6 +40,9 @@ enum SeekOCR {
                     + "then quit and relaunch OpenCast"
             case .noText: return "no readable text on screen"
             case .recognitionFailed: return "text recognition failed"
+            case .recognitionStuck:
+                return "macOS text recognition did not respond. It may still be downloading its assets after "
+                    + "an upgrade: check Live Text works in Preview, stay online, and restart the Mac if it does not"
             }
         }
     }
@@ -92,18 +96,33 @@ enum SeekOCR {
         return cg
     }
 
+    /// Vision's `perform` can block forever when macOS is still fetching (or has
+    /// wedged) its text-recognition assets after an OS upgrade. Bound it, and try
+    /// the bundled `.fast` model before giving up; a thread that never comes back
+    /// is leaked rather than hanging Click Text for the session.
     private static func recognize(_ image: CGImage, monitor: SeekRect) throws -> SeekScan {
-        let request = VNRecognizeTextRequest()
-        request.recognitionLevel = .accurate
-        request.usesLanguageCorrection = false
-        let handler = VNImageRequestHandler(cgImage: image, options: [:])
-        do {
-            try handler.perform([request])
-        } catch {
-            throw Failure.recognitionFailed
+        var results: [VNRecognizedTextObservation]?
+        for level in [VNRequestTextRecognitionLevel.accurate, .fast] {
+            let done = DispatchSemaphore(value: 0)
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = level
+            request.usesLanguageCorrection = false
+            var failed = false
+            DispatchQueue.global(qos: .userInitiated).async {
+                failed = (try? VNImageRequestHandler(cgImage: image, options: [:]).perform([request])) == nil
+                done.signal()
+            }
+            if done.wait(timeout: .now() + 8) == .timedOut {
+                Diagnostics.log("seek OCR (\(level == .accurate ? "accurate" : "fast")) did not return in 8 s", error: true)
+                continue
+            }
+            if failed { throw Failure.recognitionFailed }
+            results = request.results
+            break
         }
+        guard let results else { throw Failure.recognitionStuck }
         var hits: [SeekHit] = []
-        for obs in request.results ?? [] {
+        for obs in results {
             guard let cand = obs.topCandidates(1).first else { continue }
             let s = cand.string
             let b = obs.boundingBox
