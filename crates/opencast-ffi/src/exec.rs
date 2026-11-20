@@ -85,6 +85,9 @@ pub enum ExecResult {
         name: String,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         apps: Vec<AppWindows>,
+        /// Set when the saved display topology does not match the screens in front of the user.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
     },
     /// Script Filter rows. `filter` = the panel filters locally; otherwise it
     /// re-runs the command with `action: "list"` and the query as the argument.
@@ -289,15 +292,21 @@ pub async fn run_command(id: String, args: Vec<String>, ctx: ExecContext) -> Exe
                 op: "capture".into(),
                 name,
                 apps: vec![],
+                note: None,
             },
             LayoutOp::Restore(slug) => {
                 let displays = ctx.displays.clone().unwrap_or_default();
                 match layouts::get_for(&config_dir, &slug, &displays) {
-                    Some(layout) => ExecResult::Layout {
-                        op: "apply".into(),
-                        name: layout.name,
-                        apps: layout.apps,
-                    },
+                    Some(layout) => {
+                        let note = (!displays.is_empty() && !layout.displays.is_empty() && layout.displays != displays)
+                            .then(|| "fitted to this screen".to_string());
+                        ExecResult::Layout {
+                            op: "apply".into(),
+                            name: layout.name,
+                            apps: layout.apps,
+                            note,
+                        }
+                    }
                     None => err(format!("layout `{slug}` is gone — try Reload Commands")),
                 }
             }

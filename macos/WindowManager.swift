@@ -35,13 +35,13 @@ enum WindowManager {
     /// Selected text in `app`'s focused UI element (AX), or nil.
     static func selectedText(of app: NSRunningApplication) -> String? {
         guard accessibilityTrusted else { return nil }
-        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        let appElement = ax(app.processIdentifier)
         var focused: CFTypeRef?
         guard AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
-              let element = focused
+              let focused, let element = axElement(focused)
         else { return nil }
         var value: CFTypeRef?
-        let status = AXUIElementCopyAttributeValue(element as! AXUIElement, kAXSelectedTextAttribute as CFString, &value)
+        let status = AXUIElementCopyAttributeValue(timed(element), kAXSelectedTextAttribute as CFString, &value)
         guard status == .success, let text = value as? String, !text.isEmpty else { return nil }
         return text
     }
@@ -326,25 +326,64 @@ enum WindowManager {
         }
     }
 
-    static func focusedWindow(pid: pid_t) -> AXUIElement? {
-        let app = AXUIElementCreateApplication(pid)
-        var value: CFTypeRef?
-        if AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &value) == .success, let v = value {
-            return (v as! AXUIElement)
+    /// Windows we moved, pulled back on screen after a display unplug.
+    static func reclampTracked() {
+        guard accessibilityTrusted else { return }
+        var windows = preSnap.map(\.window)
+        if let w = lastSnap?.window, !windows.contains(where: { CFEqual($0, w) }) {
+            windows.append(w)
         }
-        if AXUIElementCopyAttributeValue(app, kAXMainWindowAttribute as CFString, &value) == .success, let v = value {
-            return (v as! AXUIElement)
+        for window in windows {
+            guard let f = frame(of: window) else { continue }
+            let fitted = clamp(f)
+            if !f.near(fitted, 2) {
+                try? setFrame(window, fitted)
+            }
+        }
+    }
+
+    static func focusedWindow(pid: pid_t) -> AXUIElement? {
+        let app = ax(pid)
+        var value: CFTypeRef?
+        if AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &value) == .success,
+           let value, let v = axElement(value) {
+            return timed(v)
+        }
+        if AXUIElementCopyAttributeValue(app, kAXMainWindowAttribute as CFString, &value) == .success,
+           let value, let v = axElement(value) {
+            return timed(v)
         }
         return allWindows(pid: pid).first
     }
 
+    private static func ax(_ pid: pid_t) -> AXUIElement {
+        timed(AXUIElementCreateApplication(pid))
+    }
+
+    /// `as?` on CFTypeRef always succeeds at compile time. The type id is the real check.
+    private static func axElement(_ value: CFTypeRef) -> AXUIElement? {
+        guard CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return (value as! AXUIElement)
+    }
+
+    private static func axValue(_ value: CFTypeRef) -> AXValue? {
+        guard CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+        return (value as! AXValue)
+    }
+
+    /// A hung app returns in 1s (`cannotComplete`) instead of freezing the main thread.
+    private static func timed(_ element: AXUIElement) -> AXUIElement {
+        AXUIElementSetMessagingTimeout(element, 1.0)
+        return element
+    }
+
     private static func allWindows(pid: pid_t) -> [AXUIElement] {
-        let app = AXUIElementCreateApplication(pid)
+        let app = ax(pid)
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
               let list = value as? [AXUIElement]
         else { return [] }
-        return list.filter { w in
+        return list.map(timed).filter { w in
             var role: CFTypeRef?
             AXUIElementCopyAttributeValue(w, kAXSubroleAttribute as CFString, &role)
             let sub = role as? String
@@ -355,13 +394,13 @@ enum WindowManager {
     private static func frame(of window: AXUIElement) -> Rect? {
         var posValue: CFTypeRef?
         var sizeValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &posValue) == .success,
+        guard AXUIElementCopyAttributeValue(timed(window), kAXPositionAttribute as CFString, &posValue) == .success,
               AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeValue) == .success,
-              let pv = posValue, let sv = sizeValue
+              let posValue, let sizeValue, let pv = axValue(posValue), let sv = axValue(sizeValue)
         else { return nil }
         var pos = CGPoint.zero
         var size = CGSize.zero
-        guard AXValueGetValue(pv as! AXValue, .cgPoint, &pos), AXValueGetValue(sv as! AXValue, .cgSize, &size) else { return nil }
+        guard AXValueGetValue(pv, .cgPoint, &pos), AXValueGetValue(sv, .cgSize, &size) else { return nil }
         return Rect(x: pos.x, y: pos.y, w: size.width, h: size.height)
     }
 
@@ -377,7 +416,8 @@ enum WindowManager {
         // (Rectangle does the same).
         var pid: pid_t = 0
         AXUIElementGetPid(window, &pid)
-        let app = AXUIElementCreateApplication(pid)
+        let app = ax(pid)
+        _ = timed(window)
         let enhanced = boolAttribute(app, "AXEnhancedUserInterface")
         if enhanced {
             AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanFalse)
@@ -404,6 +444,12 @@ enum WindowManager {
                 throw WMError.permission
             }
             throw WMError.message("the app refused to move its window")
+        }
+        if a == .success && b != .success {
+            throw WMError.message("moved the window, but the app refused the new size")
+        }
+        if a != .success && b == .success {
+            throw WMError.message("resized the window, but the app refused the new position")
         }
     }
 

@@ -93,6 +93,8 @@ struct OpenCastApp {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var sessionObservers: [NSObjectProtocol] = []
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSSetUncaughtExceptionHandler { exception in
             let text = "uncaught \(exception.name.rawValue): \(exception.reason ?? "")"
@@ -102,6 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // LSUIElement / .accessory has no default menu; Edit items make Cmd+C/V/X/A work in fields.
         Self.installEditMenu()
+        sessionObservers = Self.watchSession()
         MainActor.assumeIsolated {
             Model.shared.install()
             OpenCastStatusBar.shared.install()
@@ -182,6 +185,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Model.shared.flash("OpenCast \(version) is available — run Check for Updates", error: false, thenHide: false)
             }
         }
+    }
+
+    /// Wake and user-switch drop Carbon hotkeys. Sleep can also drop the power assertion.
+    private static func watchSession() -> [NSObjectProtocol] {
+        let center = NSWorkspace.shared.notificationCenter
+        let wake = center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                Model.shared.reregisterHotkeys()
+                StayAwakeController.shared.reassertIfNeeded()
+                WindowManager.reclampTracked()
+            }
+        }
+        let session = center.addObserver(
+            forName: NSWorkspace.sessionDidBecomeActiveNotification, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { _ = Model.shared.reregisterHotkeys() }
+        }
+        let screens = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { WindowManager.reclampTracked() }
+        }
+        return [wake, session, screens]
     }
 
     /// ponytail: Edit menu only — enough for text-field key equivalents; full app menu if we leave accessory.

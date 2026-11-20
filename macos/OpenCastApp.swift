@@ -539,18 +539,25 @@ final class Model {
     func checkHotkeys() {
         for delay in [1.0, 4.0] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                guard let out = opencast_hotkeys_fix() else { return }
-                let problems = String(cString: out)
-                opencast_free(out)
-                let lines = problems.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
-                for line in lines { NSLog("opencast: hotkeys: \(line)") }
-                SettingsState.shared.hotkeyProblems = lines
+                let lines = self.reregisterHotkeys()
                 if let first = lines.first, !self.didFlashHotkeyProblem {
                     self.didFlashHotkeyProblem = true
                     self.flash(first, error: true, thenHide: false)
                 }
             }
         }
+    }
+
+    /// Carbon keys die across sleep and fast-user-switch. Called from those notifications too.
+    @discardableResult
+    func reregisterHotkeys() -> [String] {
+        guard let out = opencast_hotkeys_fix() else { return [] }
+        let problems = String(cString: out)
+        opencast_free(out)
+        let lines = problems.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+        for line in lines { Telemetry.event("error", "hotkeys: \(line)") }
+        SettingsState.shared.hotkeyProblems = lines
+        return lines
     }
 
     func show() {
@@ -1192,10 +1199,15 @@ final class Model {
         if let action { body["action"] = action }
         if let output { body["output"] = output }
         let request = body
-        // MainActor Task — not Task.detached. Tahoe was dropping detached
-        // completions after Return, so busy stuck true and nothing ran.
+        // The call itself is off the main thread: scripts, git and network used to
+        // block the panel for the whole command. The result comes back through GCD,
+        // not Task.detached — Tahoe was dropping those completions after Return.
         Task { @MainActor in
-            let outcome = ExecOutcome(Engine.call(request))
+            let outcome = await withCheckedContinuation { (cont: CheckedContinuation<ExecOutcome, Never>) in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    cont.resume(returning: ExecOutcome(Engine.call(request)))
+                }
+            }
             busy = false
             apply(outcome)
         }
@@ -1291,13 +1303,18 @@ final class Model {
         updatePreview()
     }
 
-    private func applyLayout(name: String, apps: [AppWindows]) {
+    private static func restored(_ name: String, note: String?) -> String {
+        if let note, !note.isEmpty { return "Restored “\(name)” · \(note)" }
+        return "Restored “\(name)”"
+    }
+
+    private func applyLayout(name: String, apps: [AppWindows], note: String?) {
         afterHide {
             do {
                 let missing = try WindowManager.applyLayout(apps)
                 guard !missing.isEmpty else {
                     Model.shared.show()
-                    Model.shared.flash("Restored “\(name)”", error: false, thenHide: true)
+                    Model.shared.flash(Self.restored(name, note: note), error: false, thenHide: true)
                     return
                 }
                 WindowManager.launch(missing)
@@ -1318,10 +1335,10 @@ final class Model {
                     }
                     Model.shared.show()
                     if left.isEmpty {
-                        Model.shared.flash("Restored “\(name)”", error: false, thenHide: true)
+                        Model.shared.flash(Self.restored(name, note: note), error: false, thenHide: true)
                     } else {
                         let names = left.map(\.app).joined(separator: ", ")
-                        Model.shared.flash("Restored “\(name)” · still starting: \(names)", error: false, thenHide: true)
+                        Model.shared.flash("\(Self.restored(name, note: note)) · still starting: \(names)", error: false, thenHide: true)
                     }
                 }
             } catch WindowManager.WMError.permission {
@@ -1371,8 +1388,8 @@ final class Model {
             }
         case .window(let action, let frac):
             snap(action: action, frac: frac)
-        case .layout(let op, let name, let apps):
-            if op == "capture" { captureLayout(name: name) } else { applyLayout(name: name, apps: apps) }
+        case .layout(let op, let name, let apps, let note):
+            if op == "capture" { captureLayout(name: name) } else { applyLayout(name: name, apps: apps, note: note) }
         case .list(let command, let items, let filter, let options):
             if launcher?.isVisible != true { show() }
             mode = .list(command: command, items: items, filter: filter)

@@ -332,7 +332,7 @@ enum ExecOutcome: Sendable {
     /// Snap the front window; `frac` = (x, y, w, h) of the work area or nil for special actions.
     case window(action: String, frac: [Double]?)
     /// `capture` → record windows and call layoutSave; `apply` → place `apps`.
-    case layout(op: String, name: String, apps: [AppWindows])
+    case layout(op: String, name: String, apps: [AppWindows], note: String?)
     case list(command: Command, items: [ListItem], filter: Bool, options: ListOptions)
     case quit
     /// Panel-side feature: `settings`, `menu-items`, `dictate`, `schedule`.
@@ -380,7 +380,9 @@ enum ExecOutcome: Sendable {
             let apps: [AppWindows] = (raw["apps"] as? [[String: Any]])
                 .flatMap { try? JSONSerialization.data(withJSONObject: $0) }
                 .flatMap { try? JSONDecoder().decode([AppWindows].self, from: $0) } ?? []
-            self = .layout(op: raw["op"] as? String ?? "", name: raw["name"] as? String ?? "", apps: apps)
+            self = .layout(
+                op: raw["op"] as? String ?? "", name: raw["name"] as? String ?? "", apps: apps, note: raw["note"] as? String
+            )
         case "list":
             if let command = (raw["command"] as? [String: Any]).flatMap(Command.init) {
                 let items = (raw["items"] as? [[String: Any]])?.compactMap(ListItem.init) ?? []

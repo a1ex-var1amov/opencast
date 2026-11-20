@@ -68,6 +68,7 @@ final class StayAwakeController: NSObject {
         guard status == kIOReturnSuccess else {
             mode = "off"
             endsAt = nil
+            Telemetry.event("error", "stay-awake acquire failed \(status)")
             return
         }
         assertion = id
@@ -99,6 +100,19 @@ final class StayAwakeController: NSObject {
         assertion = 0
         guard id != 0 else { return }
         IOPMAssertionRelease(id)
+    }
+
+    /// Sleep can drop the assertion while the menu still says the Mac should stay awake.
+    func reassertIfNeeded() {
+        guard mode != "off" else { return }
+        if let endsAt, endsAt.timeIntervalSinceNow <= 1 {
+            apply("off")
+            return
+        }
+        let seconds = endsAt?.timeIntervalSinceNow ?? 0
+        panicRelease()
+        acquire(seconds: seconds)
+        Telemetry.event("info", "stay-awake reassert \(mode) assertion \(assertionId)")
     }
 
     func debugLine() -> String {
