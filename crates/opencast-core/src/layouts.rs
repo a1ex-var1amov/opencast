@@ -75,23 +75,46 @@ fn file(dir: &Path) -> PathBuf {
 
 pub fn load(dir: &Path) -> Store {
     let _timing = crate::telemetry::Guard::new("layouts.load", 100);
-    let Ok(src) = std::fs::read_to_string(file(dir)) else {
-        return Store::new();
+    read_store(dir).unwrap_or_else(|e| {
+        tracing::error!(error = %e, "layouts.json was left in place");
+        Store::new()
+    })
+}
+
+/// `Err` only when the file is corrupt and still at `layouts.json` (do not overwrite it).
+fn read_store(dir: &Path) -> Result<Store> {
+    let path = file(dir);
+    let src = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Store::new()),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
     };
-    if let Ok(store) = serde_json::from_str::<Store>(&src) {
-        return store;
+    if src.trim().is_empty() {
+        return Ok(Store::new());
     }
-    serde_json::from_str::<LegacyStore>(&src)
-        .map(|old| old.into_iter().map(|(k, l)| (k, vec![l])).collect())
-        .unwrap_or_default()
+    if let Ok(store) = serde_json::from_str::<Store>(&src) {
+        return Ok(store);
+    }
+    if let Ok(old) = serde_json::from_str::<LegacyStore>(&src) {
+        return Ok(old.into_iter().map(|(k, l)| (k, vec![l])).collect());
+    }
+    // ponytail: one layouts.json.bad. A newer corrupt file replaces the previous aside.
+    let aside = dir.join("layouts.json.bad");
+    std::fs::rename(&path, &aside).with_context(|| {
+        format!(
+            "layouts.json is not valid JSON and could not be moved to {}",
+            aside.display()
+        )
+    })?;
+    tracing::error!(path = %aside.display(), "layouts.json is not valid JSON; the bytes were kept");
+    Ok(Store::new())
 }
 
 fn write(dir: &Path, store: &Store) -> Result<()> {
     let _timing = crate::telemetry::Guard::new("layouts.write", 100);
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    let path = file(dir);
     let json = serde_json::to_string_pretty(store)?;
-    std::fs::write(&path, json).with_context(|| format!("writing {}", path.display()))
+    crate::config::replace_file(&file(dir), json.as_bytes())
 }
 
 fn newest(variants: &[Layout]) -> Option<&Layout> {
@@ -134,7 +157,7 @@ pub fn save(dir: &Path, name: &str, displays: &str, apps: Vec<AppWindows>) -> Re
     anyhow::ensure!(!name.is_empty(), "the layout needs a name");
     let key = slug(name);
     anyhow::ensure!(!key.is_empty(), "the layout needs a name with letters or digits");
-    let mut store = load(dir);
+    let mut store = read_store(dir)?;
     let saved_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -154,7 +177,7 @@ pub fn save(dir: &Path, name: &str, displays: &str, apps: Vec<AppWindows>) -> Re
 /// Delete by name or slug (every variant). Returns true if something was removed.
 pub fn delete(dir: &Path, name_or_slug: &str) -> Result<bool> {
     let key = slug(name_or_slug);
-    let mut store = load(dir);
+    let mut store = read_store(dir)?;
     let removed = store.remove(&key).is_some();
     if removed {
         write(dir, &store)?;
@@ -275,6 +298,15 @@ mod tests {
         assert!(get(dir.path(), "nope").is_none());
         std::fs::write(dir.path().join("layouts.json"), "not json").unwrap();
         assert!(list(dir.path()).is_empty());
+        let bad = std::fs::read_to_string(dir.path().join("layouts.json.bad")).unwrap();
+        assert_eq!(bad, "not json");
+        assert!(!dir.path().join("layouts.json").exists());
+        save(dir.path(), "Kept", DESK, vec![]).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("layouts.json.bad")).unwrap(),
+            "not json"
+        );
+        assert_eq!(list(dir.path()).len(), 1);
         assert!(save(dir.path(), "   ", DESK, vec![]).is_err());
     }
 }

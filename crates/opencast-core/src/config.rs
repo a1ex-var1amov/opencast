@@ -969,6 +969,36 @@ fn is_hex_color(s: &str) -> bool {
     (h.len() == 6 || h.len() == 8) && h.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// Replace `path` by writing a sibling temp file, fsyncing it, and renaming.
+/// A crash mid-write leaves the previous file intact.
+pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+    let tmp = parent.join(format!(".{name}.{}.tmp", std::process::id()));
+    let write = (|| {
+        let mut f = std::fs::File::create(&tmp).with_context(|| format!("writing {}", tmp.display()))?;
+        std::io::Write::write_all(&mut f, bytes)?;
+        f.sync_all()?;
+        Ok(())
+    })();
+    if let Err(e) = write {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e).with_context(|| format!("replacing {}", path.display()));
+    }
+    if let Ok(dir) = std::fs::File::open(parent) {
+        let _ = dir.sync_all();
+    }
+    Ok(())
+}
+
 /// Replace or insert `key = "value"` under `[general]` in `config.toml`,
 /// keeping comments and formatting (toml_edit).
 pub fn set_general_key(dir: &Path, key: &str, value: &str) -> Result<()> {
@@ -985,7 +1015,7 @@ pub fn set_general_key(dir: &Path, key: &str, value: &str) -> Result<()> {
         updated.len() <= src.len() + key.len() + 2 * value.len() + 64,
         "refusing to rewrite config.toml (unexpected growth)"
     );
-    std::fs::write(&path, updated).with_context(|| format!("writing {}", path.display()))?;
+    replace_file(&path, updated.as_bytes())?;
     Ok(())
 }
 
@@ -1028,7 +1058,7 @@ pub fn set_command_hotkey(dir: &Path, id: &str, key: &str) -> Result<()> {
     }
     let updated = set_command_hotkey_in(&src, id, key)?;
     Config::parse(&updated).context("the new hotkey makes config.toml invalid")?;
-    std::fs::write(&path, updated).with_context(|| format!("writing {}", path.display()))
+    replace_file(&path, updated.as_bytes())
 }
 
 fn set_command_hotkey_in(src: &str, id: &str, key: &str) -> Result<String> {
@@ -1095,7 +1125,7 @@ pub fn add_snippet(dir: &Path, keyword: &str, text: &str, name: Option<&str>) ->
         .push(t);
     let updated = doc.to_string();
     Config::parse(&updated).context("the snippet makes config.toml invalid")?;
-    std::fs::write(&path, updated).with_context(|| format!("writing {}", path.display()))
+    replace_file(&path, updated.as_bytes())
 }
 
 /// Drop a `[[snippets]]` entry by keyword. Returns whether one was removed.
@@ -1121,7 +1151,7 @@ pub fn remove_snippet(dir: &Path, keyword: &str) -> Result<bool> {
     for t in keep {
         arr.push(t);
     }
-    std::fs::write(&path, doc.to_string()).with_context(|| format!("writing {}", path.display()))?;
+    replace_file(&path, doc.to_string().as_bytes())?;
     Ok(true)
 }
 
@@ -1160,7 +1190,7 @@ pub fn add_snippets(dir: &Path, items: &[(String, String, String)]) -> Result<(u
     if added > 0 {
         let updated = doc.to_string();
         Config::parse(&updated).context("the snippets make config.toml invalid")?;
-        std::fs::write(&path, updated).with_context(|| format!("writing {}", path.display()))?;
+        replace_file(&path, updated.as_bytes())?;
     }
     Ok((added, skipped))
 }
@@ -1174,7 +1204,7 @@ pub fn add_provider(dir: &Path, p: &ProviderConfig) -> Result<()> {
     let updated = add_provider_in(&src, p)?;
     // Validate before writing so a bad entry never breaks the config.
     Config::parse(&updated).context("the new provider makes config.toml invalid")?;
-    std::fs::write(&path, updated).with_context(|| format!("writing {}", path.display()))
+    replace_file(&path, updated.as_bytes())
 }
 
 fn add_provider_in(src: &str, p: &ProviderConfig) -> Result<String> {
@@ -1235,7 +1265,7 @@ pub fn remove_provider(dir: &Path, id: &str) -> Result<bool> {
             cfg_src = doc.to_string();
         }
     }
-    std::fs::write(&path, cfg_src).with_context(|| format!("writing {}", path.display()))?;
+    replace_file(&path, cfg_src.as_bytes())?;
     Ok(true)
 }
 
@@ -1728,7 +1758,7 @@ impl Config {
         let path = dir.join("config.toml");
         if !path.exists() {
             std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-            std::fs::write(&path, DEFAULT_CONFIG)?;
+            replace_file(&path, DEFAULT_CONFIG.as_bytes())?;
             let scripts = dir.join("scripts");
             if !scripts.exists() {
                 std::fs::create_dir_all(&scripts)?;
