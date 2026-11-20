@@ -14,6 +14,8 @@ use opencast_core::providers::{ChatEvent, ChatRequest, Message, Provider, ToolCa
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
 
+use opencast_core::lock::mutex;
+
 use crate::host::{emit, runtime, with_engine};
 
 /// Most model ↔ tool round trips per answer.
@@ -32,7 +34,7 @@ static APPROVALS: LazyLock<Mutex<HashMap<String, oneshot::Sender<bool>>>> =
 /// `[[mcp_servers]]` section changed.
 pub fn hub() -> Arc<McpHub> {
     let servers = with_engine(|e| e.mcp_servers().to_vec());
-    let mut guard = HUB.lock().unwrap();
+    let mut guard = mutex(&HUB);
     if guard.0 != servers {
         *guard = (servers.clone(), Arc::new(McpHub::new(&servers)));
     }
@@ -79,7 +81,7 @@ pub async fn refresh_tools() -> (usize, Vec<String>) {
 /// Panel answered an approval prompt.
 pub fn answer_approval(request_id: &str, call_id: &str, allow: bool) -> bool {
     let key = format!("{request_id}:{call_id}");
-    match APPROVALS.lock().unwrap().remove(&key) {
+    match mutex(&APPROVALS).remove(&key) {
         Some(tx) => tx.send(allow).is_ok(),
         None => false,
     }
@@ -141,7 +143,7 @@ async fn run_tool(call: &ToolCall, tools: &[ChatTool], request_id: &str) -> Stri
             .ok()
             .and_then(Result::ok)
             .unwrap_or(false);
-        APPROVALS.lock().unwrap().remove(&format!("{request_id}:{}", call.id));
+        mutex(&APPROVALS).remove(&format!("{request_id}:{}", call.id));
         if !allowed {
             emit_ai(
                 request_id,

@@ -1078,6 +1078,13 @@ fn redirect_uri(server: &McpServerConfig) -> String {
         .to_string()
 }
 
+fn oauth_field<'a>(server: &McpServerConfig, value: Option<&'a str>, name: &str) -> Result<&'a str> {
+    value
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .with_context(|| format!("mcp `{}`: missing {name}", server.id))
+}
+
 /// Access (or refresh) without opening a browser. Err if the user must Sign in….
 pub async fn oauth_token_quiet(server: &McpServerConfig) -> Result<String> {
     if !server.oauth_configured() {
@@ -1086,8 +1093,8 @@ pub async fn oauth_token_quiet(server: &McpServerConfig) -> Result<String> {
     if let Some(access) = keychain_get(&oauth_access_service(&server.id)) {
         return Ok(access);
     }
-    let client_id = server.oauth_client_id.as_deref().unwrap().trim();
-    let token_url = server.oauth_token_url.as_deref().unwrap().trim();
+    let client_id = oauth_field(server, server.oauth_client_id.as_deref(), "oauth_client_id")?;
+    let token_url = oauth_field(server, server.oauth_token_url.as_deref(), "oauth_token_url")?;
     let secret = keychain_get(&oauth_secret_service(&server.id));
     let Some(refresh) = keychain_get(&oauth_refresh_service(&server.id)) else {
         bail!("mcp `{}`: not signed in", server.id);
@@ -1123,9 +1130,9 @@ pub async fn oauth_sign_in(server: &McpServerConfig) -> Result<String> {
     if !server.oauth_configured() {
         bail!("mcp `{}`: oauth_* fields are incomplete", server.id);
     }
-    let client_id = server.oauth_client_id.as_deref().unwrap().trim();
-    let token_url = server.oauth_token_url.as_deref().unwrap().trim();
-    let authorize_url = server.oauth_authorize_url.as_deref().unwrap().trim();
+    let client_id = oauth_field(server, server.oauth_client_id.as_deref(), "oauth_client_id")?;
+    let token_url = oauth_field(server, server.oauth_token_url.as_deref(), "oauth_token_url")?;
+    let authorize_url = oauth_field(server, server.oauth_authorize_url.as_deref(), "oauth_authorize_url")?;
     let secret = keychain_get(&oauth_secret_service(&server.id));
     interactive_auth(server, client_id, authorize_url, token_url, secret.as_deref()).await
 }
@@ -1450,7 +1457,11 @@ fn pkce_challenge(verifier: &str) -> Result<String> {
         .stderr(Stdio::piped())
         .spawn()
         .context("openssl (OAuth PKCE)")?;
-    child.stdin.take().unwrap().write_all(verifier.as_bytes())?;
+    child
+        .stdin
+        .take()
+        .context("openssl stdin")?
+        .write_all(verifier.as_bytes())?;
     let out = child.wait_with_output()?;
     if !out.status.success() {
         bail!("openssl sha256 failed: {}", String::from_utf8_lossy(&out.stderr).trim());

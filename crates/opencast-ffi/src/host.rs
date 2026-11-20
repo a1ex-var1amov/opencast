@@ -35,7 +35,7 @@ pub fn emit(value: serde_json::Value) {
         return;
     };
     // Drop the callback mutex before the call so the panel can re-enter.
-    let cb = *CALLBACK.lock().unwrap();
+    let cb = *opencast_core::lock::mutex(&CALLBACK);
     if let Some(cb) = cb {
         cb(text.as_ptr());
     }
@@ -52,12 +52,16 @@ pub(crate) fn toggle_panel() {
 pub fn with_engine<T>(f: impl FnOnce(&Engine) -> T) -> T {
     // Clone the Arc and release the lock at once, so concurrent searches (one per
     // keystroke) run in parallel instead of queueing behind each other.
-    let engine = std::sync::Arc::clone(&ENGINE.get().expect("opencast_start was not called").lock().unwrap());
+    let engine = std::sync::Arc::clone(&opencast_core::lock::mutex(
+        ENGINE.get().expect("opencast_start was not called"),
+    ));
     f(&engine)
 }
 
 fn engine_arc() -> std::sync::Arc<Engine> {
-    std::sync::Arc::clone(&ENGINE.get().expect("opencast_start was not called").lock().unwrap())
+    std::sync::Arc::clone(&opencast_core::lock::mutex(
+        ENGINE.get().expect("opencast_start was not called"),
+    ))
 }
 
 /// Re-register the global hotkeys; returns problems newline-joined (empty when fine).
@@ -77,7 +81,7 @@ pub extern "C" fn opencast_hotkeys_fix() -> *mut std::ffi::c_char {
 }
 
 pub fn replace_engine(engine: std::sync::Arc<Engine>) {
-    *ENGINE.get().expect("opencast_start").lock().unwrap() = engine;
+    *opencast_core::lock::mutex(ENGINE.get().expect("opencast_start")) = engine;
 }
 
 fn handle(request: &str) -> String {
@@ -482,22 +486,22 @@ fn stream(v: &serde_json::Value) -> String {
     let id2 = id.clone();
     let handle = runtime().spawn(async move {
         crate::agent::converse(provider, req, tools, id2.clone()).await;
-        STREAMS.lock().unwrap().remove(&id2);
+        opencast_core::lock::mutex(&STREAMS).remove(&id2);
     });
-    STREAMS.lock().unwrap().insert(id, handle);
+    opencast_core::lock::mutex(&STREAMS).insert(id, handle);
     r#"{"ok":true}"#.into()
 }
 
 fn cancel(v: &serde_json::Value) -> String {
     let request_id = v.get("requestId").and_then(|x| x.as_str()).unwrap_or("").to_string();
-    if let Some(h) = STREAMS.lock().unwrap().remove(&request_id) {
+    if let Some(h) = opencast_core::lock::mutex(&STREAMS).remove(&request_id) {
         h.abort();
     }
     r#"{"ok":true}"#.into()
 }
 
 pub fn install(cb: Callback) {
-    *CALLBACK.lock().unwrap() = Some(cb);
+    *opencast_core::lock::mutex(&CALLBACK) = Some(cb);
     let config_dir = Config::config_dir();
     // Cached app index first so the panel opens at once; a fresh Spotlight
     // scan replaces it in the background.

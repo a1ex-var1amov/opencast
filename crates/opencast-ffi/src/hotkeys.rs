@@ -5,6 +5,8 @@ use std::sync::{Mutex, Once};
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 
+use opencast_core::lock::mutex;
+
 use crate::host;
 
 static MANAGER: Mutex<Option<GlobalHotKeyManager>> = Mutex::new(None);
@@ -48,8 +50,9 @@ where
     }
     extern "C" fn run<F: FnOnce() -> Vec<String>>(ctx: *mut std::ffi::c_void) {
         let slot = unsafe { &mut *(ctx as *mut (Option<F>, Option<Vec<String>>)) };
-        let work = slot.0.take().unwrap();
-        slot.1 = Some(work());
+        if let Some(work) = slot.0.take() {
+            slot.1 = Some(work());
+        }
     }
     if std::env::var("OPENCAST_HOTKEY_SYNC").is_ok() {
         // Escape hatch for debugging: the old blocking path.
@@ -61,7 +64,7 @@ where
                 run::<F>,
             );
         }
-        return slot.1.unwrap();
+        return slot.1.take().unwrap_or_default();
     }
     let (tx, rx) = std::sync::mpsc::channel();
     let task: Box<dyn FnOnce() + Send> = Box::new(move || {
@@ -90,10 +93,10 @@ fn register_here(engine: &opencast_core::engine::Engine) -> Vec<String> {
     // target while the previous one is alive (eventHandlerAlreadyInstalledErr), so
     // building a manager before unregistering the old one broke every re-registration
     // after the first: reloads and the post-launch retry left the keys dead.
-    let previous = MANAGER.lock().unwrap().take();
+    let previous = mutex(&MANAGER).take();
     if let Some(previous) = previous {
-        let mut keys = BINDS.lock().unwrap().iter().map(|(k, _)| *k).collect::<Vec<_>>();
-        if let Some(t) = *TOGGLE.lock().unwrap() {
+        let mut keys = mutex(&BINDS).iter().map(|(k, _)| *k).collect::<Vec<_>>();
+        if let Some(t) = *mutex(&TOGGLE) {
             keys.push(t);
         }
         let _ = previous.unregister_all(&keys);
@@ -152,9 +155,9 @@ fn register_here(engine: &opencast_core::engine::Engine) -> Vec<String> {
             Err(e) => problems.push(format!("could not register hotkey `{key}`: {e}")),
         }
     }
-    *TOGGLE.lock().unwrap() = toggle;
-    *BINDS.lock().unwrap() = registered;
-    *MANAGER.lock().unwrap() = Some(manager);
+    *mutex(&TOGGLE) = toggle;
+    *mutex(&BINDS) = registered;
+    *mutex(&MANAGER) = Some(manager);
     *SPECS.lock().unwrap_or_else(|e| e.into_inner()) = specs;
     *PROBLEMS.lock().unwrap_or_else(|e| e.into_inner()) = problems.clone();
     problems
@@ -174,17 +177,12 @@ pub(crate) fn listen() {
                 let id = event.id;
                 // Drop the guard before the callback. A reload from that callback
                 // locks `TOGGLE` again on this thread.
-                let toggle = { TOGGLE.lock().unwrap().is_some_and(|t| t.id == id) };
+                let toggle = { mutex(&TOGGLE).is_some_and(|t| t.id == id) };
                 if toggle {
                     host::toggle_panel();
                     continue;
                 }
-                let cmd = BINDS
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .find(|(k, _)| k.id == id)
-                    .map(|(_, c)| c.clone());
+                let cmd = mutex(&BINDS).iter().find(|(k, _)| k.id == id).map(|(_, c)| c.clone());
                 if let Some(cmd) = cmd {
                     host::runtime().spawn(async move {
                         // Clone under the engine lock, then drop it before `.await`.

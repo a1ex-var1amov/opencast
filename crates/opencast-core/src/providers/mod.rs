@@ -451,7 +451,7 @@ impl Router {
     /// Build every configured provider. Ones that fail (e.g. a key command
     /// that errors) are skipped and reported as warnings.
     pub fn from_config(cfg: &Config) -> (Self, Vec<String>) {
-        let client = reqwest::Client::builder()
+        let client = match reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             // Stall guard, not a cap on generation length: a request dies when no
             // byte arrives for this long (a hung tunnel, a wedged local server).
@@ -459,7 +459,10 @@ impl Router {
             .read_timeout(Duration::from_secs(STALL_TIMEOUT_SECS))
             .user_agent(concat!("OpenCast/", env!("CARGO_PKG_VERSION")))
             .build()
-            .expect("http client");
+        {
+            Ok(client) => client,
+            Err(e) => return (Self::default(), vec![format!("http client: {e}")]),
+        };
         let mut providers = Vec::new();
         let mut warnings = Vec::new();
         for p in &cfg.providers {

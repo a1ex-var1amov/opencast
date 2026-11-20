@@ -23,6 +23,7 @@ pub mod files;
 pub mod history;
 pub mod keymap;
 pub mod layouts;
+pub mod lock;
 pub mod mcp;
 pub mod notes;
 pub mod panes;

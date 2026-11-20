@@ -180,11 +180,25 @@ pub const WINDOW_ACTIONS: &[(WindowAction, &str, &str, &str)] = &[
 
 impl WindowAction {
     pub fn key(self) -> &'static str {
-        WINDOW_ACTIONS.iter().find(|(a, ..)| *a == self).unwrap().1
+        WINDOW_ACTIONS
+            .iter()
+            .find(|(a, ..)| *a == self)
+            .map(|row| row.1)
+            .unwrap_or_else(|| {
+                tracing::error!("window action missing from WINDOW_ACTIONS");
+                "window"
+            })
     }
 
     pub fn title(self) -> &'static str {
-        WINDOW_ACTIONS.iter().find(|(a, ..)| *a == self).unwrap().2
+        WINDOW_ACTIONS
+            .iter()
+            .find(|(a, ..)| *a == self)
+            .map(|row| row.2)
+            .unwrap_or_else(|| {
+                tracing::error!("window action missing from WINDOW_ACTIONS");
+                "Window"
+            })
     }
 
     /// Target rectangle as fractions `(x, y, w, h)` of the work area for

@@ -171,8 +171,10 @@ fn info_markdown(e: &extensions::ExtensionInfo) -> String {
     md
 }
 
-async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
-    tokio::task::spawn_blocking(f).await.expect("extension task panicked")
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| format!("extension task panicked: {e}"))
 }
 
 fn err(e: impl std::fmt::Display) -> ExecResult {
@@ -194,12 +196,16 @@ fn list(id: &str, items: Vec<ListItem>) -> ExecResult {
 }
 
 async fn install(config_dir: PathBuf, source: String) -> ExecResult {
-    let r = blocking(move || {
+    let r = match blocking(move || {
         let ext = extensions::install(&config_dir, &source)?;
         let (alfred_cmds, errors) = generate_all(&ext.path);
         anyhow::Ok((ext, alfred_cmds, errors))
     })
-    .await;
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => return err(e),
+    };
     match r {
         Ok((ext, alfred_cmds, errors)) => {
             reload();
@@ -237,7 +243,7 @@ pub async fn run(op: ExtensionOp, config_dir: PathBuf, args: &[String], ctx: &Ex
         }
         ExtensionOp::Update => {
             let includes = host::with_engine(|e| e.config.general.include.clone());
-            let results = blocking(move || {
+            let results = match blocking(move || {
                 let mut r = extensions::update_all(&config_dir);
                 // Shared config pulled from git (`include = ["git:…"]`).
                 for (url, res) in extensions::sync_git_includes(&config_dir, &includes) {
@@ -251,7 +257,11 @@ pub async fn run(op: ExtensionOp, config_dir: PathBuf, args: &[String], ctx: &Ex
                 }
                 r
             })
-            .await;
+            .await
+            {
+                Ok(v) => v,
+                Err(e) => return err(e),
+            };
             if results.is_empty() {
                 return ExecResult::Toast {
                     text: "No extensions installed — try Browse Extensions".into(),
@@ -282,7 +292,10 @@ pub async fn run(op: ExtensionOp, config_dir: PathBuf, args: &[String], ctx: &Ex
             let arg = args.first().cloned().unwrap_or_default();
             if let Some(name) = arg.strip_prefix("remove:") {
                 let name = name.to_string();
-                let r = blocking(move || extensions::remove(&config_dir, &name).map(|_| name)).await;
+                let r = match blocking(move || extensions::remove(&config_dir, &name).map(|_| name)).await {
+                    Ok(v) => v,
+                    Err(e) => return err(e),
+                };
                 return match r {
                     Ok(name) => {
                         reload();
@@ -304,7 +317,10 @@ pub async fn run(op: ExtensionOp, config_dir: PathBuf, args: &[String], ctx: &Ex
             }
         }
         ExtensionOp::Manage => {
-            let exts = blocking(move || extensions::list(&config_dir)).await;
+            let exts = match blocking(move || extensions::list(&config_dir)).await {
+                Ok(v) => v,
+                Err(e) => return err(e),
+            };
             if exts.is_empty() {
                 return ExecResult::Toast {
                     text: "No extensions yet — try Browse Extensions or Install Extension".into(),
@@ -348,7 +364,10 @@ pub async fn run(op: ExtensionOp, config_dir: PathBuf, args: &[String], ctx: &Ex
         ExtensionOp::Browse => {
             let installed: Vec<String> = {
                 let dir = config_dir.clone();
-                blocking(move || extensions::list(&dir).into_iter().map(|e| e.name).collect()).await
+                match blocking(move || extensions::list(&dir).into_iter().map(|e| e.name).collect()).await {
+                    Ok(v) => v,
+                    Err(e) => return err(e),
+                }
             };
             match extensions::browse("").await {
                 Ok(found) => {
@@ -386,11 +405,12 @@ pub async fn run(op: ExtensionOp, config_dir: PathBuf, args: &[String], ctx: &Ex
 
 pub async fn import(config_dir: PathBuf, input: String) -> ExecResult {
     match blocking(move || import_alfred(&config_dir, &input)).await {
-        Ok(text) => {
+        Ok(Ok(text)) => {
             reload();
             ExecResult::Toast { text }
         }
-        Err(e) => err(format!("{e:#}")),
+        Ok(Err(e)) => err(format!("{e:#}")),
+        Err(e) => err(e),
     }
 }
 

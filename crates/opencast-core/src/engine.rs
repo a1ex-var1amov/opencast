@@ -1875,7 +1875,7 @@ impl Engine {
     pub fn bump_usage(&self, id: &str, query: &str) {
         // Save outside the write lock so a slow disk flush cannot block search readers.
         let dirty = {
-            let mut s = self.sidecars.write().unwrap();
+            let mut s = crate::lock::write(&self.sidecars);
             s.usage.record(id, query, crate::usage::now()).then(|| s.usage.clone())
         };
         if let Some(usage) = dirty {
@@ -1885,7 +1885,7 @@ impl Engine {
 
     /// Toggle a pin. Returns whether the id is pinned afterwards.
     pub fn toggle_pin(&self, id: &str) -> bool {
-        let mut s = self.sidecars.write().unwrap();
+        let mut s = crate::lock::write(&self.sidecars);
         let pinned = crate::pins::toggle_in(&mut s.pins, id);
         if crate::pins::pinnable(id) {
             s.pin_set = s.pins.iter().cloned().collect();
@@ -1895,22 +1895,26 @@ impl Engine {
     }
 
     pub fn is_pinned(&self, id: &str) -> bool {
-        self.sidecars.read().unwrap().pin_set.contains(id)
+        crate::lock::read(&self.sidecars).pin_set.contains(id)
     }
 
     pub fn add_note(&self, title: &str, body: &str) -> Note {
-        let mut s = self.sidecars.write().unwrap();
+        let mut s = crate::lock::write(&self.sidecars);
         let note = crate::notes::add_in(&mut s.notes, title, body);
         crate::notes::save_all(&self.config_dir, &s.notes);
         note
     }
 
     pub fn note(&self, id: &str) -> Option<Note> {
-        self.sidecars.read().unwrap().notes.iter().find(|n| n.id == id).cloned()
+        crate::lock::read(&self.sidecars)
+            .notes
+            .iter()
+            .find(|n| n.id == id)
+            .cloned()
     }
 
     pub fn delete_note(&self, id: &str) -> bool {
-        let mut s = self.sidecars.write().unwrap();
+        let mut s = crate::lock::write(&self.sidecars);
         let before = s.notes.len();
         s.notes.retain(|n| n.id != id);
         let removed = s.notes.len() != before;
@@ -1923,13 +1927,13 @@ impl Engine {
     // ---- saved chats ---------------------------------------------------------
 
     pub fn save_chat(&self, chat: crate::chats::SavedChat) {
-        let mut s = self.sidecars.write().unwrap();
+        let mut s = crate::lock::write(&self.sidecars);
         crate::chats::upsert(&mut s.chats, chat);
         crate::chats::save_all(&self.config_dir, &s.chats);
     }
 
     pub fn delete_chat(&self, id: &str) -> bool {
-        let mut s = self.sidecars.write().unwrap();
+        let mut s = crate::lock::write(&self.sidecars);
         let removed = crate::chats::remove(&mut s.chats, id);
         if removed {
             crate::chats::save_all(&self.config_dir, &s.chats);
@@ -1938,7 +1942,11 @@ impl Engine {
     }
 
     pub fn chat(&self, id: &str) -> Option<crate::chats::SavedChat> {
-        self.sidecars.read().unwrap().chats.iter().find(|c| c.id == id).cloned()
+        crate::lock::read(&self.sidecars)
+            .chats
+            .iter()
+            .find(|c| c.id == id)
+            .cloned()
     }
 
     // ---- extras: snippets, MCP, shortcuts -----------------------------------
@@ -2144,7 +2152,7 @@ impl Engine {
 
     /// Re-read the sidecar files (another process or a sync tool changed them).
     pub fn reload_sidecars(&self) {
-        *self.sidecars.write().unwrap() = Sidecars::load(&self.config_dir);
+        *crate::lock::write(&self.sidecars) = Sidecars::load(&self.config_dir);
     }
 
     const WEB_FALLBACK_ID: &'static str = "fallback:web";
@@ -2223,7 +2231,7 @@ impl Engine {
             }
         }
         let load = |name: &str| -> Option<std::sync::Arc<crate::tz::Zone>> {
-            let mut cache = self.zones.lock().unwrap();
+            let mut cache = crate::lock::mutex(&self.zones);
             cache
                 .entry(name.to_string())
                 .or_insert_with(|| crate::tz::Zone::load(name).map(std::sync::Arc::new))
@@ -2236,7 +2244,7 @@ impl Engine {
     }
 
     pub fn update_note(&self, id: &str, title: &str, body: &str) -> bool {
-        let mut s = self.sidecars.write().unwrap();
+        let mut s = crate::lock::write(&self.sidecars);
         let Some(n) = s.notes.iter_mut().find(|n| n.id == id) else {
             return false;
         };
@@ -2265,7 +2273,7 @@ impl Engine {
 
     /// "OpenCast Stats": totals, top commands and learned queries, from `usage.json`.
     pub fn stats_markdown(&self) -> String {
-        let s = self.sidecars.read().unwrap();
+        let s = crate::lock::read(&self.sidecars);
         let usage = &s.usage;
         let total: u64 = usage.commands.values().map(|e| e.count as u64).sum();
         let mut top: Vec<(&String, &crate::usage::Entry)> = usage.commands.iter().collect();
@@ -2345,7 +2353,7 @@ impl Engine {
 
     /// Order action ids by what was picked for `query` before (`ua:text`…), then by use.
     pub fn rank_ids(&self, query: &str, ids: &[String]) -> Vec<String> {
-        let s = self.sidecars.read().unwrap();
+        let s = crate::lock::read(&self.sidecars);
         let learned = s.usage.learned_all(&query.to_lowercase());
         let now = crate::usage::now();
         let mut scored: Vec<(i64, usize, &String)> = ids
@@ -2387,7 +2395,7 @@ impl Engine {
     }
 
     pub fn notes(&self) -> Vec<Note> {
-        self.sidecars.read().unwrap().notes.clone()
+        crate::lock::read(&self.sidecars).notes.clone()
     }
 
     pub fn search(&self, query: &str, limit: usize) -> Vec<Command> {
@@ -2401,7 +2409,7 @@ impl Engine {
         // Clone sidecars under a short read lock so typing cannot pile up readers
         // that stall bump_usage (and thus Return/click) on the write lock.
         let (usage, pin_set, notes, chats) = {
-            let s = self.sidecars.read().unwrap();
+            let s = crate::lock::read(&self.sidecars);
             (s.usage.clone(), s.pin_set.clone(), s.notes.clone(), s.chats.clone())
         };
         let mut out = self.registry.search_with_usage(query, limit, &usage, &pin_set);
@@ -2512,7 +2520,7 @@ impl Engine {
 
         // Emoji overlay (not in the permanent registry): recent ones first.
         let recent_emoji: Vec<String> = if crate::emoji::needle(q).is_some() {
-            let s = self.sidecars.read().unwrap();
+            let s = crate::lock::read(&self.sidecars);
             let now = crate::usage::now();
             let mut ids: Vec<(&String, i64)> = s
                 .usage
