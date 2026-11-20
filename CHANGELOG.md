@@ -7,6 +7,9 @@ first tag is in `git log`.
 ## Unreleased
 
 ### Added
+- **Debug** opens a window of local timings and recent log lines, and can export
+  them. Logs stay in `~/Library/Logs/OpenCast`. The diagnostic logging toggle
+  raises that file log to debug. Nothing is sent off this Mac.
 - **Diagnostic logging** (Settings → About, off by default, this Mac only):
   Click Text logs each step (capture exit and size, OCR hits, timing, any
   failure) to the system log under `dev.opencast.launcher`; the pane shows the
@@ -95,6 +98,9 @@ first tag is in `git log`.
   `SnippetMatch.swift`.
 
 ### Changed
+- The launcher appears on its final frame. The first hotkey no longer slides
+  in from off screen for 160 ms.
+- While the engine is still starting, the empty state says Loading.
 - **One menu-bar icon.** Stay Awake and Focus no longer add their own status
   items. The OpenCast star fills in while Stay Awake is on (durations live in
   a submenu of the OpenCast menu), and a running Focus session shows its
@@ -121,6 +127,13 @@ first tag is in `git log`.
   Recents) keeps its order when nothing is typed.
 
 ### Fixed
+- `config.toml` and `layouts.json` are replaced by a finished file. A crash
+  mid-write can no longer leave a truncated one, and a corrupt layouts file is
+  moved aside as `layouts.json.bad` instead of being overwritten by the next save.
+- One panicked command no longer makes every later command fail.
+- A hung window or a long command no longer freezes the launcher. A snap that
+  Stage Manager will not apply says so, and losing Accessibility permission is
+  a toast. Toasts are announced to VoiceOver.
 - **Click Text could hang silently.** The screen capture waited forever when
   macOS wanted Screen Recording re-approved, and Vision text recognition can
   block when its service is wedged. Both are bounded now. Recognition runs on
