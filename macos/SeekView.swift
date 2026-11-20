@@ -19,6 +19,7 @@ enum Diagnostics {
         guard UserDefaults.standard.bool(forKey: key) else { return }
         let text = message()
         if error { logger.error("\(text, privacy: .public)") } else { logger.notice("\(text, privacy: .public)") }
+        Telemetry.event(error ? "error" : "info", text)
     }
 }
 

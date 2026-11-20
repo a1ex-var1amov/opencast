@@ -74,6 +74,7 @@ fn file(dir: &Path) -> PathBuf {
 }
 
 pub fn load(dir: &Path) -> Store {
+    let _timing = crate::telemetry::Guard::new("layouts.load", 100);
     let Ok(src) = std::fs::read_to_string(file(dir)) else {
         return Store::new();
     };
@@ -86,6 +87,7 @@ pub fn load(dir: &Path) -> Store {
 }
 
 fn write(dir: &Path, store: &Store) -> Result<()> {
+    let _timing = crate::telemetry::Guard::new("layouts.write", 100);
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let path = file(dir);
     let json = serde_json::to_string_pretty(store)?;

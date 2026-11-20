@@ -33,6 +33,7 @@ pub mod recents;
 pub mod scripts;
 pub mod spotify;
 pub mod sync;
+pub mod telemetry;
 pub mod tz;
 pub mod updates;
 pub mod usage;

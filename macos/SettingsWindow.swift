@@ -885,7 +885,10 @@ private struct AboutPane: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Toggle("Diagnostic logging", isOn: $diagnostics)
-                Text("Click Text logs each step (capture, OCR, timing) to the system log. Off by default; this Mac only. Read it with:")
+                    .onChange(of: diagnostics) { _, on in
+                        Telemetry.setLevel(on ? "debug" : "info")
+                    }
+                Text("Debug logs stay on this Mac, in ~/Library/Logs/OpenCast. Run the Debug command for timings. Click Text also writes to the system log:")
                     .font(.caption).foregroundStyle(.secondary)
                 HStack {
                     Text(Diagnostics.command).font(.system(.caption, design: .monospaced)).textSelection(.enabled)

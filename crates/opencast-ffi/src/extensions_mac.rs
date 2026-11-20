@@ -225,6 +225,8 @@ async fn install(config_dir: PathBuf, source: String) -> ExecResult {
 }
 
 pub async fn run(op: ExtensionOp, config_dir: PathBuf, args: &[String], ctx: &ExecContext) -> ExecResult {
+    let _timing = opencast_core::telemetry::Guard::new("extension", 0);
+    tracing::info!("extension");
     let action = ctx.action.as_deref().unwrap_or("list");
     match op {
         ExtensionOp::Install(source) => {

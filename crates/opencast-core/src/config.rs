@@ -972,6 +972,7 @@ fn is_hex_color(s: &str) -> bool {
 /// Replace or insert `key = "value"` under `[general]` in `config.toml`,
 /// keeping comments and formatting (toml_edit).
 pub fn set_general_key(dir: &Path, key: &str, value: &str) -> Result<()> {
+    let _timing = crate::telemetry::Guard::new("config.write", 100);
     anyhow::ensure!(
         key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
         "bad config key"
@@ -1008,6 +1009,7 @@ fn set_general_key_in(src: &str, key: &str, value: &str) -> Result<String> {
 /// entry for the same command is removed so there is one binding. Refuses a
 /// key another command already uses (returns that command).
 pub fn set_command_hotkey(dir: &Path, id: &str, key: &str) -> Result<()> {
+    let _timing = crate::telemetry::Guard::new("config.write", 100);
     let path = dir.join("config.toml");
     let src = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let cfg = Config::parse(&src)?;
@@ -1065,6 +1067,7 @@ fn set_command_hotkey_in(src: &str, id: &str, key: &str) -> Result<String> {
 
 /// Append a `[[snippets]]` entry (Save as Snippet). Refuses a keyword in use.
 pub fn add_snippet(dir: &Path, keyword: &str, text: &str, name: Option<&str>) -> Result<()> {
+    let _timing = crate::telemetry::Guard::new("config.write", 100);
     let keyword = keyword.trim();
     anyhow::ensure!(!keyword.is_empty(), "a snippet needs a keyword");
     anyhow::ensure!(!text.is_empty(), "the snippet is empty");
@@ -1097,6 +1100,7 @@ pub fn add_snippet(dir: &Path, keyword: &str, text: &str, name: Option<&str>) ->
 
 /// Drop a `[[snippets]]` entry by keyword. Returns whether one was removed.
 pub fn remove_snippet(dir: &Path, keyword: &str) -> Result<bool> {
+    let _timing = crate::telemetry::Guard::new("config.write", 100);
     let keyword = keyword.trim();
     anyhow::ensure!(!keyword.is_empty(), "a snippet needs a keyword");
     let path = dir.join("config.toml");
@@ -1124,6 +1128,7 @@ pub fn remove_snippet(dir: &Path, keyword: &str) -> Result<bool> {
 /// Add many `[[snippets]]` in one write (an imported collection). Keywords
 /// that already exist are skipped. Returns (added, skipped).
 pub fn add_snippets(dir: &Path, items: &[(String, String, String)]) -> Result<(usize, usize)> {
+    let _timing = crate::telemetry::Guard::new("config.write", 100);
     let path = dir.join("config.toml");
     let src = std::fs::read_to_string(&path).unwrap_or_default();
     let cfg = Config::parse(&src)?;
@@ -1163,6 +1168,7 @@ pub fn add_snippets(dir: &Path, items: &[(String, String, String)]) -> Result<(u
 /// Append a `[[providers]]` entry (comments elsewhere are kept). Replaces an
 /// existing provider with the same id.
 pub fn add_provider(dir: &Path, p: &ProviderConfig) -> Result<()> {
+    let _timing = crate::telemetry::Guard::new("config.write", 100);
     let path = dir.join("config.toml");
     let src = std::fs::read_to_string(&path).unwrap_or_default();
     let updated = add_provider_in(&src, p)?;
@@ -1211,6 +1217,7 @@ fn add_provider_in(src: &str, p: &ProviderConfig) -> Result<String> {
 
 /// Remove the `[[providers]]` entry with `id` (no-op when absent).
 pub fn remove_provider(dir: &Path, id: &str) -> Result<bool> {
+    let _timing = crate::telemetry::Guard::new("config.write", 100);
     let path = dir.join("config.toml");
     let src = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let updated = remove_provider_in(&src, id)?;

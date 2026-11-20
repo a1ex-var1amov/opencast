@@ -245,6 +245,7 @@ enum Theme {
         "builtin:appearance": "circle.lefthalf.filled",
         "builtin:panel-position": "rectangle.topthird.inset.filled",
         "builtin:settings": "gearshape.fill",
+        "builtin:debug": "ladybug",
         "builtin:shortcuts": "keyboard.fill",
         "builtin:stay-awake": "cup.and.saucer.fill",
         "builtin:clipboard": "clipboard.fill",

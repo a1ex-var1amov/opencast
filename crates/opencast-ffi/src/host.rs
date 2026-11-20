@@ -87,6 +87,9 @@ fn handle(request: &str) -> String {
             Err(e) => return serde_json::json!({ "error": format!("bad json: {e}") }).to_string(),
         };
         let op = v.get("op").and_then(|x| x.as_str()).unwrap_or("");
+        let cid = v.get("cid").and_then(|x| x.as_str()).unwrap_or("");
+        let span = crate::telemetry::ipc_span(op, cid);
+        let _entered = span.enter();
         match op {
             // Swift hid on its own (Esc, blur, ExecResult). Do not emit: the
             // callback would hide again, and emit is what already clears this flag.
@@ -381,12 +384,23 @@ fn handle(request: &str) -> String {
             }
             "stream" => stream(&v),
             "cancel" => cancel(&v),
+            "debugSnapshot" => {
+                let limit = v.get("limit").and_then(|n| n.as_u64()).unwrap_or(200) as usize;
+                crate::telemetry::snapshot(limit.min(5_000))
+            }
+            "debugExport" => match crate::telemetry::export() {
+                Ok(path) => serde_json::json!({ "path": path }).to_string(),
+                Err(e) => serde_json::json!({ "error": e }).to_string(),
+            },
             _ => with_engine(|engine| dispatch::dispatch(engine, request)),
         }
     }));
     match result {
         Ok(s) => s,
-        Err(_) => serde_json::json!({ "error": "internal error" }).to_string(),
+        Err(payload) => {
+            crate::telemetry::log_panic_payload(&*payload);
+            serde_json::json!({ "error": "internal error" }).to_string()
+        }
     }
 }
 
@@ -550,6 +564,7 @@ fn install_signal_handlers() {
             _ = hup.recv() => {}
         }
         crate::hyperkey::restore_caps_lock_if_ours();
+        crate::telemetry::release_stay_awake();
         std::process::exit(0);
     });
 }

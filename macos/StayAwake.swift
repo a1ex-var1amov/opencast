@@ -44,6 +44,7 @@ final class StayAwakeController: NSObject {
         } else {
             self.mode = "off"
         }
+        Telemetry.event("info", "stay-awake mode \(self.mode) assertion \(assertionId)")
     }
 
     func shutdown() {
@@ -78,6 +79,7 @@ final class StayAwakeController: NSObject {
                 self.release()
                 self.mode = "off"
                 self.endsAt = nil
+                Telemetry.event("info", "stay-awake timer off")
             }
         }
     }
@@ -85,9 +87,26 @@ final class StayAwakeController: NSObject {
     private func release() {
         endTimer?.invalidate()
         endTimer = nil
-        guard assertion != 0 else { return }
-        IOPMAssertionRelease(assertion)
+        panicRelease()
+        endsAt = nil
+    }
+
+    var assertionId: UInt32 { assertion }
+
+    /// Panic hook and signal exit. No AppKit.
+    func panicRelease() {
+        let id = assertion
         assertion = 0
+        guard id != 0 else { return }
+        IOPMAssertionRelease(id)
+    }
+
+    func debugLine() -> String {
+        var line = "stay-awake \(mode) assertion \(assertion)"
+        if let endsAt {
+            line += " ends \(Int(endsAt.timeIntervalSinceNow))s"
+        }
+        return line
     }
 
     /// Submenu for the OpenCast status menu. Built fresh on every open

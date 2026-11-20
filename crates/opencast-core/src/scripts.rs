@@ -565,6 +565,8 @@ pub fn standard_env(meta: &ScriptMeta) -> Vec<(String, String)> {
 }
 
 pub async fn run_with(meta: &ScriptMeta, args: &[String], opts: &RunOptions) -> Result<ScriptOutput> {
+    let _timing = crate::telemetry::Guard::new("script", 0);
+    tracing::info!(title = %meta.title, "script");
     let mut cmd = if opts.login_shell {
         let shell = std::env::var("SHELL")
             .ok()

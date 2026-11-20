@@ -23,6 +23,8 @@ mod hyperkey;
 mod refresh_mac;
 #[cfg(target_os = "macos")]
 mod shortcuts_mac;
+#[cfg(target_os = "macos")]
+mod telemetry;
 // ponytail: allow(dead_code) until every helper here is called. Drop the allow then.
 #[cfg(target_os = "macos")]
 #[allow(dead_code)]
@@ -40,6 +42,7 @@ use std::os::raw::c_char;
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub extern "C" fn opencast_start(cb: host::Callback) {
+    telemetry::init();
     host::install(cb);
 }
 

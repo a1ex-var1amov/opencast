@@ -61,7 +61,7 @@ enum WindowManager {
         let started = CFAbsoluteTimeGetCurrent()
         defer {
             let ms = Int((CFAbsoluteTimeGetCurrent() - started) * 1000)
-            NSLog("opencast: window %@ on %@ took %d ms", action, (app ?? frontApp())?.localizedName ?? "?", ms)
+            Telemetry.sample("window.snap", ms: ms, budget: 30)
         }
         // Spaces are SkyLight state: changing the view needs no AX window.
         if action == "space-next" || action == "space-prev" {

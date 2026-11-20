@@ -94,6 +94,12 @@ struct OpenCastApp {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSSetUncaughtExceptionHandler { exception in
+            let text = "uncaught \(exception.name.rawValue): \(exception.reason ?? "")"
+            text.withCString { message in
+                "error".withCString { level in opencast_log(level, message) }
+            }
+        }
         // LSUIElement / .accessory has no default menu; Edit items make Cmd+C/V/X/A work in fields.
         Self.installEditMenu()
         MainActor.assumeIsolated {
@@ -102,13 +108,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ClipboardHistory.shared.install()
         }
         Task.detached {
+            let boot = Date()
             opencast_start(opencastCallback)
+            opencast_set_panic_cleanup(opencastReleaseStayAwake)
+            if UserDefaults.standard.bool(forKey: Diagnostics.key) {
+                Telemetry.setLevel("debug")
+            }
             let dir = Engine.call(["op": "configDir"])["path"] as? String ?? ""
             let settings = Engine.call(["op": "settings"])
             await MainActor.run {
                 if let p = settings["presentation"] as? String { Model.shared.presentation = p }
                 Model.shared.refreshSettings()
                 Model.shared.ready = true
+                let ms = Int(Date().timeIntervalSince(boot) * 1000)
+                Telemetry.sample("startup", ms: ms, budget: 400)
                 // First show happens here, with the right presentation (the engine used to show too early).
                 Model.shared.show()
                 // Don't rely on LauncherView.onChange(of: ready): if the view mounts after

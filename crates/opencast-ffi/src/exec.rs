@@ -243,6 +243,8 @@ fn show() {
 
 /// Run a command to completion.
 pub async fn run_command(id: String, args: Vec<String>, ctx: ExecContext) -> ExecResult {
+    let _timing = opencast_core::telemetry::Guard::new("execute", 0);
+    tracing::info!(id = %id, nargs = args.len(), "execute");
     // Drop the engine lock before any `.await`. `config_dir` and friends are
     // snapshotted because `std::sync::Mutex` cannot be held across await.
     let (plan, config_dir, scripts_dir, timeout, login_shell) = host::with_engine(|engine| {
@@ -539,7 +541,8 @@ pub async fn run_command(id: String, args: Vec<String>, ctx: ExecContext) -> Exe
             | Builtin::Stats
             | Builtin::EditProfile
             | Builtin::Welcome
-            | Builtin::BrowseFiles => {
+            | Builtin::BrowseFiles
+            | Builtin::Debug => {
                 // The engine plans these as Ui/UiArgs/Extensions/Doctor/FillQuery, never Plan::Builtin.
                 err("this builtin should have resolved to a more specific plan")
             }

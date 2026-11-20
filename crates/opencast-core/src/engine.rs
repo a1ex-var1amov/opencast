@@ -106,6 +106,8 @@ pub enum Builtin {
     Stats,
     EditProfile,
     BrowseFiles,
+    /// Hidden diagnostics window (Swift).
+    Debug,
 }
 
 const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
@@ -710,6 +712,13 @@ const BUILTINS: &[(Builtin, &str, &str, &str, &[&str])] = &[
         "Browse Files",
         "📂",
         &["finder", "folders", "path", "navigate", "files"],
+    ),
+    (
+        Builtin::Debug,
+        "debug",
+        "Debug",
+        "ladybug",
+        &["logs", "diagnostics", "telemetry", "trace"],
     ),
     (
         Builtin::ToggleDarkMode,
@@ -2382,6 +2391,11 @@ impl Engine {
     }
 
     pub fn search(&self, query: &str, limit: usize) -> Vec<Command> {
+        let _timing = crate::telemetry::Guard::new("search", 16);
+        let _span = tracing::trace_span!("search", qlen = query.len(), limit).entered();
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            tracing::debug!(q = %crate::telemetry::clip(query, 200), "search query");
+        }
         let q = query.trim();
         let ql = q.to_lowercase();
         // Clone sidecars under a short read lock so typing cannot pile up readers
@@ -2832,6 +2846,7 @@ impl Engine {
                     ),
                     Builtin::HideOthers => Plan::Ui("hide-others"),
                     Builtin::BrowseFiles => Plan::Ui("browse-files"),
+                    Builtin::Debug => Plan::Ui("debug"),
                     Builtin::ArrangeWindow => Plan::Ui("arrange-window"),
                     Builtin::Translate => {
                         let text = args.first().map(|s| s.trim()).unwrap_or("");

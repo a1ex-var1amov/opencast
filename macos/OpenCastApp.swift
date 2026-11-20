@@ -572,6 +572,11 @@ final class Model {
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
         guard let screen else { return }
         self.screen = screen
+        let shownAt = CFAbsoluteTimeGetCurrent()
+        defer {
+            let ms = Int((CFAbsoluteTimeGetCurrent() - shownAt) * 1000)
+            Telemetry.sample("panel.show", ms: ms, budget: 50)
+        }
         let final = frame(on: screen, height: islandHeight)
         if !dropped {
             dropped = true
@@ -657,6 +662,7 @@ final class Model {
     ///   dropping `Task.detached` results when a newer search cancelled the parent task.
     func search(immediate: Bool = false) {
         searchStarted = CFAbsoluteTimeGetCurrent()
+        lastDebounceMs = immediate ? 0 : 50
         if case .list(let command, _, let filter) = mode {
             if filter {
                 // Rows derive from `query`; nothing to fetch.
@@ -983,6 +989,8 @@ final class Model {
     }
 
     private var searchStarted: CFAbsoluteTime = 0
+    /// 50 when the keystroke path slept before search; 0 for an immediate search.
+    private var lastDebounceMs = 0
     /// Generation whose rows are on screen. Lags `searchGen` while a search is in flight.
     private var deliveredGen = 0
     /// Return was pressed while the rows were stale: run the top hit when they land.
@@ -996,7 +1004,7 @@ final class Model {
         guard gen == searchGen else { return }
         deliveredGen = gen
         let ms = Int((CFAbsoluteTimeGetCurrent() - searchStarted) * 1000)
-        if ms > 25 { NSLog("opencast: search \"%@\" took %d ms", query, ms) }
+        Telemetry.sample("keystroke", ms: ms, budget: 16 + lastDebounceMs)
         let missing = parsed.compactMap { command -> String? in
             guard command.kind == .app || command.kind == .file else { return nil }
             let path = command.kind == .app ? String(command.id.dropFirst(4)) : String(command.id.dropFirst(5))
@@ -2010,6 +2018,9 @@ final class Model {
         case "settings":
             hide()
             SettingsWindowController.shared.show()
+        case "debug":
+            hide()
+            DebugPanelController.shared.show()
         case "appearance-menu":
             showAppearanceMenu()
         case "panel-position-menu":

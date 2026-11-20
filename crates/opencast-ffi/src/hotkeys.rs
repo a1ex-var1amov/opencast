@@ -10,6 +10,14 @@ use crate::host;
 static MANAGER: Mutex<Option<GlobalHotKeyManager>> = Mutex::new(None);
 static TOGGLE: Mutex<Option<HotKey>> = Mutex::new(None);
 static BINDS: Mutex<Vec<(HotKey, String)>> = Mutex::new(Vec::new());
+static SPECS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static PROBLEMS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+pub fn status() -> (Vec<String>, Vec<String>) {
+    let specs = SPECS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let problems = PROBLEMS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    (specs, problems)
+}
 
 extern "C" {
     // `dispatch_get_main_queue()` is a header inline of this symbol.
@@ -96,6 +104,7 @@ fn register_here(engine: &opencast_core::engine::Engine) -> Vec<String> {
         Ok(m) => m,
         Err(e) => {
             problems.push(format!("could not start the hotkey manager ({e})"));
+            *PROBLEMS.lock().unwrap_or_else(|e| e.into_inner()) = problems.clone();
             return problems;
         }
     };
@@ -117,6 +126,10 @@ fn register_here(engine: &opencast_core::engine::Engine) -> Vec<String> {
     let (bindings, warns) = engine.hotkey_bindings();
     problems.extend(warns);
     let mut registered = Vec::new();
+    let mut specs = Vec::new();
+    if toggle.is_some() {
+        specs.push(format!("{spec} → toggle"));
+    }
     for (key, id) in bindings {
         // `Hyper+X` = all four modifiers, what the hyper key sends.
         let spec = key.replace("Hyper+", "Ctrl+Alt+Cmd+Shift+");
@@ -132,13 +145,18 @@ fn register_here(engine: &opencast_core::engine::Engine) -> Vec<String> {
             continue;
         }
         match manager.register(shortcut) {
-            Ok(()) => registered.push((shortcut, id)),
+            Ok(()) => {
+                specs.push(format!("{key} → {id}"));
+                registered.push((shortcut, id));
+            }
             Err(e) => problems.push(format!("could not register hotkey `{key}`: {e}")),
         }
     }
     *TOGGLE.lock().unwrap() = toggle;
     *BINDS.lock().unwrap() = registered;
     *MANAGER.lock().unwrap() = Some(manager);
+    *SPECS.lock().unwrap_or_else(|e| e.into_inner()) = specs;
+    *PROBLEMS.lock().unwrap_or_else(|e| e.into_inner()) = problems.clone();
     problems
 }
 
@@ -152,6 +170,7 @@ pub(crate) fn listen() {
                 if event.state != HotKeyState::Pressed {
                     continue;
                 }
+                let _timing = opencast_core::telemetry::Guard::new("hotkey", 50);
                 let id = event.id;
                 // Drop the guard before the callback. A reload from that callback
                 // locks `TOGGLE` again on this thread.
