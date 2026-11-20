@@ -207,7 +207,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { _ in
             MainActor.assumeIsolated { WindowManager.reclampTracked() }
         }
-        return [wake, session, screens]
+        let active = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { Model.shared.noteAccessibilityTrust() }
+        }
+        return [wake, session, screens, active]
     }
 
     /// ponytail: Edit menu only — enough for text-field key equivalents; full app menu if we leave accessory.

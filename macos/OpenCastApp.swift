@@ -3550,6 +3550,17 @@ final class Model {
         dismissToast()
     }
 
+    /// Last trust we observed. A mid-session revocation toasts; the first sample does not.
+    private var axTrusted: Bool?
+
+    func noteAccessibilityTrust() {
+        let now = WindowManager.accessibilityTrusted
+        if axTrusted == true, !now {
+            permissionToast("Window commands", needs: "Accessibility")
+        }
+        axTrusted = now
+    }
+
     /// One permission toast: Return opens Settings → Permissions (N-3).
     func permissionToast(_ what: String, needs permission: String) {
         flash(

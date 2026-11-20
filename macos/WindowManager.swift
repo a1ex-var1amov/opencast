@@ -451,6 +451,15 @@ enum WindowManager {
         if a != .success && b == .success {
             throw WMError.message("resized the window, but the app refused the new position")
         }
+        let wanted = Rect(x: pos.x, y: pos.y, w: size.width, h: size.height)
+        if stageManagerEnabled(), let now = frame(of: window), !now.near(wanted, 12) {
+            throw WMError.message("Stage Manager kept this window in its set")
+        }
+    }
+
+    /// `com.apple.WindowManager` `GloballyEnabled`. Off when the domain is missing.
+    private static func stageManagerEnabled() -> Bool {
+        UserDefaults(suiteName: "com.apple.WindowManager")?.bool(forKey: "GloballyEnabled") ?? false
     }
 
     private static func boolAttribute(_ element: AXUIElement, _ name: String) -> Bool {
