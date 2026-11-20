@@ -114,7 +114,7 @@ fn filter_paths(stdout: &[u8], limit: usize) -> Vec<PathBuf> {
             (is_dir, p)
         })
         .collect();
-    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    rows.sort_by_key(|row| std::cmp::Reverse(row.0));
     rows.into_iter().take(limit).map(|(_, p)| p).collect()
 }
 
@@ -150,7 +150,7 @@ mod tests {
             (fs::metadata(&file).unwrap().is_dir(), file.clone()),
             (fs::metadata(&folder).unwrap().is_dir(), folder.clone()),
         ];
-        rows.sort_by(|a, b| b.0.cmp(&a.0));
+        rows.sort_by_key(|row| std::cmp::Reverse(row.0));
         assert!(rows[0].1.ends_with("SpotlightFolder"), "folders sort first");
         let _ = fs::remove_dir_all(&base);
     }

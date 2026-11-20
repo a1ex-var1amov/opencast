@@ -16,8 +16,10 @@ use tracing_subscriber::EnvFilter;
 const KEEP: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 const MAX_BYTES: u64 = 32 * 1024 * 1024;
 
+type ReloadFilter = Box<dyn Fn(String) + Send>;
+
 static LEVEL: Mutex<String> = Mutex::new(String::new());
-static RELOAD: Mutex<Option<Box<dyn Fn(String) + Send>>> = Mutex::new(None);
+static RELOAD: Mutex<Option<ReloadFilter>> = Mutex::new(None);
 static CLEANUP: Mutex<Option<extern "C" fn()>> = Mutex::new(None);
 static GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLock::new();
 
