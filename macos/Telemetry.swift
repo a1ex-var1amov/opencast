@@ -40,6 +40,13 @@ enum Telemetry {
         }
     }
 
+    /// Registers the panic callback. The C function stays in this file: naming
+    /// it from AppShell made `swiftc -O` emit `_opencastReleaseStayAwake` twice.
+    @inline(never)
+    static func installPanicCleanup() {
+        opencast_set_panic_cleanup(opencastReleaseStayAwake)
+    }
+
     private static func schedule() {
         guard Thread.isMainThread else {
             DispatchQueue.main.async { schedule() }
@@ -54,10 +61,8 @@ enum Telemetry {
 }
 
 /// Rust calls this from the panic hook and from terminate/signal. IOKit only.
-/// public and never-inline: `swiftc -O` copies an internal `@_cdecl` into every
-/// file that names it, so the release link saw two `_opencastReleaseStayAwake`.
 @_cdecl("opencastReleaseStayAwake")
 @inline(never)
-public func opencastReleaseStayAwake() {
+private func opencastReleaseStayAwake() {
     StayAwakeController.shared.panicRelease()
 }

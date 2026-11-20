@@ -113,7 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task.detached {
             let boot = Date()
             opencast_start(opencastCallback)
-            opencast_set_panic_cleanup(opencastReleaseStayAwake)
+            Telemetry.installPanicCleanup()
             if UserDefaults.standard.bool(forKey: Diagnostics.key) {
                 Telemetry.setLevel("debug")
             }
