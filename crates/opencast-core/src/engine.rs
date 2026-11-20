@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -1055,25 +1055,27 @@ pub struct ChatTool {
 }
 
 /// Small per-user state files, held in memory so search never touches disk.
+/// The lists search reads are `Arc`s: a keystroke clones the pointer, a write
+/// clones the bytes only when a search is still holding the previous one.
 #[derive(Default)]
 struct Sidecars {
-    chats: Vec<crate::chats::SavedChat>,
-    usage: crate::usage::Usage,
+    chats: Arc<Vec<crate::chats::SavedChat>>,
+    usage: Arc<crate::usage::Usage>,
     /// Newest first (the on-disk order).
     pins: Vec<String>,
-    pin_set: HashSet<String>,
-    notes: Vec<Note>,
+    pin_set: Arc<HashSet<String>>,
+    notes: Arc<Vec<Note>>,
 }
 
 impl Sidecars {
     fn load(dir: &Path) -> Self {
         let pins = crate::pins::load_list(dir);
         Self {
-            usage: crate::usage::Usage::load(dir),
-            pin_set: pins.iter().cloned().collect(),
+            usage: Arc::new(crate::usage::Usage::load(dir)),
+            pin_set: Arc::new(pins.iter().cloned().collect()),
             pins,
-            notes: crate::notes::load_all(dir),
-            chats: crate::chats::load_all(dir),
+            notes: Arc::new(crate::notes::load_all(dir)),
+            chats: Arc::new(crate::chats::load_all(dir)),
         }
     }
 }
@@ -1876,7 +1878,9 @@ impl Engine {
         // Save outside the write lock so a slow disk flush cannot block search readers.
         let dirty = {
             let mut s = crate::lock::write(&self.sidecars);
-            s.usage.record(id, query, crate::usage::now()).then(|| s.usage.clone())
+            Arc::make_mut(&mut s.usage)
+                .record(id, query, crate::usage::now())
+                .then(|| Arc::clone(&s.usage))
         };
         if let Some(usage) = dirty {
             usage.save(&self.config_dir);
@@ -1888,7 +1892,7 @@ impl Engine {
         let mut s = crate::lock::write(&self.sidecars);
         let pinned = crate::pins::toggle_in(&mut s.pins, id);
         if crate::pins::pinnable(id) {
-            s.pin_set = s.pins.iter().cloned().collect();
+            s.pin_set = Arc::new(s.pins.iter().cloned().collect());
             crate::pins::save_list(&self.config_dir, &s.pins);
         }
         pinned
@@ -1900,7 +1904,7 @@ impl Engine {
 
     pub fn add_note(&self, title: &str, body: &str) -> Note {
         let mut s = crate::lock::write(&self.sidecars);
-        let note = crate::notes::add_in(&mut s.notes, title, body);
+        let note = crate::notes::add_in(Arc::make_mut(&mut s.notes), title, body);
         crate::notes::save_all(&self.config_dir, &s.notes);
         note
     }
@@ -1915,9 +1919,10 @@ impl Engine {
 
     pub fn delete_note(&self, id: &str) -> bool {
         let mut s = crate::lock::write(&self.sidecars);
-        let before = s.notes.len();
-        s.notes.retain(|n| n.id != id);
-        let removed = s.notes.len() != before;
+        let notes = Arc::make_mut(&mut s.notes);
+        let before = notes.len();
+        notes.retain(|n| n.id != id);
+        let removed = notes.len() != before;
         if removed {
             crate::notes::save_all(&self.config_dir, &s.notes);
         }
@@ -1928,13 +1933,13 @@ impl Engine {
 
     pub fn save_chat(&self, chat: crate::chats::SavedChat) {
         let mut s = crate::lock::write(&self.sidecars);
-        crate::chats::upsert(&mut s.chats, chat);
+        crate::chats::upsert(Arc::make_mut(&mut s.chats), chat);
         crate::chats::save_all(&self.config_dir, &s.chats);
     }
 
     pub fn delete_chat(&self, id: &str) -> bool {
         let mut s = crate::lock::write(&self.sidecars);
-        let removed = crate::chats::remove(&mut s.chats, id);
+        let removed = crate::chats::remove(Arc::make_mut(&mut s.chats), id);
         if removed {
             crate::chats::save_all(&self.config_dir, &s.chats);
         }
@@ -2245,17 +2250,18 @@ impl Engine {
 
     pub fn update_note(&self, id: &str, title: &str, body: &str) -> bool {
         let mut s = crate::lock::write(&self.sidecars);
-        let Some(n) = s.notes.iter_mut().find(|n| n.id == id) else {
+        let notes = Arc::make_mut(&mut s.notes);
+        let Some(n) = notes.iter_mut().find(|n| n.id == id) else {
             return false;
         };
         n.title = title.trim().to_string();
         n.body = body.to_string();
         n.updated = crate::usage::now();
         // Most recently edited first.
-        let i = s.notes.iter().position(|n| n.id == id).unwrap_or(0);
-        let note = s.notes.remove(i);
-        s.notes.insert(0, note);
-        crate::notes::save_all(&self.config_dir, &s.notes);
+        let i = notes.iter().position(|n| n.id == id).unwrap_or(0);
+        let note = notes.remove(i);
+        notes.insert(0, note);
+        crate::notes::save_all(&self.config_dir, notes);
         true
     }
 
@@ -2395,7 +2401,7 @@ impl Engine {
     }
 
     pub fn notes(&self) -> Vec<Note> {
-        crate::lock::read(&self.sidecars).notes.clone()
+        crate::lock::read(&self.sidecars).notes.as_ref().clone()
     }
 
     pub fn search(&self, query: &str, limit: usize) -> Vec<Command> {
@@ -2410,7 +2416,12 @@ impl Engine {
         // that stall bump_usage (and thus Return/click) on the write lock.
         let (usage, pin_set, notes, chats) = {
             let s = crate::lock::read(&self.sidecars);
-            (s.usage.clone(), s.pin_set.clone(), s.notes.clone(), s.chats.clone())
+            (
+                Arc::clone(&s.usage),
+                Arc::clone(&s.pin_set),
+                Arc::clone(&s.notes),
+                Arc::clone(&s.chats),
+            )
         };
         let mut out = self.registry.search_with_usage(query, limit, &usage, &pin_set);
         for (i, row) in self.conversions(q).into_iter().enumerate() {
@@ -2520,14 +2531,12 @@ impl Engine {
 
         // Emoji overlay (not in the permanent registry): recent ones first.
         let recent_emoji: Vec<String> = if crate::emoji::needle(q).is_some() {
-            let s = crate::lock::read(&self.sidecars);
             let now = crate::usage::now();
-            let mut ids: Vec<(&String, i64)> = s
-                .usage
+            let mut ids: Vec<(&String, i64)> = usage
                 .commands
                 .keys()
                 .filter(|k| k.starts_with("emoji:"))
-                .map(|k| (k, s.usage.frecency(k, now)))
+                .map(|k| (k, usage.frecency(k, now)))
                 .collect();
             ids.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
             ids.into_iter().take(8).map(|(k, _)| k.clone()).collect()
