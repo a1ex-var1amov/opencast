@@ -289,7 +289,35 @@ OpenCast was not running. No p50/p95 exists yet. Do not treat the numbers below 
 
 Phase 1 overhead budget: under 1 ms added to a user-visible action at the default level. Hot-path spans (`search` inner score loop, per-row view body) stay at TRACE and are filtered out unless the settings toggle or `OPENCAST_LOG` says otherwise. Default level: `info` for commands and `warn` for budget misses. The 50 ms debounce is not "telemetry overhead"; it is product code and shows up in the keystroke span.
 
-A before/after table gets filled in Phase 5. This file is the before column's method.
+A before/after table gets filled in below. The rows above stay the method from before the pass.
+
+## After the 2026-11-20 pass
+
+Live p50/p95, idle CPU, and idle RSS were not sampled. The copy in `~/Applications` was not rebuilt, so the debug panel has not recorded a session yet. The code changes that move the budgets are:
+
+| Metric | Before | After this pass |
+|---|---|---|
+| Hotkey → visible | First show animates 160 ms from off-screen, then `orderFront` | The panel is laid out once at launch, hidden. Every show `setFrame`s the final on-screen rect, then `orderFront`. The `panel.show` sample stops there. Budget 50 ms |
+| Keystroke → results | 50 ms debounce, then `search` on the main actor, cloning usage, pins, notes, and chats | Debounce is unchanged and is included in the `keystroke` sample (`16 + debounce`). Search still runs on the main actor. The sidecar lists are `Arc`s, so a keystroke copies a pointer. Budget on the Rust `search` sample is 16 ms |
+| Window snap | AX on the main actor, no messaging timeout | `AXUIElementSetMessagingTimeout` of 1 s. A size miss and a position miss are separate toasts. If Stage Manager is on and the window misses the frame, the toast says so. Budget 30 ms |
+| Cold start → ready | Untimed | `startup` sample from before `opencast_start` to `Model.ready`. Budget 400 ms |
+| Idle CPU / RSS | Not sampled | Still not sampled. The debug panel's 1 s timer runs only while that window is open |
+| `config.toml`, `layouts.json` | In-place write. Corrupt layouts loaded as empty and the next save wiped them | Temp file, fsync, rename. A corrupt `layouts.json` is moved to `layouts.json.bad` and a save will not overwrite it if that move fails |
+| Locks | `.unwrap()` on poison, then every later call is "internal error" | Poisoned locks keep the inner value and log once |
+| Hotkeys / stay-awake | No wake hook | Wake re-registers hotkeys and re-takes the power assertion if the menu is still on. User-switch re-registers hotkeys. A failed assertion is logged |
+
+Checks on this machine (Rust 1.100, host arm64):
+
+- `cargo fmt --all -- --check`
+- `cargo test -p opencast-core`: 202 + 4 smoke + 4 stream
+- `cargo test -p opencast-ffi`: 13
+- `cargo clippy -p opencast-core -p opencast-ffi -- -D warnings`
+- `./test-swift.command`: 114
+- `swiftc -typecheck` of `macos/*.swift` for `arm64-apple-macos14.0`
+
+There is no TypeScript app, so there is no `tsc` step. `nucleo` and `thiserror` were not added. Search stays on the main actor until the Tahoe detached-task drop is reproduced. Stay Awake stays 30 minutes, 1 hour, 3 hours, and indefinite.
+
+How to read a real p95: rebuild with `./build-app.command`, use the launcher, then run the **Debug** command. The panel shows p50/p95/p99 per sample name. See `docs/TELEMETRY.md`.
 
 ## Dependencies the later phases would add
 
