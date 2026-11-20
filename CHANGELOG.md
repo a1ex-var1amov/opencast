@@ -98,6 +98,10 @@ first tag is in `git log`.
   `SnippetMatch.swift`.
 
 ### Changed
+- Settings → Permissions → **Re-check** registers this build. When macOS still
+  has the previous binary, it clears OpenCast's Accessibility, Screen Recording,
+  Calendars, Microphone, and Speech Recognition entries and asks again for the
+  two that do not re-prompt on their own.
 - The launcher appears on its final frame. The first hotkey no longer slides
   in from off screen for 160 ms.
 - While the engine is still starting, the empty state says Loading.

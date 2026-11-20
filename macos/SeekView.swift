@@ -37,7 +37,7 @@ enum SeekOCR {
             case .noMonitor: return "no monitors found"
             case .screenRecording:
                 return "OpenCast could not capture the screen. System Settings → Privacy & Security → "
-                    + "Screen Recording: enable OpenCast (after a macOS upgrade, remove it and add it back), "
+                    + "Screen Recording: enable OpenCast, or use Settings → Permissions → Re-check to add this version, "
                     + "then quit and relaunch OpenCast"
             case .noText: return "no readable text on screen"
             case .recognitionFailed: return "text recognition failed"

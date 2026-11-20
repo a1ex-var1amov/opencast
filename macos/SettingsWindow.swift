@@ -104,6 +104,8 @@ final class SettingsState {
     var updateRepoDraft = ""
     var updateRepoStatus = ""
     var permissionTick = 0
+    /// Set when Re-check clears grants so this build can be added.
+    var permissionNote = ""
     /// Last `opencast_hotkeys_fix` lines (filled by `Model.checkHotkeys`).
     var hotkeyProblems: [String] = []
     /// In-flight "Test connection" stream id (routed from Model.accept).
@@ -734,6 +736,39 @@ private struct ExtensionsPane: View {
     }
 }
 
+/// Grants that stay attached to the previous binary. A new build has to be
+/// cleared and added again; the system prompt does that. Automation is per
+/// other app, so it is not in this list.
+private enum PermissionAccess {
+    private static let stampKey = "permissions.binaryStamp."
+    private static let bundleID = Bundle.main.bundleIdentifier ?? "dev.opencast.launcher"
+
+    /// Version plus the executable's mtime, so a rebuild of the same version still counts.
+    static func stamp() -> String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        let modified = Bundle.main.executableURL
+            .flatMap { try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate }
+            .map { String($0.timeIntervalSince1970) } ?? ""
+        return "\(version) \(modified)"
+    }
+
+    /// Clears this bundle's grant for `service` when the running binary is not
+    /// the one last registered. Returns whether a clear happened.
+    static func reregister(_ service: String) -> Bool {
+        let current = stamp()
+        let key = stampKey + service
+        guard UserDefaults.standard.string(forKey: key) != current else { return false }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        p.arguments = ["reset", service, bundleID]
+        guard (try? p.run()) != nil else { return false }
+        p.waitUntilExit()
+        guard p.terminationStatus == 0 else { return false }
+        UserDefaults.standard.set(current, forKey: key)
+        return true
+    }
+}
+
 private struct PermissionsPane: View {
     @Bindable var state: SettingsState
 
@@ -747,24 +782,25 @@ private struct PermissionsPane: View {
                 detail: "Window management, AI on selected text, paste, snippets, menu search",
                 granted: AXIsProcessTrusted(),
                 pane: "Privacy_Accessibility",
-                request: {
-                    let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-                    _ = AXIsProcessTrustedWithOptions(opts)
-                }
+                request: { allow("Accessibility", title: "Accessibility", prompt: promptAccessibility) }
             )
             PermissionRow(
                 title: "Screen Recording",
                 detail: "Click Text (on-screen OCR) and attaching screen text to chats.",
                 granted: CGPreflightScreenCaptureAccess(),
                 pane: "Privacy_ScreenCapture",
-                request: { _ = CGRequestScreenCaptureAccess() }
+                request: { allow("ScreenCapture", title: "Screen Recording") { _ = CGRequestScreenCaptureAccess() } }
             )
             PermissionRow(
                 title: "Calendars",
                 detail: "My Schedule and the next-meeting row",
                 granted: EKEventStore.authorizationStatus(for: .event) == .fullAccess,
                 pane: "Privacy_Calendars",
-                request: { Schedule.shared.requestAccess { _ in SettingsState.shared.permissionTick += 1 } }
+                request: {
+                    allow("Calendar", title: "Calendars") {
+                        Schedule.shared.requestAccess { _ in SettingsState.shared.permissionTick += 1 }
+                    }
+                }
             )
             PermissionRow(
                 title: "Microphone",
@@ -772,8 +808,10 @@ private struct PermissionsPane: View {
                 granted: AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
                 pane: "Privacy_Microphone",
                 request: {
-                    AVCaptureDevice.requestAccess(for: .audio) { _ in
-                        Task { @MainActor in SettingsState.shared.permissionTick += 1 }
+                    allow("Microphone", title: "Microphone") {
+                        AVCaptureDevice.requestAccess(for: .audio) { _ in
+                            Task { @MainActor in SettingsState.shared.permissionTick += 1 }
+                        }
                     }
                 }
             )
@@ -783,8 +821,10 @@ private struct PermissionsPane: View {
                 granted: SFSpeechRecognizer.authorizationStatus() == .authorized,
                 pane: "Privacy_SpeechRecognition",
                 request: {
-                    SFSpeechRecognizer.requestAuthorization { _ in
-                        Task { @MainActor in SettingsState.shared.permissionTick += 1 }
+                    allow("SpeechRecognition", title: "Speech Recognition") {
+                        SFSpeechRecognizer.requestAuthorization { _ in
+                            Task { @MainActor in SettingsState.shared.permissionTick += 1 }
+                        }
                     }
                 }
             )
@@ -795,8 +835,44 @@ private struct PermissionsPane: View {
                 pane: "Privacy_Automation",
                 request: {}
             )
-            Button("Re-check") { state.permissionTick += 1 }
+            Button("Re-check") { recheck() }
+            if !state.permissionNote.isEmpty {
+                Text(state.permissionNote).font(.caption).foregroundStyle(.secondary)
+            }
         }
+    }
+
+    /// Clears a grant that belongs to an older binary, then asks for this one.
+    private func allow(_ service: String, title: String, prompt: () -> Void) {
+        if PermissionAccess.reregister(service) {
+            state.permissionNote = "Cleared \(title) so this version can be added."
+        }
+        prompt()
+        state.permissionTick += 1
+    }
+
+    private func recheck() {
+        let rows: [(String, String, (() -> Void)?)] = [
+            ("Accessibility", "Accessibility", promptAccessibility),
+            ("ScreenCapture", "Screen Recording", { _ = CGRequestScreenCaptureAccess() }),
+            ("Calendar", "Calendars", nil),
+            ("Microphone", "Microphone", nil),
+            ("SpeechRecognition", "Speech Recognition", nil),
+        ]
+        let cleared = rows.compactMap { service, title, prompt -> String? in
+            guard PermissionAccess.reregister(service) else { return nil }
+            prompt?()
+            return title
+        }
+        state.permissionNote = cleared.isEmpty
+            ? ""
+            : "Cleared \(cleared.joined(separator: ", ")) so this version can be added."
+        state.permissionTick += 1
+    }
+
+    private func promptAccessibility() {
+        let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(opts)
     }
 }
 
