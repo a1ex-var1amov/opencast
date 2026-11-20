@@ -54,7 +54,10 @@ enum Telemetry {
 }
 
 /// Rust calls this from the panic hook and from terminate/signal. IOKit only.
+/// public and never-inline: `swiftc -O` copies an internal `@_cdecl` into every
+/// file that names it, so the release link saw two `_opencastReleaseStayAwake`.
 @_cdecl("opencastReleaseStayAwake")
-func opencastReleaseStayAwake() {
+@inline(never)
+public func opencastReleaseStayAwake() {
     StayAwakeController.shared.panicRelease()
 }
