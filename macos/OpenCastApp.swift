@@ -1,6 +1,5 @@
 import AppKit
 import Observation
-import QuartzCore
 import SwiftUI
 
 /// C callback. Copies the JSON before returning. `hide` finishes on the main
@@ -213,7 +212,6 @@ final class Model {
     var keepOnBlurOnce = false
     var seek: IslandPanel?
     private var screen: NSScreen?
-    private var dropped = false
     private var readKeep = false
     private var keepOnBlur = false
     private var hiding = false
@@ -440,6 +438,11 @@ final class Model {
         launcher.contentView = host
         launcher.sharingType = .none
         self.launcher = launcher
+        // Lay the island out once at launch, hidden, so the first hotkey is not the first SwiftUI layout.
+        if let screen = NSScreen.main {
+            launcher.setFrame(frame(on: screen, height: islandHeight), display: false)
+            host.layoutSubtreeIfNeeded()
+        }
 
         let seek = IslandPanel()
         seek.refusesKey = true
@@ -584,34 +587,13 @@ final class Model {
             let ms = Int((CFAbsoluteTimeGetCurrent() - shownAt) * 1000)
             Telemetry.sample("panel.show", ms: ms, budget: 50)
         }
+        // On the final frame before orderFront. A slide-in from off-screen cannot
+        // be a visible panel inside the hotkey budget.
         let final = frame(on: screen, height: islandHeight)
-        if !dropped {
-            dropped = true
-            if Theme.reduceMotion {
-                launcher.setFrame(final, display: true)
-                launcher.invalidateShadow()
-                NSApp.activate(ignoringOtherApps: true)
-                launcher.makeKeyAndOrderFront(nil)
-            } else {
-                var start = final
-                start.origin.y = screen.frame.maxY
-                launcher.setFrame(start, display: false)
-                NSApp.activate(ignoringOtherApps: true)
-                launcher.makeKeyAndOrderFront(nil)
-                NSAnimationContext.runAnimationGroup({ ctx in
-                    ctx.duration = 0.16
-                    ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                    launcher.animator().setFrame(final, display: true)
-                }, completionHandler: {
-                    launcher.invalidateShadow()
-                })
-            }
-        } else {
-            launcher.setFrame(final, display: true)
-            launcher.invalidateShadow()
-            NSApp.activate(ignoringOtherApps: true)
-            launcher.makeKeyAndOrderFront(nil)
-        }
+        launcher.setFrame(final, display: true)
+        launcher.invalidateShadow()
+        NSApp.activate(ignoringOtherApps: true)
+        launcher.makeKeyAndOrderFront(nil)
         focusTick += 1
         // Settings come from boot / ConfigWatcher / Settings saves — not every show.
         // (refreshSettings reset WindowGlyphs and re-hit the engine; felt slow on Tahoe.)
