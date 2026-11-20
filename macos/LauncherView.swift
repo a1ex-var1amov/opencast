@@ -80,6 +80,9 @@ struct LauncherView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification)) { _ in
             reduceTransparency = Theme.reduceTransparency
         }
+        .onChange(of: model.toastText) { _, text in
+            if let text { AccessibilityNotification.Announcement(text).post() }
+        }
     }
 
     private var panelShape: AnyShape {
@@ -104,7 +107,7 @@ struct LauncherView: View {
             field
             if !model.clicking {
                 HStack(spacing: 0) {
-                    if model.isListMode, model.listOptions.isGrid {
+                    if model.isListMode, model.listOptions.isGrid, !model.rows.isEmpty {
                         grid
                     } else {
                         list
@@ -146,6 +149,7 @@ struct LauncherView: View {
             .tint(Theme.accent)
             .focusEffectDisabled()
             .focused($focused)
+            .accessibilityLabel(fieldPrompt)
             .autocorrectionDisabled()
             // Tahoe: Return in the field does not always reach the NSEvent monitor.
             .onSubmit { model.activate(model.selected) }
@@ -184,11 +188,13 @@ struct LauncherView: View {
             if model.rows.isEmpty {
                 let q = model.query.trimmingCharacters(in: .whitespacesAndNewlines)
                 Text(
-                    q.isEmpty
-                        ? "No results"
-                        : model.isListMode
-                            ? "No matches — Esc searches all commands"
-                            : "No results for “\(q)” · Tab asks AI · / browses files"
+                    !model.ready
+                        ? "Loading…"
+                        : q.isEmpty
+                            ? "No results"
+                            : model.isListMode
+                                ? "No matches — Esc searches all commands"
+                                : "No results for “\(q)” · Tab asks AI · / browses files"
                 )
                     .foregroundStyle(Theme.secondary(scheme))
                     .frame(maxWidth: .infinity, minHeight: model.rowHeight)
