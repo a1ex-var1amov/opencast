@@ -70,7 +70,9 @@ macOS first; `crates/opencast-core` must stay portable (no platform UI deps).
   (this arch; `OC_ARCH=universal` builds arm64 + x86_64 and lipo's them)
 - `./run-opencast.command` — debug app at target/debug/OpenCast.app
 - `./release.command` — signed + notarized universal dmg/zip (Developer ID needed);
-  prints the Homebrew cask filled in from the git remote
+  prints the Homebrew cask filled in from the git remote. Publishing a release
+  also updates `a1ex-var1amov/homebrew-tap` `Casks/opencast.rb` (version and
+  sha256 of the dmg) and pushes that tap. Do this on every release.
 - `packaging/build-arch.zsh <arm64|x86_64> <log> <out>` — one arch slice (Rust
   staticlib + swiftc link); CI runs it for x86_64 so the Intel build cannot rot
 - Do NOT export MACOSX_DEPLOYMENT_TARGET for cargo (Rust 1.91 release builds
