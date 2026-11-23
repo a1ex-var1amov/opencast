@@ -131,6 +131,10 @@ first tag is in `git log`.
   Recents) keeps its order when nothing is typed.
 
 ### Fixed
+- Click Text no longer starts a second text-recognition pass while the first
+  one is still running. That pile-up timed out both passes and the toast
+  blamed a missing OCR model. One fast pass runs instead, and a busy
+  recognizer says to try again in a moment.
 - `config.toml` and `layouts.json` are replaced by a finished file. A crash
   mid-write can no longer leave a truncated one, and a corrupt layouts file is
   moved aside as `layouts.json.bad` instead of being overwritten by the next save.

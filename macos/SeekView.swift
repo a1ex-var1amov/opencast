@@ -42,9 +42,7 @@ enum SeekOCR {
             case .noText: return "no readable text on screen"
             case .recognitionFailed: return "text recognition failed"
             case .recognitionStuck:
-                return "macOS text recognition did not respond. English OCR ships with the OS, so this is the "
-                    + "service, not a missing download: open a screenshot in Preview and try Live Text. "
-                    + "If that hangs too, restart the Mac"
+                return "Text recognition is still starting. Try Click Text again in a moment."
             }
         }
     }
@@ -120,40 +118,51 @@ enum SeekOCR {
         return ctx.makeImage() ?? image
     }
 
-    /// Vision's `perform` can block forever when the text-recognition service is
-    /// wedged after an OS upgrade. Bound it. Attempts run one at a time: a second
-    /// `perform` started while the first is still inside Vision queues behind it
-    /// and times out too, which looks like both models are missing.
+    /// One Vision pass. A second `perform` started while the first is still
+    /// inside Vision queues behind it and times out too, which looks like OCR
+    /// is missing. `cancel` does not unblock that first call.
+    private static let vision = DispatchQueue(label: "dev.opencast.seek-ocr")
+    private static let gate = NSLock()
+    private static var ocrInFlight = false
+
     private static func recognize(_ image: CGImage, monitor: SeekRect) throws -> SeekScan {
         let image = forOCR(image)
         Diagnostics.log("seek ocr image \(image.width)x\(image.height)")
-        var results: [VNRecognizedTextObservation]?
-        // Revision 3 ships in the OS since macOS 13; it is not a separate download.
-        let attempts: [(VNRequestTextRecognitionLevel, TimeInterval)] = [(.accurate, 15), (.fast, 8)]
-        for (level, limit) in attempts {
-            let name = level == .accurate ? "accurate" : "fast"
-            let done = DispatchSemaphore(value: 0)
-            let request = VNRecognizeTextRequest()
-            request.recognitionLevel = level
-            request.revision = VNRecognizeTextRequestRevision3
-            request.usesLanguageCorrection = false
-            var failed = false
-            DispatchQueue.global(qos: .userInitiated).async {
-                failed = (try? VNImageRequestHandler(cgImage: image, options: [:]).perform([request])) == nil
-                done.signal()
-            }
-            if done.wait(timeout: .now() + limit) == .timedOut {
-                request.cancel()
-                Diagnostics.log("seek OCR (\(name)) did not return in \(Int(limit)) s", error: true)
-                // Let cancel unwind before the next perform, or that one queues behind this one.
-                _ = done.wait(timeout: .now() + 2)
-                continue
-            }
-            if failed { throw Failure.recognitionFailed }
-            results = request.results
-            Diagnostics.log("seek OCR (\(name)) returned \(results?.count ?? 0) observations")
-            break
+        gate.lock()
+        let busy = ocrInFlight
+        if !busy { ocrInFlight = true }
+        gate.unlock()
+        if busy {
+            Diagnostics.log("seek OCR still in flight", error: true)
+            throw Failure.recognitionStuck
         }
+        let done = DispatchSemaphore(value: 0)
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .fast
+        request.revision = VNRecognizeTextRequestRevision3
+        request.usesLanguageCorrection = false
+        request.automaticallyDetectsLanguage = false
+        if let lang = Locale.preferredLanguages.first {
+            request.recognitionLanguages = [lang]
+        }
+        var failed = false
+        var results: [VNRecognizedTextObservation]?
+        vision.async {
+            failed = (try? VNImageRequestHandler(cgImage: image, options: [:]).perform([request])) == nil
+            results = request.results
+            gate.lock()
+            ocrInFlight = false
+            gate.unlock()
+            done.signal()
+        }
+        let limit: TimeInterval = 20
+        if done.wait(timeout: .now() + limit) == .timedOut {
+            request.cancel()
+            Diagnostics.log("seek OCR did not return in \(Int(limit)) s", error: true)
+            throw Failure.recognitionStuck
+        }
+        if failed { throw Failure.recognitionFailed }
+        Diagnostics.log("seek OCR returned \(results?.count ?? 0) observations")
         guard let results else { throw Failure.recognitionStuck }
         var hits: [SeekHit] = []
         for obs in results {
