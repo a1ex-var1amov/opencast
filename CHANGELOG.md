@@ -14,6 +14,14 @@ first tag is in `git log`.
   screen text to chats.
 
 ### Added
+- **Hotkey conflicts**: a hotkey that macOS also uses for one of its own
+  shortcuts (Spotlight, input sources, screenshots) is reported with a toast at
+  launch and a line under the hotkey in Settings, which clears when you turn
+  the macOS shortcut off. Two running copies of OpenCast are reported the same
+  way. Shortcuts on arrow and F-keys are not compared: macOS reports its
+  Globe-key ones in a form that cannot be told from plain ones. macOS also does
+  not report another app holding the same key, so Settings has a **Test**
+  button: press the hotkey and it says whether the press reached OpenCast.
 - **Debug** opens a window of local timings and recent log lines, and can export
   them. Logs stay in `~/Library/Logs/OpenCast`. The diagnostic logging toggle
   raises that file log to debug. Nothing is sent off this Mac.
@@ -138,6 +146,11 @@ first tag is in `git log`.
   Recents) keeps its order when nothing is typed.
 
 ### Fixed
+- The launcher hotkey sometimes did nothing on the first press and opened the
+  panel on the second. The engine kept its own record of whether the panel was
+  up, and that record went stale whenever the panel closed without reporting
+  back. The hotkey now asks the panel, as the Caps Lock tap already did. With
+  diagnostic logging on, each press, open and close is logged.
 - Click Text (0.2.22) offered text from every open app, including windows
   buried under the one in front, plus whole windows and panes as targets, and
   took seconds to appear. It now reads only windows you can see, front to back,

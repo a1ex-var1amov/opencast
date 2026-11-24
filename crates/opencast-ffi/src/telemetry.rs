@@ -80,8 +80,8 @@ pub fn set_level(spec: &str) {
 
 pub(crate) fn ipc_span(op: &str, cid: &str) -> tracing::Span {
     match op {
-        "search" | "listPath" | "rankActions" | "bumpUsage" | "preview" | "hidden" | "shown" | "windowTarget"
-        | "windowGlyphs" | "debugSnapshot" | "settings" | "snippets" | "apps" | "accepting" => {
+        "search" | "listPath" | "rankActions" | "bumpUsage" | "preview" | "windowTarget" | "windowGlyphs"
+        | "debugSnapshot" | "settings" | "snippets" | "apps" | "accepting" => {
             tracing::trace_span!("ipc", op, cid)
         }
         _ => tracing::info_span!("ipc", op, cid),

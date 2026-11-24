@@ -154,8 +154,6 @@ extension Model {
         // An AXUIElement is a CF handle that is safe to message from any thread.
         nonisolated(unsafe) let element = hit.element
         cancelClick()
-        // Not `fromRust`: an AXPress never goes through the engine, which would then go on
-        // believing the panel is up, and the next launcher hotkey would hide instead of show.
         hide()
         DispatchQueue.global(qos: .userInitiated).async { seekPress(element, at: center) }
     }

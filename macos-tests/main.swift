@@ -216,6 +216,19 @@ check(!HotkeyChord.isCmdSpace("Cmd+Shift+Space"), "extra modifiers are not bare 
 check(!HotkeyChord.isCmdSpace("Cmd+S"), "not Space")
 check(!HotkeyChord.isCmdSpace(""), "empty is not ⌘Space")
 
+// A hotkey that macOS also uses never reaches the app. The check compares the config's
+// spelling with what macOS reports (key code + Carbon modifier mask).
+check(HotkeyChord.canonical("SUPER + Space") == "cmd+space", "modifier aliases and spacing are folded")
+check(HotkeyChord.canonical("Shift+Cmd+KeyK") == HotkeyChord.canonical("cmd+shift+k"), "order and Key prefixes do not matter")
+check(HotkeyChord.canonical("Hyper+C") == "alt+cmd+ctrl+shift+c", "Hyper is all four modifiers")
+check(HotkeyChord.canonical(keyCode: 49, carbonModifiers: 0x100) == "cmd+space", "macOS's ⌘Space reads as cmd+space")
+check(HotkeyChord.canonical(keyCode: 49, carbonModifiers: 0x1800) == "alt+ctrl+space", "⌃⌥Space from a Carbon mask")
+check(HotkeyChord.canonical(keyCode: 49, carbonModifiers: 0x100) != HotkeyChord.canonical("Alt+Space"),
+      "Alt+Space does not collide with ⌘Space")
+check(HotkeyChord.canonical(keyCode: 999, carbonModifiers: 0) == nil, "an unknown key code is not compared")
+check(HotkeyChord.canonical(keyCode: 123, carbonModifiers: 0x21A00) == nil,
+      "a Globe-key tiling shortcut is not mistaken for Ctrl+Alt+Shift+Left")
+
 // MARK: - Menu bar tint / click policy (Tahoe dark bar + GG visibility)
 
 check(!MenuBarSymbol.forcesAppLabelTint,

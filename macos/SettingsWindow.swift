@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import Carbon.HIToolbox
 import EventKit
 import Security
 import ServiceManagement
@@ -43,6 +44,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         SettingsState.shared.load()
         NSLog("opencast: settings window shown (key=%@ visible=%@)",
               "\(window?.isKeyWindow == true)", "\(window?.isVisible == true)")
+    }
+
+    /// Coming back from System Settings: a shortcut turned off there should clear its warning here.
+    func windowDidBecomeKey(_ notification: Notification) {
+        SettingsState.shared.refreshHotkeyProblems()
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -106,8 +112,67 @@ final class SettingsState {
     var permissionTick = 0
     /// Set when Re-check clears grants so this build can be added.
     var permissionNote = ""
-    /// Last `opencast_hotkeys_fix` lines (filled by `Model.checkHotkeys`).
+    /// What registration reported, plus anything else found on the same keys.
     var hotkeyProblems: [String] = []
+
+    /// macOS does not say when another app has registered the same hotkey: both registrations
+    /// succeed. What can be known is checked here: macOS's own shortcuts on the same keys, and
+    /// a second running copy of OpenCast.
+    @discardableResult
+    func refreshHotkeyProblems() -> [String] {
+        let snap = Engine.call(["op": "debugSnapshot", "limit": 0])
+        var lines = snap["hotkeyProblems"] as? [String] ?? []
+        let copies = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "").count
+        if copies > 1 {
+            lines.append("\(copies) copies of OpenCast are running and compete for the same hotkeys; quit all but one")
+        }
+        var out: Unmanaged<CFArray>?
+        if CopySymbolicHotKeys(&out) == noErr, let system = out?.takeRetainedValue() as? [[String: Any]] {
+            let taken = Set(system.compactMap { entry -> String? in
+                guard entry[kHISymbolicHotKeyEnabled as String] as? Bool == true,
+                      let code = entry[kHISymbolicHotKeyCode as String] as? Int,
+                      let mods = entry[kHISymbolicHotKeyModifiers as String] as? Int
+                else { return nil }
+                return HotkeyChord.canonical(keyCode: code, carbonModifiers: mods)
+            })
+            // The engine lists each key as "Cmd+Space → toggle".
+            for spec in (snap["hotkeys"] as? [String] ?? []).compactMap({ $0.components(separatedBy: " → ").first })
+            where taken.contains(HotkeyChord.canonical(spec)) {
+                lines.append("\(spec) is also a macOS shortcut, so presses may not reach OpenCast; turn it off in System Settings → Keyboard → Keyboard Shortcuts")
+            }
+        }
+        hotkeyProblems = lines
+        return lines
+    }
+
+    var hotkeyTesting = false
+    /// Why the last hotkey test failed; empty after a pass.
+    var hotkeyTestNote = ""
+    private var hotkeyTestRun = 0
+
+    /// Wait for one press of the launcher hotkey and say whether it got here. Another app on the
+    /// same key cannot be found by asking macOS, only by the press not arriving.
+    func testHotkey() {
+        hotkeyTestRun += 1
+        let run = hotkeyTestRun
+        hotkeyTesting = true
+        hotkeyTestNote = ""
+        hotkeyStatus = "Press \(hotkeyDraft) now…"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+            guard self.hotkeyTesting, run == self.hotkeyTestRun else { return }
+            self.hotkeyTesting = false
+            self.hotkeyStatus = "Not received"
+            self.hotkeyTestNote = "\(self.hotkeyDraft) did not reach OpenCast within 6 seconds. If you pressed it, another app or a keyboard tool is taking that key: free it there, or record a different hotkey."
+        }
+    }
+
+    /// Called on every launcher hotkey press. True when a test was waiting for it.
+    func hotkeyArrived() -> Bool {
+        guard hotkeyTesting else { return false }
+        hotkeyTesting = false
+        hotkeyStatus = "Received: \(hotkeyDraft) reaches OpenCast"
+        return true
+    }
     /// In-flight "Test connection" stream id (routed from Model.accept).
     var providerTestId: String?
     var providerTestStarted: Date?
@@ -157,6 +222,10 @@ final class SettingsState {
         // toggles flipped in the UI but never reached config.toml.
         let r = Engine.call(["op": "configSet", "key": key, "value": value])
         status = (r["error"] as? String) ?? (r["text"] as? String ?? "Saved")
+        if key == "hotkey" {
+            hotkeyTestNote = ""
+            refreshHotkeyProblems()
+        }
         Task { @MainActor in
             Model.shared.refreshSettings()
             SnippetExpander.shared.reload()
@@ -461,9 +530,17 @@ private struct GeneralPane: View {
                 } else {
                     Button("Use ⌘Space") { claimCmdSpace(state) }
                 }
-                if !state.hotkeyStatus.isEmpty {
-                    Text(state.hotkeyStatus).font(.caption).foregroundStyle(.secondary)
-                }
+            }
+            // A row of its own: beside the buttons above, the status squeezed their titles.
+            HStack {
+                Button(state.hotkeyTesting ? "Waiting…" : "Test") { state.testHotkey() }
+                    .disabled(state.hotkeyTesting || state.hotkeyDraft.isEmpty || Model.shared.recordingLauncherHotkey)
+                Text(state.hotkeyStatus.isEmpty ? "Press the hotkey after Test to see if it reaches OpenCast." : state.hotkeyStatus)
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if !state.hotkeyTestNote.isEmpty {
+                Text(state.hotkeyTestNote).font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Text("Examples: Alt+Space, Cmd+Space, Ctrl+Alt+K, F18. With the hyper key on, Hyper+Space works too.")
                 .font(.caption).foregroundStyle(.secondary)

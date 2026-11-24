@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex, OnceLock};
 
 use opencast_core::engine::Engine;
@@ -18,19 +17,12 @@ pub type Callback = extern "C" fn(*const c_char);
 static CALLBACK: Mutex<Option<Callback>> = Mutex::new(None);
 static ENGINE: OnceLock<Mutex<std::sync::Arc<Engine>>> = OnceLock::new();
 static STREAMS: LazyLock<Mutex<HashMap<String, JoinHandle<()>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
-static VISIBLE: AtomicBool = AtomicBool::new(false);
-
 pub fn runtime() -> &'static Runtime {
     static RT: OnceLock<Runtime> = OnceLock::new();
     RT.get_or_init(|| Runtime::new().expect("tokio runtime"))
 }
 
 pub fn emit(value: serde_json::Value) {
-    match value.get("type").and_then(|t| t.as_str()) {
-        Some("show") => VISIBLE.store(true, Ordering::SeqCst),
-        Some("hide") => VISIBLE.store(false, Ordering::SeqCst),
-        _ => {}
-    }
     let Ok(text) = CString::new(value.to_string()) else {
         return;
     };
@@ -41,12 +33,11 @@ pub fn emit(value: serde_json::Value) {
     }
 }
 
+/// The launcher hotkey. Only the panel knows whether it is on screen, so it decides.
+/// The engine used to keep its own flag for that; every show or hide that did not
+/// report back left the flag wrong, and the next press then did nothing.
 pub(crate) fn toggle_panel() {
-    if VISIBLE.load(Ordering::SeqCst) {
-        emit(serde_json::json!({ "type": "hide" }));
-    } else {
-        emit(serde_json::json!({ "type": "show" }));
-    }
+    emit(serde_json::json!({ "type": "toggle" }));
 }
 
 pub fn with_engine<T>(f: impl FnOnce(&Engine) -> T) -> T {
@@ -95,16 +86,6 @@ fn handle(request: &str) -> String {
         let span = crate::telemetry::ipc_span(op, cid);
         let _entered = span.enter();
         match op {
-            // Swift hid on its own (Esc, blur, ExecResult). Do not emit: the
-            // callback would hide again, and emit is what already clears this flag.
-            "hidden" => {
-                VISIBLE.store(false, Ordering::SeqCst);
-                r#"{"ok":true}"#.into()
-            }
-            "shown" => {
-                VISIBLE.store(true, Ordering::SeqCst);
-                r#"{"ok":true}"#.into()
-            }
             "execute" => {
                 let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
                 let args = v
@@ -592,16 +573,6 @@ pub fn free_raw(p: *mut c_char) {
 #[cfg(test)]
 mod tests {
     use super::StreamArgs;
-
-    #[test]
-    fn hidden_op_clears_visible() {
-        use std::sync::atomic::Ordering;
-        super::VISIBLE.store(true, Ordering::SeqCst);
-        assert_eq!(super::handle(r#"{"op":"hidden"}"#), r#"{"ok":true}"#);
-        assert!(!super::VISIBLE.load(Ordering::SeqCst));
-        assert_eq!(super::handle(r#"{"op":"shown"}"#), r#"{"ok":true}"#);
-        assert!(super::VISIBLE.load(Ordering::SeqCst));
-    }
 
     #[test]
     fn stream_args_omit_optional_fields() {

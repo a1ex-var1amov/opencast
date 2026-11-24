@@ -217,6 +217,7 @@ final class Model {
     private var readKeep = false
     private var keepOnBlur = false
     private var hiding = false
+    private var shownAt = 0.0
     /// Hotkey-problem flash — once per process when problems are non-empty.
     private var didFlashHotkeyProblem = false
     private var searchGen = 0
@@ -508,25 +509,26 @@ final class Model {
         case "show":
             show()
         case "hide":
-            // emit already stored VISIBLE = false. Do not call back into Rust.
             // Clear a half-open Click Text session so hide is not ignored while
             // `clicking` is still true with an empty scan.
             if clicking || seekScan != nil {
                 cancelClick()
             }
-            hide(fromRust: true)
-        case "tap":
-            // Hyper key: step matches while Click Text is up; otherwise toggle.
+            hide()
+        case "toggle", "tap":
+            // The launcher hotkey and the hyper key tap. What is on screen decides, and
+            // only the panel knows that: the engine keeps no copy that could go stale.
+            let tap = obj?["type"] as? String == "tap"
+            let up = launcher?.isVisible == true
+            Diagnostics.log("\(tap ? "tap" : "hotkey") with the panel \(up ? "up" : "down")\(clicking || seekScan != nil ? ", Click Text open" : "")")
+            // Settings › Test is waiting for exactly this press: report it and leave the panel alone.
+            if !tap, SettingsState.shared.hotkeyArrived() { return }
             if clicking || seekScan != nil {
-                stepSeekFromTap()
+                // A tap steps through Click Text matches; the hotkey closes it.
+                if tap { stepSeekFromTap() } else { cancelClick(); hide() }
                 return
             }
-            if launcher?.isVisible == true {
-                hide()
-            } else {
-                show()
-                Task.detached { _ = Engine.call(["op": "shown"]) }
-            }
+            if up { hide() } else { show() }
         case "result":
             if let result = obj?["result"] as? [String: Any] {
                 apply(ExecOutcome(result))
@@ -566,12 +568,10 @@ final class Model {
     /// Carbon keys die across sleep and fast-user-switch. Called from those notifications too.
     @discardableResult
     func reregisterHotkeys() -> [String] {
-        guard let out = opencast_hotkeys_fix() else { return [] }
-        let problems = String(cString: out)
-        opencast_free(out)
-        let lines = problems.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+        // The engine keeps what registration reported; read it back with what else is on those keys.
+        if let out = opencast_hotkeys_fix() { opencast_free(out) }
+        let lines = SettingsState.shared.refreshHotkeyProblems()
         for line in lines { Telemetry.event("error", "hotkeys: \(line)") }
-        SettingsState.shared.hotkeyProblems = lines
         return lines
     }
 
@@ -594,7 +594,7 @@ final class Model {
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
         guard let screen else { return }
         self.screen = screen
-        let shownAt = CFAbsoluteTimeGetCurrent()
+        shownAt = CFAbsoluteTimeGetCurrent()
         defer {
             let ms = Int((CFAbsoluteTimeGetCurrent() - shownAt) * 1000)
             Telemetry.sample("panel.show", ms: ms, budget: 50)
@@ -606,6 +606,10 @@ final class Model {
         launcher.invalidateShadow()
         NSApp.activate(ignoringOtherApps: true)
         launcher.makeKeyAndOrderFront(nil)
+        // What the open actually did, now and a beat later: a hotkey that "does nothing" is
+        // either a panel that never came up or one that was taken down again.
+        Diagnostics.log("open: \(panelState())")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { Diagnostics.log("open + 300 ms: \(self.panelState())") }
         focusTick += 1
         // Settings come from boot / ConfigWatcher / Settings saves — not every show.
         // (refreshSettings reset WindowGlyphs and re-hit the engine; felt slow on Tahoe.)
@@ -613,7 +617,11 @@ final class Model {
         flushPendingWarningsToast()
     }
 
-    func hide(fromRust: Bool = false, fromBlur: Bool = false) {
+    private func panelState() -> String {
+        "visible \(launcher?.isVisible == true), key \(launcher?.isKeyWindow == true), app active \(NSApp.isActive), hidden \(NSApp.isHidden)"
+    }
+
+    func hide(fromBlur: Bool = false) {
         // ExecResult hide is applied after the seek event. Leave the overlay up.
         if clicking || seekScan != nil { return }
         guard !hiding else { return }
@@ -621,6 +629,7 @@ final class Model {
         guard up else { return }
         hiding = true
         defer { hiding = false }
+        Diagnostics.log("close\(fromBlur ? " (lost focus)" : "")")
         WindowPreview.shared.hide()
         launcher?.orderOut(nil)
         seek?.orderOut(nil)
@@ -634,9 +643,6 @@ final class Model {
         } else {
             NSApp.hide(nil)
         }
-        if !fromRust {
-            Task.detached { _ = Engine.call(["op": "hidden"]) }
-        }
     }
 
     func launcherResignedKey() {
@@ -645,6 +651,10 @@ final class Model {
         if keepOnBlurOnce {
             keepOnBlurOnce = false
             return
+        }
+        // A panel that loses focus right after it opened looks like a hotkey that did nothing.
+        if !hiding {
+            Diagnostics.log("panel lost focus \(Int((CFAbsoluteTimeGetCurrent() - shownAt) * 1000)) ms after it opened")
         }
         hide(fromBlur: true)
     }
@@ -2263,20 +2273,6 @@ final class Model {
         "builtin:quit-all": "Quit All Apps",
     ]
 
-    /// ANSI key codes → the names the hotkey parser understands.
-    private static let keyNames: [UInt16: String] = [
-        0: "A", 1: "S", 2: "D", 3: "F", 4: "H", 5: "G", 6: "Z", 7: "X", 8: "C", 9: "V", 11: "B", 12: "Q",
-        13: "W", 14: "E", 15: "R", 16: "Y", 17: "T", 18: "1", 19: "2", 20: "3", 21: "4", 22: "6", 23: "5",
-        24: "Equal", 25: "9", 26: "7", 27: "Minus", 28: "8", 29: "0", 30: "BracketRight", 31: "O", 32: "U",
-        33: "BracketLeft", 34: "I", 35: "P", 37: "L", 38: "J", 39: "Quote", 40: "K", 41: "Semicolon",
-        42: "Backslash", 43: "Comma", 44: "Slash", 45: "N", 46: "M", 47: "Period", 50: "Backquote",
-        36: "Enter", 48: "Tab", 49: "Space", 51: "Backspace", 117: "Delete",
-        123: "Left", 124: "Right", 125: "Down", 126: "Up",
-        122: "F1", 120: "F2", 99: "F3", 118: "F4", 96: "F5", 97: "F6", 98: "F7", 100: "F8", 101: "F9",
-        109: "F10", 103: "F11", 111: "F12", 105: "F13", 107: "F14", 113: "F15", 106: "F16", 64: "F17",
-        79: "F18", 80: "F19", 90: "F20",
-    ]
-
     /// Settings: capture the next chord into `general.hotkey` via configSet.
     func beginRecordLauncherHotkey() {
         recordingHotkeyFor = nil
@@ -2307,7 +2303,7 @@ final class Model {
     }
 
     private static func hotkeySpec(from event: NSEvent) -> HotkeyParse {
-        guard let key = keyNames[event.keyCode] else {
+        guard let key = HotkeyChord.keyNames[event.keyCode] else {
             return .bad("That key can't be a hotkey — try another")
         }
         let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
