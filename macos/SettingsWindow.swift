@@ -736,36 +736,44 @@ private struct ExtensionsPane: View {
     }
 }
 
-/// Grants that stay attached to the previous binary. A new build has to be
-/// cleared and added again; the system prompt does that. Automation is per
-/// other app, so it is not in this list.
-private enum PermissionAccess {
-    private static let stampKey = "permissions.binaryStamp."
+/// The preflight flags stay true for an older build of this bundle id. The
+/// checks below ask the current process to do the thing the permission allows.
+enum PermissionAccess {
     private static let bundleID = Bundle.main.bundleIdentifier ?? "dev.opencast.launcher"
 
-    /// Version plus the executable's mtime, so a rebuild of the same version still counts.
-    static func stamp() -> String {
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
-        let modified = Bundle.main.executableURL
-            .flatMap { try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate }
-            .map { String($0.timeIntervalSince1970) } ?? ""
-        return "\(version) \(modified)"
+    static func accessibilityWorks() -> Bool {
+        guard AXIsProcessTrusted() else { return false }
+        var value: CFTypeRef?
+        let err = AXUIElementCopyAttributeValue(
+            AXUIElementCreateSystemWide(), kAXFocusedApplicationAttribute as CFString, &value)
+        return err != .apiDisabled
     }
 
-    /// Clears this bundle's grant for `service` when the running binary is not
-    /// the one last registered. Returns whether a clear happened.
-    static func reregister(_ service: String) -> Bool {
-        let current = stamp()
-        let key = stampKey + service
-        guard UserDefaults.standard.string(forKey: key) != current else { return false }
+    /// Other apps' window titles are omitted when this process cannot record the screen.
+    /// With no other app on screen, the preflight flag is the only signal left.
+    static func screenRecordingWorks() -> Bool {
+        guard CGPreflightScreenCaptureAccess() else { return false }
+        guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]
+        else { return false }
+        let me = ProcessInfo.processInfo.processIdentifier
+        var others = 0
+        for window in windows {
+            let pid = window[kCGWindowOwnerPID as String] as? pid_t ?? 0
+            guard pid != 0, pid != me else { continue }
+            others += 1
+            if let name = window[kCGWindowName as String] as? String, !name.isEmpty { return true }
+        }
+        return others == 0
+    }
+
+    /// Drops this bundle's grant so the prompt can add the running binary.
+    static func reset(_ service: String) -> Bool {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
         p.arguments = ["reset", service, bundleID]
         guard (try? p.run()) != nil else { return false }
         p.waitUntilExit()
-        guard p.terminationStatus == 0 else { return false }
-        UserDefaults.standard.set(current, forKey: key)
-        return true
+        return p.terminationStatus == 0
     }
 }
 
@@ -779,15 +787,15 @@ private struct PermissionsPane: View {
                 .foregroundStyle(.secondary)
             PermissionRow(
                 title: "Accessibility",
-                detail: "Window management, AI on selected text, paste, snippets, menu search",
-                granted: AXIsProcessTrusted(),
+                detail: "Window management, Click Text, AI on selected text, paste, snippets, menu search, hyper key",
+                granted: PermissionAccess.accessibilityWorks(),
                 pane: "Privacy_Accessibility",
                 request: { allow("Accessibility", title: "Accessibility", prompt: promptAccessibility) }
             )
             PermissionRow(
                 title: "Screen Recording",
-                detail: "Click Text (on-screen OCR) and attaching screen text to chats.",
-                granted: CGPreflightScreenCaptureAccess(),
+                detail: "Attaching screen text to chats.",
+                granted: PermissionAccess.screenRecordingWorks(),
                 pane: "Privacy_ScreenCapture",
                 request: { allow("ScreenCapture", title: "Screen Recording") { _ = CGRequestScreenCaptureAccess() } }
             )
@@ -842,31 +850,48 @@ private struct PermissionsPane: View {
         }
     }
 
-    /// Clears a grant that belongs to an older binary, then asks for this one.
+    /// The button is only shown when the probe failed, so clear the stale grant first.
     private func allow(_ service: String, title: String, prompt: () -> Void) {
-        if PermissionAccess.reregister(service) {
-            state.permissionNote = "Cleared \(title) so this version can be added."
+        if PermissionAccess.reset(service) {
+            state.permissionNote = "Cleared \(title). Allow this version in the prompt."
+        } else {
+            state.permissionNote = "\(title) still belongs to an older OpenCast. Switch that row off and back on."
         }
         prompt()
         state.permissionTick += 1
     }
 
     private func recheck() {
-        let rows: [(String, String, (() -> Void)?)] = [
-            ("Accessibility", "Accessibility", promptAccessibility),
-            ("ScreenCapture", "Screen Recording", { _ = CGRequestScreenCaptureAccess() }),
-            ("Calendar", "Calendars", nil),
-            ("Microphone", "Microphone", nil),
-            ("SpeechRecognition", "Speech Recognition", nil),
+        let rows: [(service: String, title: String, pane: String, works: () -> Bool, prompt: (() -> Void)?)] = [
+            ("Accessibility", "Accessibility", "Privacy_Accessibility", PermissionAccess.accessibilityWorks, promptAccessibility),
+            ("ScreenCapture", "Screen Recording", "Privacy_ScreenCapture", PermissionAccess.screenRecordingWorks, { _ = CGRequestScreenCaptureAccess() }),
+            ("Calendar", "Calendars", "Privacy_Calendars", { EKEventStore.authorizationStatus(for: .event) == .fullAccess }, nil),
+            ("Microphone", "Microphone", "Privacy_Microphone", { AVCaptureDevice.authorizationStatus(for: .audio) == .authorized }, nil),
+            ("SpeechRecognition", "Speech Recognition", "Privacy_SpeechRecognition", { SFSpeechRecognizer.authorizationStatus() == .authorized }, nil),
         ]
-        let cleared = rows.compactMap { service, title, prompt -> String? in
-            guard PermissionAccess.reregister(service) else { return nil }
-            prompt?()
-            return title
+        var cleared: [String] = []
+        var stuck: [String] = []
+        var stuckPane: String?
+        for row in rows {
+            guard !row.works() else { continue }
+            if PermissionAccess.reset(row.service) {
+                row.prompt?()
+                cleared.append(row.title)
+            } else {
+                stuck.append(row.title)
+                if stuckPane == nil { stuckPane = row.pane }
+            }
         }
-        state.permissionNote = cleared.isEmpty
-            ? ""
-            : "Cleared \(cleared.joined(separator: ", ")) so this version can be added."
+        if let stuckPane, let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(stuckPane)") {
+            NSWorkspace.shared.open(url)
+        }
+        if !stuck.isEmpty {
+            state.permissionNote = "\(stuck.joined(separator: ", ")) still belongs to an older OpenCast. Switch that row off and back on."
+        } else if !cleared.isEmpty {
+            state.permissionNote = "Cleared \(cleared.joined(separator: ", ")). Allow this version, then Re-check."
+        } else {
+            state.permissionNote = "Checked this build."
+        }
         state.permissionTick += 1
     }
 

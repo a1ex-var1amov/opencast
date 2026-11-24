@@ -39,13 +39,23 @@ enum Attachments {
 
     static func ocr(cgImage: CGImage) -> String? {
         let request = VNRecognizeTextRequest()
-        request.recognitionLevel = .accurate
-        request.usesLanguageCorrection = true
-        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-        guard (try? handler.perform([request])) != nil else { return nil }
-        let lines = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
-        let text = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? nil : text
+        request.recognitionLevel = .fast
+        request.usesLanguageCorrection = false
+        let done = DispatchSemaphore(value: 0)
+        var text: String?
+        DispatchQueue.global(qos: .userInitiated).async {
+            if (try? VNImageRequestHandler(cgImage: cgImage, options: [:]).perform([request])) != nil {
+                let lines = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+                let joined = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                if !joined.isEmpty { text = joined }
+            }
+            done.signal()
+        }
+        guard done.wait(timeout: .now() + 15) == .success else {
+            request.cancel()
+            return nil
+        }
+        return text
     }
 
     /// OCR of the main display (needs Screen Recording; uses `screencapture`).
@@ -68,7 +78,7 @@ enum Attachments {
     /// Run `/usr/sbin/screencapture -x <args> <png>` and return the PNG. Bounded:
     /// when Screen Recording needs re-approval (every macOS upgrade, and the
     /// periodic prompt on 26+), the child blocks on a system dialog that can sit
-    /// behind our panel; an unbounded wait left Click Text stuck "busy" for the
+    /// behind our panel; an unbounded wait left screen-attach stuck "busy" for the
     /// rest of the session with nothing on screen to say why.
     static func screencapture(_ args: [String], tag: String, timeout: TimeInterval = 10) -> Data? {
         let path = NSTemporaryDirectory() + "opencast-\(tag)-\(ProcessInfo.processInfo.processIdentifier).png"

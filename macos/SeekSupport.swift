@@ -5,10 +5,6 @@ import CoreGraphics
 extension Model {
     func startClick() {
         guard !clicking, !busy else { return }
-        if !CGPreflightScreenCaptureAccess() {
-            permissionToast("Click Text", needs: "Screen Recording")
-            return
-        }
         clicking = true
         seekQuery = ""
         seekIndex = 0
@@ -17,22 +13,21 @@ extension Model {
         runSeekScan()
     }
 
-    /// In-process Vision OCR (see SeekOCR). Panel path: startClick; hotkey: ClickMode.
+    /// Accessibility labels on the display under the cursor (see SeekAX).
     func runSeekScan() {
         busy = true
-        Task.detached(priority: .userInitiated) {
-            do {
-                let scan = try SeekOCR.scan()
-                await MainActor.run {
-                    Model.shared.busy = false
+        DispatchQueue.global(qos: .userInitiated).async {
+            let outcome: Result<SeekScan, Error>
+            do { outcome = .success(try SeekAX.scan()) } catch { outcome = .failure(error) }
+            DispatchQueue.main.async {
+                Model.shared.busy = false
+                switch outcome {
+                case .success(let scan):
                     Model.shared.presentSeek(scan)
-                }
-            } catch {
-                await MainActor.run {
-                    Model.shared.busy = false
+                case .failure(let error):
                     Model.shared.cancelClick()
-                    if let fail = error as? SeekOCR.Failure, case .screenRecording = fail {
-                        Model.shared.permissionToast("Click Text", needs: "Screen Recording")
+                    if let fail = error as? SeekAX.Failure, case .accessibility = fail {
+                        Model.shared.permissionToast("Click Text", needs: "Accessibility")
                     } else {
                         Model.shared.flash(error.localizedDescription, error: true, thenHide: false)
                     }
@@ -91,8 +86,15 @@ extension Model {
         launcher?.orderFrontRegardless()
     }
 
+    /// Caps Lock tap while the overlay is up: next match (design 2026-10-14).
+    func stepSeekFromTap() {
+        guard seekScan != nil else { return }
+        stepSeek(1)
+    }
+
     private func endSeek() {
         cancelClick()
+        hide()
     }
 
     func seekKey(_ event: NSEvent) -> Bool {
@@ -102,7 +104,7 @@ extension Model {
             return true
         }
         if seekScan == nil {
-            // OCR still running: swallow Return/Tab so we do not activate a command.
+            // Scan still running: swallow Return/Tab so we do not activate a command.
             return event.keyCode == 36 || event.keyCode == 76 || event.keyCode == 48
         }
         if event.keyCode == 48, mods.isEmpty || mods == .shift {
@@ -132,14 +134,21 @@ extension Model {
         let cursor = seekCursor
         guard spans.indices.contains(cursor) else { return }
         let match = spans[cursor]
-        let x = Double(scan.monitor.x + match.x + match.w / 2)
-        let y = Double(scan.monitor.y + match.y + match.h / 2)
-        clicking = false
-        seekScan = nil
-        seekQuery = ""
-        seekIndex = 0
-        seek?.orderOut(nil)
+        guard scan.hits.indices.contains(match.hitIndex) else { return }
+        let hit = scan.hits[match.hitIndex]
+        let center = CGPoint(
+            x: scan.monitor.x + match.x + match.w / 2,
+            y: scan.monitor.y + match.y + match.h / 2
+        )
+        let element = hit.element
+        cancelClick()
         hide(fromRust: true)
-        Task.detached { _ = Engine.call(["op": "seekClick", "x": x, "y": y]) }
+        // GCD: AXUIElement is not Sendable; same pattern as menu-search press.
+        DispatchQueue.global(qos: .userInitiated).async {
+            SeekAX.press(SeekHit(
+                label: hit.label, x: hit.x, y: hit.y, w: hit.w, h: hit.h,
+                words: hit.words, element: element
+            ), fallbackCenter: center)
+        }
     }
 }

@@ -18,7 +18,7 @@ enum WindowManager {
 
     // MARK: - Public API
 
-    static var accessibilityTrusted: Bool { AXIsProcessTrusted() }
+    static var accessibilityTrusted: Bool { PermissionAccess.accessibilityWorks() }
 
     /// Short; actionable toast is built by `permissionToast` at the catch site.
     nonisolated static let permissionHint = "Accessibility is required to move windows"

@@ -520,9 +520,12 @@ pub fn install(cb: Callback) {
     crate::hyperkey::restore_caps_lock_if_ours();
     if hyperkey {
         crate::hyperkey::remap_caps_lock(true);
-        // The tap callback must return before Swift `hide`. A slow tap is disabled.
+        // The tap callback must return before Swift work. Emit `tap`; Swift steps
+        // Click Text matches or toggles the launcher (design 2026-10-14).
         crate::hyperkey::start(|| {
-            std::thread::spawn(toggle_panel);
+            std::thread::spawn(|| {
+                emit(serde_json::json!({ "type": "tap" }));
+            });
         });
     }
     for p in crate::hotkeys::register(&engine) {

@@ -6,14 +6,21 @@ first tag is in `git log`.
 
 ## Unreleased
 
+### Changed
+- **Click Text** reads on-screen Accessibility labels (same permission as the
+  hyper key), highlights whole controls, and presses them with `AXPress`. No
+  screenshot and no Screen Recording. Caps Lock tap advances the next match
+  while the overlay is up. Screen Recording in Settings is only for attaching
+  screen text to chats.
+
 ### Added
 - **Debug** opens a window of local timings and recent log lines, and can export
   them. Logs stay in `~/Library/Logs/OpenCast`. The diagnostic logging toggle
   raises that file log to debug. Nothing is sent off this Mac.
 - **Diagnostic logging** (Settings → About, off by default, this Mac only):
-  Click Text logs each step (capture exit and size, OCR hits, timing, any
-  failure) to the system log under `dev.opencast.launcher`; the pane shows the
-  `log stream` command to read it.
+  Click Text logs each step (accessibility hits, timing, any failure) to the
+  system log under `dev.opencast.launcher`; the pane shows the `log stream`
+  command to read it.
 - **Integrations, detachable as a unit**: `integrations = "auto"` (the default)
   registers an app bridge only when its app is installed, `"off"` drops its
   commands, its app-row actions and its hotkeys together, and a list forces one

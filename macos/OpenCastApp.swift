@@ -507,14 +507,24 @@ final class Model {
             show()
         case "hide":
             // emit already stored VISIBLE = false. Do not call back into Rust.
-            // A hide while Seek is up is Esc / seekClose. The hide emitted just
-            // before seek runs first, while seekScan is still nil.
-            if seekScan != nil {
-                seekScan = nil
-                seekQuery = ""
-                seekIndex = 0
+            // Clear a half-open Click Text session so hide is not ignored while
+            // `clicking` is still true with an empty scan.
+            if clicking || seekScan != nil {
+                cancelClick()
             }
             hide(fromRust: true)
+        case "tap":
+            // Hyper key: step matches while Click Text is up; otherwise toggle.
+            if clicking || seekScan != nil {
+                stepSeekFromTap()
+                return
+            }
+            if launcher?.isVisible == true {
+                hide()
+            } else {
+                show()
+                Task.detached { _ = Engine.call(["op": "shown"]) }
+            }
         case "result":
             if let result = obj?["result"] as? [String: Any] {
                 apply(ExecOutcome(result))

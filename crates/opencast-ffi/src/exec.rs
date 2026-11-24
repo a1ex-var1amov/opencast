@@ -284,7 +284,7 @@ pub async fn run_command(id: String, args: Vec<String>, ctx: ExecContext) -> Exe
             action: key,
             frac: None,
         },
-        // OCR runs in-process in the panel (SeekOCR / Vision). ClickMode keeps
+        // Click Text walks Accessibility in the panel (SeekAX). ClickMode keeps
         // the island up; Swift starts the scan when it applies this result.
         Plan::Seek => ExecResult::ClickMode,
         Plan::Layout(op) => match op {

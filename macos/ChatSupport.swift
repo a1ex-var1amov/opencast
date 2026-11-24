@@ -467,7 +467,8 @@ extension Model {
         launcher?.alphaValue = 0
         Task.detached {
             try? await Task.sleep(nanoseconds: 120_000_000)
-            if vision, let shot = Attachments.screenCaptureData(), let img = Attachments.imageData(shot) {
+            let shot = Attachments.screenCaptureData()
+            if vision, let shot, let img = Attachments.imageData(shot) {
                 await MainActor.run {
                     Model.shared.launcher?.alphaValue = 1
                     Model.shared.attach(
@@ -475,13 +476,15 @@ extension Model {
                 }
                 return
             }
-            let text = Attachments.screenText()
+            let text = shot.flatMap { Attachments.ocr(data: $0) }
             await MainActor.run {
                 Model.shared.launcher?.alphaValue = 1
-                if let text, !text.isEmpty {
+                if shot == nil {
+                    Model.shared.permissionToast("Screen attach", needs: "Screen Recording")
+                } else if let text, !text.isEmpty {
                     Model.shared.attach(ChatAttachment(name: "\(target) (screen)", text: text))
                 } else {
-                    Model.shared.permissionToast("Screen attach", needs: "Screen Recording")
+                    Model.shared.flash("No text on that screen", error: true, thenHide: false)
                 }
             }
         }

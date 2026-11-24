@@ -3,9 +3,10 @@
 //! Moving other apps' windows and capturing layouts happens in the Swift
 //! shell through the Accessibility API (`macos/WindowManager.swift`); the
 //! engine only decides *what* to do (`WindowAction`) and this module keeps the
-//! pure geometry so it stays testable off-macOS. Seek OCR is in-process Vision
-//! in `macos/SeekView.swift` (`SeekOCR`); the `SeekHit` types here document the
-//! JSON shape the panel still accepts from a `seek` event.
+//! pure geometry so it stays testable off-macOS. Click Text walks Accessibility
+//! in `macos/SeekView.swift` (`SeekAX`) and presses nodes; `click_at` is the
+//! HID fallback. The `SeekHit` types here document the JSON shape the panel
+//! still accepts from a legacy `seek` event.
 
 use anyhow::{anyhow, Result};
 use opencast_core::engine::WindowAction;
@@ -104,7 +105,7 @@ pub fn target_rect(action: WindowAction, work: Rect, current: Rect) -> Rect {
     }
 }
 
-// ponytail: Seek OCR lives in macos/SeekView.swift (SeekOCR); Rust only clicks.
+// ponytail: Click Text presses AX nodes in macos/SeekView.swift; seekClick is the HID fallback.
 #[cfg(target_os = "macos")]
 mod mac {
     use super::*;

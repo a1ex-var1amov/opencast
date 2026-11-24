@@ -1,8 +1,8 @@
 import AppKit
+import ApplicationServices
 import CoreGraphics
 import OSLog
 import SwiftUI
-import Vision
 
 struct SeekRect {
     var x, y, w, h: CGFloat
@@ -23,47 +23,199 @@ enum Diagnostics {
     }
 }
 
-/// In-process Seek OCR (Vision). Replaces the old Rust→osascript JXA path.
-enum SeekOCR {
+/// On-screen labels from Accessibility. Same permission as the hyper key. No screenshot.
+enum SeekAX {
     enum Failure: Error, LocalizedError {
+        case accessibility
         case noMonitor
-        case screenRecording
         case noText
-        case recognitionFailed
-        case recognitionStuck
 
         var errorDescription: String? {
             switch self {
+            case .accessibility: return "Click Text needs Accessibility"
             case .noMonitor: return "no monitors found"
-            case .screenRecording:
-                return "OpenCast could not capture the screen. System Settings → Privacy & Security → "
-                    + "Screen Recording: enable OpenCast, or use Settings → Permissions → Re-check to add this version, "
-                    + "then quit and relaunch OpenCast"
-            case .noText: return "no readable text on screen"
-            case .recognitionFailed: return "text recognition failed"
-            case .recognitionStuck:
-                return "Text recognition is still starting. Try Click Text again in a moment."
+            case .noText: return "This screen doesn't expose its text to Accessibility"
             }
         }
     }
 
-    /// Screenshot the display under the cursor and OCR it. Hits are screen points (CG), with word boxes.
+    /// Labels and frames from the accessibility tree of on-screen apps.
     static func scan() throws -> SeekScan {
         let t0 = Date()
         var ms: Int { Int(-t0.timeIntervalSinceNow * 1000) }
         do {
+            guard PermissionAccess.accessibilityWorks() else { throw Failure.accessibility }
             let m = try cursorMonitor()
-            let preflight = CGPreflightScreenCaptureAccess()
-            Diagnostics.log("seek monitor \(Int(m.w))x\(Int(m.h)) at \(Int(m.x)),\(Int(m.y)) preflight=\(preflight)")
-            let image = try capture(m)
-            Diagnostics.log("seek captured \(image.width)x\(image.height) px in \(ms) ms")
-            let scan = try recognize(image, monitor: m)
-            Diagnostics.log("seek \(scan.hits.count) text hits in \(ms) ms")
-            return scan
+            guard let ax = accessibilityHits(on: m) else { throw Failure.noText }
+            Diagnostics.log("seek \(ax.hits.count) accessibility hits in \(ms) ms")
+            return ax
         } catch {
             Diagnostics.log("seek failed after \(ms) ms: \(error)", error: true)
             throw error
         }
+    }
+
+    /// Press the control. Same path as menu search. Falls back to a HID click
+    /// only when the hit has no live element (legacy JSON scans).
+    static func press(_ hit: SeekHit, fallbackCenter: CGPoint) {
+        if let el = hit.element {
+            var pid: pid_t = 0
+            AXUIElementGetPid(el, &pid)
+            if pid != 0 {
+                NSRunningApplication(processIdentifier: pid)?.activate(options: [.activateIgnoringOtherApps])
+            }
+            usleep(80_000)
+            if AXUIElementPerformAction(el, kAXPressAction as CFString) == .success {
+                Diagnostics.log("seek AXPress ok")
+                return
+            }
+            Diagnostics.log("seek AXPress failed, falling back to click", error: true)
+        }
+        _ = Engine.call(["op": "seekClick", "x": Double(fallbackCenter.x), "y": Double(fallbackCenter.y)])
+    }
+
+    /// Nil when this display's accessibility tree has no labels.
+    private static func accessibilityHits(on monitor: SeekRect) -> SeekScan? {
+        guard PermissionAccess.accessibilityWorks() else { return nil }
+        // Chrome we never want as a click target; still walk past them.
+        let skip: Set<String> = [
+            "AXScrollBar", "AXSplitter", "AXHandle", "AXGrowArea", "AXBusyIndicator",
+            "AXProgressIndicator", "AXValueIndicator", "AXLayoutArea", "AXLayoutItem",
+            "AXRuler", "AXRulerMarker", "AXDockItem",
+        ]
+        var hits: [SeekHit] = []
+        var visits = 0
+        let maxVisits = 8000
+        let maxHits = 800
+        let me = ProcessInfo.processInfo.processIdentifier
+
+        func frame(of el: AXUIElement) -> SeekRect? {
+            var posV: CFTypeRef?
+            var sizeV: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &posV) == .success,
+                  AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &sizeV) == .success,
+                  let posV, let sizeV,
+                  CFGetTypeID(posV) == AXValueGetTypeID(),
+                  CFGetTypeID(sizeV) == AXValueGetTypeID()
+            else { return nil }
+            var pos = CGPoint.zero
+            var size = CGSize.zero
+            guard AXValueGetValue(posV as! AXValue, .cgPoint, &pos),
+                  AXValueGetValue(sizeV as! AXValue, .cgSize, &size),
+                  size.width >= 2, size.height >= 2
+            else { return nil }
+            return SeekRect(x: pos.x, y: pos.y, w: size.width, h: size.height)
+        }
+
+        func overlaps(_ a: SeekRect) -> Bool {
+            a.x < monitor.x + monitor.w && a.x + a.w > monitor.x && a.y < monitor.y + monitor.h && a.y + a.h > monitor.y
+        }
+
+        func stringValue(_ value: CFTypeRef?) -> String? {
+            guard let value else { return nil }
+            if let s = value as? String {
+                let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                return t.isEmpty || t.count > 240 ? nil : t
+            }
+            if let a = value as? NSAttributedString {
+                let t = a.string.trimmingCharacters(in: .whitespacesAndNewlines)
+                return t.isEmpty || t.count > 240 ? nil : t
+            }
+            if let n = value as? NSNumber {
+                return n.stringValue
+            }
+            return nil
+        }
+
+        func text(_ el: AXUIElement, _ attr: String) -> String? {
+            var value: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(el, attr as CFString, &value) == .success else { return nil }
+            return stringValue(value)
+        }
+
+        func label(of el: AXUIElement) -> String? {
+            text(el, kAXValueAttribute as String)
+                ?? text(el, kAXTitleAttribute as String)
+                ?? text(el, kAXDescriptionAttribute as String)
+                ?? text(el, "AXAttributedDescription")
+        }
+
+        func elements(_ value: CFTypeRef?) -> [AXUIElement] {
+            guard let value, CFGetTypeID(value) == CFArrayGetTypeID() else { return [] }
+            let array = value as! CFArray
+            var out: [AXUIElement] = []
+            for i in 0..<CFArrayGetCount(array) {
+                guard let ptr = CFArrayGetValueAtIndex(array, i) else { continue }
+                let el = Unmanaged<AXUIElement>.fromOpaque(ptr).takeUnretainedValue()
+                if CFGetTypeID(el) == AXUIElementGetTypeID() { out.append(el) }
+            }
+            return out
+        }
+
+        func children(_ el: AXUIElement) -> [AXUIElement] {
+            var value: CFTypeRef?
+            if AXUIElementCopyAttributeValue(el, kAXVisibleChildrenAttribute as CFString, &value) != .success {
+                AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &value)
+            }
+            return elements(value)
+        }
+
+        func walk(_ el: AXUIElement, depth: Int) {
+            visits += 1
+            guard visits <= maxVisits, hits.count < maxHits else { return }
+            AXUIElementSetMessagingTimeout(el, 0.15)
+            let role = text(el, kAXRoleAttribute as String) ?? ""
+            if skip.contains(role) { return }
+            if let box = frame(of: el), overlaps(box), let label = label(of: el) {
+                let len = (label as NSString).length
+                hits.append(SeekHit(
+                    label: label, x: box.x, y: box.y, w: box.w, h: box.h,
+                    words: [SeekWord(at: 0, len: len, x: box.x, w: box.w)],
+                    element: el
+                ))
+            }
+            guard depth < 12 else { return }
+            for child in children(el) { walk(child, depth: depth + 1) }
+        }
+
+        var onScreen = Set<pid_t>()
+        if let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] {
+            for row in info {
+                guard let pid = (row[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value, pid != me,
+                      let b = row[kCGWindowBounds as String] as? NSDictionary,
+                      let x = (b["X"] as? NSNumber)?.doubleValue,
+                      let y = (b["Y"] as? NSNumber)?.doubleValue,
+                      let w = (b["Width"] as? NSNumber)?.doubleValue,
+                      let h = (b["Height"] as? NSNumber)?.doubleValue,
+                      overlaps(SeekRect(x: x, y: y, w: w, h: h))
+                else { continue }
+                onScreen.insert(pid)
+            }
+        }
+
+        // Frontmost first so a dense background app cannot eat the hit budget.
+        var pids = Array(onScreen)
+        if let front = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+           let i = pids.firstIndex(of: front)
+        {
+            pids.remove(at: i)
+            pids.insert(front, at: 0)
+        }
+
+        for pid in pids {
+            let ax = AXUIElementCreateApplication(pid)
+            AXUIElementSetMessagingTimeout(ax, 0.25)
+            var windows: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(ax, kAXWindowsAttribute as CFString, &windows) == .success else { continue }
+            let list = elements(windows)
+            for window in list {
+                guard hits.count < maxHits, let box = frame(of: window), overlaps(box) else { continue }
+                walk(window, depth: 0)
+            }
+            if hits.count >= maxHits { break }
+        }
+        Diagnostics.log("seek accessibility walk \(visits) nodes, \(hits.count) hits")
+        return hits.isEmpty ? nil : SeekScan(monitor: monitor, hits: hits)
     }
 
     private static func cursorMonitor() throws -> SeekRect {
@@ -84,127 +236,6 @@ enum SeekOCR {
         }
         return rects[0]
     }
-
-    private static func capture(_ monitor: SeekRect) throws -> CGImage {
-        let region = [monitor.x, monitor.y, monitor.w, monitor.h].map { "\(Int($0.rounded()))" }.joined(separator: ",")
-        guard let data = Attachments.screencapture(["-R", region], tag: "seek"),
-              let image = NSImage(data: data),
-              let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
-        else {
-            throw Failure.screenRecording
-        }
-        return cg
-    }
-
-    /// Longest edge sent to Vision. A retina capture is ~4x the pixels of the
-    /// screen points, and `perform` at that size can sit past any timeout on a
-    /// cold model load. Boxes are normalized, so the smaller image still maps
-    /// onto the real screen.
-    private static func forOCR(_ image: CGImage) -> CGImage {
-        let maxEdge = 2560
-        let w = image.width, h = image.height
-        let edge = max(w, h)
-        guard edge > maxEdge else { return image }
-        let scale = Double(maxEdge) / Double(edge)
-        let nw = Int((Double(w) * scale).rounded())
-        let nh = Int((Double(h) * scale).rounded())
-        guard let ctx = CGContext(
-            data: nil, width: nw, height: nh, bitsPerComponent: 8, bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return image }
-        ctx.interpolationQuality = .high
-        ctx.draw(image, in: CGRect(x: 0, y: 0, width: nw, height: nh))
-        return ctx.makeImage() ?? image
-    }
-
-    /// One Vision pass. A second `perform` started while the first is still
-    /// inside Vision queues behind it and times out too, which looks like OCR
-    /// is missing. `cancel` does not unblock that first call.
-    private static let vision = DispatchQueue(label: "dev.opencast.seek-ocr")
-    private static let gate = NSLock()
-    private static var ocrInFlight = false
-
-    private static func recognize(_ image: CGImage, monitor: SeekRect) throws -> SeekScan {
-        let image = forOCR(image)
-        Diagnostics.log("seek ocr image \(image.width)x\(image.height)")
-        gate.lock()
-        let busy = ocrInFlight
-        if !busy { ocrInFlight = true }
-        gate.unlock()
-        if busy {
-            Diagnostics.log("seek OCR still in flight", error: true)
-            throw Failure.recognitionStuck
-        }
-        let done = DispatchSemaphore(value: 0)
-        let request = VNRecognizeTextRequest()
-        request.recognitionLevel = .fast
-        request.revision = VNRecognizeTextRequestRevision3
-        request.usesLanguageCorrection = false
-        request.automaticallyDetectsLanguage = false
-        if let lang = Locale.preferredLanguages.first {
-            request.recognitionLanguages = [lang]
-        }
-        var failed = false
-        var results: [VNRecognizedTextObservation]?
-        vision.async {
-            failed = (try? VNImageRequestHandler(cgImage: image, options: [:]).perform([request])) == nil
-            results = request.results
-            gate.lock()
-            ocrInFlight = false
-            gate.unlock()
-            done.signal()
-        }
-        let limit: TimeInterval = 20
-        if done.wait(timeout: .now() + limit) == .timedOut {
-            request.cancel()
-            Diagnostics.log("seek OCR did not return in \(Int(limit)) s", error: true)
-            throw Failure.recognitionStuck
-        }
-        if failed { throw Failure.recognitionFailed }
-        Diagnostics.log("seek OCR returned \(results?.count ?? 0) observations")
-        guard let results else { throw Failure.recognitionStuck }
-        var hits: [SeekHit] = []
-        for obs in results {
-            guard let cand = obs.topCandidates(1).first else { continue }
-            let s = cand.string
-            let b = obs.boundingBox
-            // Vision: normalized, origin bottom-left → top-left normalized, then screen points.
-            let nx = b.origin.x
-            let ny = 1 - b.origin.y - b.size.height
-            let nw = b.size.width
-            let nh = b.size.height
-            let words = wordBoxes(cand, in: s, monitor: monitor)
-            hits.append(SeekHit(
-                label: s,
-                x: monitor.x + nx * monitor.w,
-                y: monitor.y + ny * monitor.h,
-                w: nw * monitor.w,
-                h: nh * monitor.h,
-                words: words
-            ))
-        }
-        if hits.isEmpty { throw Failure.noText }
-        return SeekScan(monitor: monitor, hits: hits)
-    }
-
-    /// Per-word x extents (UTF-16 offsets), matching the old JXA Vision script.
-    private static func wordBoxes(_ cand: VNRecognizedText, in s: String, monitor: SeekRect) -> [SeekWord] {
-        let ns = s as NSString
-        guard let re = try? NSRegularExpression(pattern: "\\S+") else { return [] }
-        var words: [SeekWord] = []
-        re.enumerateMatches(in: s, options: [], range: NSRange(location: 0, length: ns.length)) { match, _, _ in
-            guard let match, let range = Range(match.range, in: s) else { return }
-            guard let box = try? cand.boundingBox(for: range)?.boundingBox else { return }
-            words.append(SeekWord(
-                at: match.range.location,
-                len: match.range.length,
-                x: monitor.x + box.origin.x * monitor.w,
-                w: box.size.width * monitor.w
-            ))
-        }
-        return words
-    }
 }
 
 struct SeekWord {
@@ -217,6 +248,8 @@ struct SeekHit {
     var label: String
     var x, y, w, h: CGFloat
     var words: [SeekWord]
+    /// Live accessibility node for AXPress. Nil for legacy JSON scans.
+    var element: AXUIElement? = nil
 }
 
 struct SeekScan {
@@ -226,6 +259,8 @@ struct SeekScan {
 
 struct SeekSpan: Identifiable {
     var id: Int
+    /// Index into `SeekScan.hits` — Return presses that whole control.
+    var hitIndex: Int
     var x, y, w, h: CGFloat
 }
 
@@ -250,7 +285,7 @@ extension SeekHit {
     init?(_ raw: [String: Any]) {
         guard let label = raw["label"] as? String, let rect = SeekRect(raw) else { return nil }
         let words = (raw["words"] as? [[String: Any]])?.compactMap(SeekWord.init) ?? []
-        self.init(label: label, x: rect.x, y: rect.y, w: rect.w, h: rect.h, words: words)
+        self.init(label: label, x: rect.x, y: rect.y, w: rect.w, h: rect.h, words: words, element: nil)
     }
 }
 
@@ -261,7 +296,7 @@ extension SeekScan {
     }
 }
 
-/// Screen x of character index `i`. Word boxes when Vision sent them, otherwise an even split.
+/// Screen x of character index `i`. Whole-label box when words cover it, otherwise an even split.
 func charX(_ hit: SeekHit, _ i: Int) -> CGFloat {
     if let word = hit.words.last(where: { $0.at <= i }) {
         guard word.len > 0 else { return word.x }
@@ -272,27 +307,21 @@ func charX(_ hit: SeekHit, _ i: Int) -> CGFloat {
     return hit.x + (hit.w / n) * CGFloat(i)
 }
 
+/// One span per matching control. Highlight is the whole hit; Return presses that element.
 func matchSpans(scan: SeekScan, query: String) -> [SeekSpan] {
-    let needle = Array(query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().utf16)
+    let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     if needle.isEmpty { return [] }
     var out: [SeekSpan] = []
-    for hit in scan.hits {
-        let text = Array(hit.label.lowercased().utf16)
-        var i = 0
-        while i + needle.count <= text.count {
-            if text[i..<(i + needle.count)].elementsEqual(needle) {
-                let x0 = charX(hit, i)
-                let x1 = charX(hit, i + needle.count)
-                out.append(SeekSpan(
-                    id: out.count,
-                    x: x0 - scan.monitor.x,
-                    y: hit.y - scan.monitor.y,
-                    w: max(x1 - x0, 4),
-                    h: hit.h
-                ))
-            }
-            i += 1
-        }
+    for (hi, hit) in scan.hits.enumerated() {
+        guard hit.label.lowercased().contains(needle) else { continue }
+        out.append(SeekSpan(
+            id: out.count,
+            hitIndex: hi,
+            x: hit.x - scan.monitor.x,
+            y: hit.y - scan.monitor.y,
+            w: max(hit.w, 4),
+            h: max(hit.h, 4)
+        ))
     }
     return out
 }
@@ -314,7 +343,8 @@ func seekSpanCheck() {
     )
     let spans = matchSpans(scan: scan, query: "Bc")
     assert(spans.count == 1)
-    assert(spans[0].x == 20 && spans[0].y == 30 && spans[0].w == 20 && spans[0].h == 10)
+    assert(spans[0].hitIndex == 0)
+    assert(spans[0].x == 10 && spans[0].y == 30 && spans[0].w == 40 && spans[0].h == 10)
     assert(matchSpans(scan: scan, query: "  ").isEmpty)
 }
 
