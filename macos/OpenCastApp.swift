@@ -135,6 +135,8 @@ final class Model {
     var seekQuery = ""
     var seekIndex = 0
     var seekScan: SeekScan?
+    /// Bumped per scan, so a scan that finishes after its session was closed is dropped.
+    var seekRun = 0
     /// Where the leader line to the current Click Text match starts (overlay coordinates).
     var seekLeaderFrom: CGPoint?
     /// Backtick has switched the island to click, before the scan comes back.
@@ -1443,7 +1445,7 @@ final class Model {
         case .askAi:
             openPlainChat(prompt: trimmedQuery.isEmpty ? nil : trimmedQuery)
         case .clickMode:
-            // Hotkey Seek: same Screen Recording gate as the in-panel binding.
+            // Hotkey Click Text: same entry as the in-panel binding.
             startClick()
         }
     }

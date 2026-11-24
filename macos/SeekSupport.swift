@@ -16,20 +16,34 @@ extension Model {
     /// Accessibility labels on the display under the cursor (see SeekAX).
     func runSeekScan() {
         busy = true
+        seekRun += 1
+        let run = seekRun
         DispatchQueue.global(qos: .userInitiated).async {
+            let t0 = Date()
             let outcome: Result<SeekScan, Error>
-            do { outcome = .success(try SeekAX.scan()) } catch { outcome = .failure(error) }
+            do {
+                guard PermissionAccess.accessibilityWorks() else { throw SeekAX.Failure.accessibility }
+                outcome = .success(try SeekAX.scan())
+            } catch { outcome = .failure(error) }
+            let ms = Int(-t0.timeIntervalSinceNow * 1000)
             DispatchQueue.main.async {
-                Model.shared.busy = false
+                let model = Model.shared
+                guard run == model.seekRun else { return }
+                model.busy = false
+                // Esc or the hotkey closed the session while the scan ran. Showing it now
+                // would bring the overlay back over an app that has taken focus.
+                guard model.clicking else { return }
                 switch outcome {
                 case .success(let scan):
-                    Model.shared.presentSeek(scan)
+                    Diagnostics.log("seek \(scan.hits.count) hits from \(scan.visited) nodes in \(ms) ms")
+                    model.presentSeek(scan)
                 case .failure(let error):
-                    Model.shared.cancelClick()
+                    Diagnostics.log("seek failed after \(ms) ms: \(error)", error: true)
+                    model.cancelClick()
                     if let fail = error as? SeekAX.Failure, case .accessibility = fail {
-                        Model.shared.permissionToast("Click Text", needs: "Accessibility")
+                        model.permissionToast("Click Text", needs: "Accessibility")
                     } else {
-                        Model.shared.flash(error.localizedDescription, error: true, thenHide: false)
+                        model.flash(error.localizedDescription, error: true, thenHide: false)
                     }
                 }
             }
@@ -92,9 +106,9 @@ extension Model {
         stepSeek(1)
     }
 
+    /// Esc steps back to search, like every other mode of the island.
     private func endSeek() {
         cancelClick()
-        hide()
     }
 
     func seekKey(_ event: NSEvent) -> Bool {
@@ -136,19 +150,31 @@ extension Model {
         let match = spans[cursor]
         guard scan.hits.indices.contains(match.hitIndex) else { return }
         let hit = scan.hits[match.hitIndex]
-        let center = CGPoint(
-            x: scan.monitor.x + match.x + match.w / 2,
-            y: scan.monitor.y + match.y + match.h / 2
-        )
-        let element = hit.element
+        let center = CGPoint(x: hit.x + hit.w / 2, y: hit.y + hit.h / 2)
+        // An AXUIElement is a CF handle that is safe to message from any thread.
+        nonisolated(unsafe) let element = hit.element
         cancelClick()
-        hide(fromRust: true)
-        // GCD: AXUIElement is not Sendable; same pattern as menu-search press.
-        DispatchQueue.global(qos: .userInitiated).async {
-            SeekAX.press(SeekHit(
-                label: hit.label, x: hit.x, y: hit.y, w: hit.w, h: hit.h,
-                words: hit.words, element: element
-            ), fallbackCenter: center)
-        }
+        // Not `fromRust`: an AXPress never goes through the engine, which would then go on
+        // believing the panel is up, and the next launcher hotkey would hide instead of show.
+        hide()
+        DispatchQueue.global(qos: .userInitiated).async { seekPress(element, at: center) }
     }
+}
+
+/// AXPress on the control when the hit has one, otherwise a click at its visible centre.
+private func seekPress(_ element: AXUIElement?, at center: CGPoint) {
+    if let element {
+        var pid: pid_t = 0
+        AXUIElementGetPid(element, &pid)
+        NSRunningApplication(processIdentifier: pid)?.activate()
+        usleep(80_000)
+        // The scan's 0.15 s is too short for a press that opens a sheet or a menu.
+        AXUIElementSetMessagingTimeout(element, 2)
+        let result = AXUIElementPerformAction(element, kAXPressAction as CFString)
+        Diagnostics.log("seek AXPress result \(result.rawValue)")
+        // A timeout can mean the press landed and the app is busy with it. A click on top
+        // of that presses twice, so click only when the press was refused.
+        if result == .success || result == .cannotComplete { return }
+    }
+    _ = Engine.call(["op": "seekClick", "x": Double(center.x), "y": Double(center.y)])
 }

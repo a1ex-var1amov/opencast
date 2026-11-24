@@ -62,6 +62,9 @@ macOS first; `crates/opencast-core` must stay portable (no platform UI deps).
 - `./test-swift.command` — panel logic tests: compiles the pure panel files
   (DeepLink, MeetingLinks, SnippetMatch) with `macos-tests/main.swift` (assert
   style, no XCTest); extracted files must not touch Bridge/AppKit
+- `./probe-click-text.command` — runs Click Text's scan (`macos/SeekAX.swift`) on
+ the screen in front of you and prints counts and timing (`--labels` lists the
+ text); the terminal needs Accessibility. Run it before releasing a scan change.
 - `./smoke.command` — fmt, tests, clippy, panel logic tests, then OpenCast Doctor
   on the real config
 - The FFI crate only compiles for macOS (Linux builds a stub), so FFI and Swift

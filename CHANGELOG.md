@@ -138,6 +138,14 @@ first tag is in `git log`.
   Recents) keeps its order when nothing is typed.
 
 ### Fixed
+- Click Text (0.2.22) offered text from every open app, including windows
+  buried under the one in front, plus whole windows and panes as targets, and
+  took seconds to appear. It now reads only windows you can see, front to back,
+  only what is scrolled into view, and only single labels and controls.
+- Click Text: Esc during a slow scan no longer lets the overlay reappear later,
+  Esc returns to search again, a press that opens a sheet or menu is not
+  followed by a second click, and the launcher hotkey no longer needs two
+  presses after a click. Highlights are see-through so the label stays readable.
 - Click Text no longer starts a second text-recognition pass while the first
   one is still running. That pile-up timed out both passes and the toast
   blamed a missing OCR model. One fast pass runs instead, and a busy
